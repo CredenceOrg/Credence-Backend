@@ -1,12 +1,3 @@
-import express from "express";
-import { createHealthRouter } from "./routes/health.js";
-import { createBondRouter } from "./routes/bond.js";
-import bulkRouter from "./routes/bulk.js";
-import { createDefaultProbes } from "./services/health/probes.js";
-import { BondStore, BondService } from "./services/bond/index.js";
-
-const app = express();
-const PORT = process.env.PORT ?? 3000;
 import express from 'express'
 import { cache } from './cache/redis.js'
 import { generateApiKey, revokeApiKey, rotateApiKey, listApiKeys } from './services/apiKeys.js'
@@ -19,9 +10,10 @@ import {
   type SlashRequestStatus,
   type VoteChoice,
 } from './services/governance/slashingVotes.js'
-import { loadConfig } from './config/index.js'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
+import { createBondRouter } from './routes/bond.js'
+import { BondStore, BondService } from './services/bond/index.js'
 import bulkRouter from './routes/bulk.js'
 import { validate } from './middleware/validate.js'
 import {
@@ -31,35 +23,44 @@ import {
   attestationsQuerySchema,
   createAttestationBodySchema,
 } from './schemas/index.js'
-
 import { ArbitrationLogService } from './services/governance/arbitrationLogs.js'
 import { createGovernanceRouter } from './routes/governance.js'
 
 const app = express()
+const PORT = process.env.PORT ?? 3000
 
-app.use(express.json());
+app.use(express.json())
 
-const healthProbes = createDefaultProbes();
-app.use("/api/health", createHealthRouter(healthProbes));
+// ── Health ────────────────────────────────────────────────────────────────────
 
-// Governance – Arbitration Logs
+const healthProbes = createDefaultProbes()
+app.use('/api/health', createHealthRouter(healthProbes))
+
+app.get('/api/health/cache', async (_req, res) => {
+  const cacheHealth = await cache.healthCheck()
+  res.json({
+    status: 'ok',
+    service: 'credence-backend',
+    cache: cacheHealth,
+  })
+})
+
+// ── Governance: Arbitration Logs ──────────────────────────────────────────────
+
 const arbitrationLogService = new ArbitrationLogService()
 app.use(
   '/api/governance/arbitration-logs',
   createGovernanceRouter(arbitrationLogService),
 )
 
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'credence-backend' })
-})
+// ── Public Endpoints (with validation) ────────────────────────────────────────
 
-/** Public: trust score by address (path validation) */
+/** Public: trust score by address */
 app.get(
   '/api/trust/:address',
   validate({ params: trustPathParamsSchema }),
   (req, res) => {
     const { address } = req.validated!.params!
-    // Placeholder: in production, fetch from DB / reputation engine
     res.json({
       address,
       score: 0,
@@ -70,7 +71,7 @@ app.get(
   },
 )
 
-/** Public: bond status by address (path validation) */
+/** Public: bond status by address */
 app.get(
   '/api/bond/:address',
   validate({ params: bondPathParamsSchema }),
@@ -86,7 +87,7 @@ app.get(
   },
 )
 
-/** Public: list attestations for address (path + query validation) */
+/** Public: list attestations for address */
 app.get(
   '/api/attestations/:address',
   validate({ params: attestationsPathParamsSchema, query: attestationsQuerySchema }),
@@ -102,7 +103,7 @@ app.get(
   },
 )
 
-/** Protected (future): create attestation (body validation). Apply auth middleware as needed. */
+/** Protected (future): create attestation */
 app.post(
   '/api/attestations',
   validate({ body: createAttestationBodySchema }),
@@ -115,14 +116,27 @@ app.post(
     })
   },
 )
-app.get('/api/health/cache', async (_req, res) => {
-  const cacheHealth = await cache.healthCheck()
+
+/** Public: verification status by address */
+app.get('/api/verification/:address', (req, res) => {
+  const { address } = req.params
   res.json({
-    status: 'ok',
-    service: 'credence-backend',
-    cache: cacheHealth
+    address,
+    proof: null,
+    verified: false,
+    timestamp: null,
   })
 })
+
+// ── Bond Router ───────────────────────────────────────────────────────────────
+
+const bondStore = new BondStore()
+const bondService = new BondService(bondStore)
+app.use('/api/bond', createBondRouter(bondService))
+
+// ── Bulk verification (Enterprise) ────────────────────────────────────────────
+
+app.use('/api/bulk', bulkRouter)
 
 // ── API Key Management ────────────────────────────────────────────────────────
 
@@ -214,7 +228,7 @@ app.post('/api/governance/slash-requests', (req, res) => {
   }
 })
 
-/** GET /api/governance/slash-requests — list slash requests (optional ?status= filter) */
+/** GET /api/governance/slash-requests — list slash requests */
 app.get('/api/governance/slash-requests', (req, res) => {
   const { status } = req.query as { status?: string }
   const validStatuses: SlashRequestStatus[] = ['pending', 'approved', 'rejected']
@@ -254,80 +268,13 @@ app.post('/api/governance/slash-requests/:id/votes', (req, res) => {
   }
 })
 
-// ── Protected Endpoints ───────────────────────────────────────────────────────
-
-app.get('/api/trust/:address', requireApiKey(), (req, res) => {
-// ── Protected Endpoints ───────────────────────────────────────────────────────
-
-app.get('/api/trust/:address', requireApiKey(), (req, res) => {
-// Bulk verification endpoint (Enterprise)
-app.use('/api/bulk', bulkRouter)
-
-app.get('/api/trust/:address', (req, res) => {
-  const { address } = req.params
-  res.json({
-    address,
-    score: 0,
-    bondedAmount: "0",
-    bondStart: null,
-    attestationCount: 0,
-  });
-});
-
-const bondStore = new BondStore();
-const bondService = new BondService(bondStore);
-app.use("/api/bond", createBondRouter(bondService));
-    _accessedWith: { scope: req.apiKey?.scope, tier: req.apiKey?.tier },
-  })
-})
-
-app.get('/api/bond/:address', requireApiKey(), (req, res) => {
-  const { address } = req.params
-  res.json({
-    address,
-    bondedAmount: '0',
-    bondStart: null,
-    bondDuration: null,
-    active: false,
-    _accessedWith: { scope: req.apiKey?.scope, tier: req.apiKey?.tier },
-  })
-})
-
-app.get('/api/attestations/:address', (req, res) => {
-  const { address } = req.params
-  res.json({
-    address,
-    attestations: [],
-    count: 0,
-  })
-})
-
-app.get('/api/verification/:address', (req, res) => {
-  const { address } = req.params
-  res.json({
-    address,
-    proof: null,
-    verified: false,
-    timestamp: null,
-  })
-})
-
-// Bulk verification endpoint (Enterprise)
-app.use("/api/bulk", bulkRouter);
-
-// Only start server if not in test environment
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Credence API listening on http://localhost:${PORT}`);
-  });
-}
-
-export default app;
-export { app }
-export default app
+// ── Server start ──────────────────────────────────────────────────────────────
 
 if (process.env.NODE_ENV !== 'test') {
-  app.listen(config.port, () => {
-    console.log(`Credence API listening on http://localhost:${config.port}`)
+  app.listen(PORT, () => {
+    console.log(`Credence API listening on http://localhost:${PORT}`)
   })
 }
+
+export { app }
+export default app

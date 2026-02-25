@@ -45,11 +45,6 @@ jobs:
             sleep 2
           done
 
-      - name: Run integration tests
-        env:
-          TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
-        run: npm test
-
       - name: Run tests with coverage
         env:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
