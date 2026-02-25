@@ -1,36 +1,46 @@
-/**
- * Main reputation score calculation
- * Combines bond score, attestation score, and time weight
- */
-
 import type { ReputationInput, ReputationScore } from './types.js'
 import { calculateBondScore } from './bondScore.js'
 import { calculateAttestationScore } from './attestationScore.js'
 import { calculateTimeWeight } from './timeWeight.js'
+import {
+  SLASHING_PENALTY_BASE,
+  MIN_TRUST_SCORE,
+  MAX_TRUST_SCORE
+} from './constants.js'
 
 /**
- * Calculate comprehensive reputation score
- * Formula: totalScore = (bondScore + attestationScore) * timeWeight
+ * Calculate comprehensive trust score
+ * Formula: TrustScore = (BaseScore * TimeWeight * AttestationMultiplier) - SlashingPenalty
  * 
  * @param input - Reputation input data
- * @returns Reputation score breakdown
+ * @returns Trust score breakdown
  */
 export function calculateReputationScore(input: ReputationInput): ReputationScore {
-  // Calculate individual components
+  // 1. Base Score from bond amount
   const bondScore = calculateBondScore(input.bond)
-  const attestationScore = calculateAttestationScore(input.attestations)
+
+  // 2. Time Weight multiplier (0.0 to 1.0)
   const timeWeight = calculateTimeWeight(
     input.bond.bondStart,
     input.currentTime
   )
 
-  // Apply formula: (bond + attestation) * timeWeight
-  const totalScore = (bondScore + attestationScore) * timeWeight
+  // 3. Attestation Multiplier boost (1.0+)
+  const attestationMultiplier = calculateAttestationScore(input.attestations)
+
+  // 4. Slashing Penalty
+  const slashingPenalty = (input.bond.slashingHistory || 0) * SLASHING_PENALTY_BASE
+
+  // 5. Consolidated Formula
+  let totalScore = (bondScore * timeWeight * attestationMultiplier) - slashingPenalty
+
+  // 6. Clamp the final result
+  totalScore = Math.min(Math.max(totalScore, MIN_TRUST_SCORE), MAX_TRUST_SCORE)
 
   return {
     totalScore,
     bondScore,
-    attestationScore,
+    attestationScore: attestationMultiplier, // Renamed to represent multiplier in types if needed, but keeping for compatibility
     timeWeight,
   }
 }
@@ -46,19 +56,21 @@ export function calculateReputationScoreWithCustomDuration(
   maxDuration: number
 ): ReputationScore {
   const bondScore = calculateBondScore(input.bond)
-  const attestationScore = calculateAttestationScore(input.attestations)
   const timeWeight = calculateTimeWeight(
     input.bond.bondStart,
     input.currentTime,
     maxDuration
   )
+  const attestationMultiplier = calculateAttestationScore(input.attestations)
+  const slashingPenalty = (input.bond.slashingHistory || 0) * SLASHING_PENALTY_BASE
 
-  const totalScore = (bondScore + attestationScore) * timeWeight
+  let totalScore = (bondScore * timeWeight * attestationMultiplier) - slashingPenalty
+  totalScore = Math.min(Math.max(totalScore, MIN_TRUST_SCORE), MAX_TRUST_SCORE)
 
   return {
     totalScore,
     bondScore,
-    attestationScore,
+    attestationScore: attestationMultiplier,
     timeWeight,
   }
 }

@@ -1,50 +1,42 @@
-/**
- * Attestation score calculation
- */
-
 import type { Attestation } from './types.js'
-
-const MAX_ATTESTATION_WEIGHT = 100
-const ATTESTATION_MULTIPLIER = 0.1
+import { ATTESTATION_BOOST_PER_ITEM, MAX_ATTESTATION_MULTIPLIER } from './constants.js'
 
 /**
- * Calculate attestation score from attestations
+ * Calculate attestation multiplier boost
+ * Formula: 1 + min(validAttestationCount * ATTESTATION_BOOST_PER_ITEM, MAX_ATTESTATION_MULTIPLIER - 1)
+ * 
  * @param attestations - Array of attestations
- * @returns Attestation score
+ * @returns Attestation multiplier (>= 1.0)
  */
 export function calculateAttestationScore(attestations: Attestation[]): number {
   if (!attestations || attestations.length === 0) {
-    return 0
+    return 1.0
   }
 
   // Filter valid attestations only
   const validAttestations = attestations.filter(a => a.isValid)
 
   if (validAttestations.length === 0) {
-    return 0
+    return 1.0
   }
 
-  // Sum all weights
-  const totalWeight = validAttestations.reduce((sum, attestation) => {
-    return sum + Math.max(0, attestation.weight)
-  }, 0)
+  // Count valid attestations and apply boost
+  const boost = validAttestations.length * ATTESTATION_BOOST_PER_ITEM
+  const multiplier = Math.min(1.0 + boost, MAX_ATTESTATION_MULTIPLIER)
 
-  // Apply multiplier and cap at max
-  const score = Math.min(totalWeight * ATTESTATION_MULTIPLIER, MAX_ATTESTATION_WEIGHT)
-
-  return score
+  return multiplier
 }
 
 /**
- * Get the maximum attestation weight constant
+ * Get the attestation boost per item constant
  */
-export function getMaxAttestationWeight(): number {
-  return MAX_ATTESTATION_WEIGHT
+export function getAttestationBoost(): number {
+  return ATTESTATION_BOOST_PER_ITEM
 }
 
 /**
- * Get the attestation multiplier constant
+ * Get the maximum attestation multiplier constant
  */
-export function getAttestationMultiplier(): number {
-  return ATTESTATION_MULTIPLIER
+export function getMaxAttestationMultiplier(): number {
+  return MAX_ATTESTATION_MULTIPLIER
 }

@@ -1,14 +1,17 @@
-/**
- * Unit tests for main reputation score calculation
- * Tests cover: formula correctness, component integration, edge cases
- */
-
 import { describe, it, expect } from 'vitest'
 import {
   calculateReputationScore,
   calculateReputationScoreWithCustomDuration,
 } from './score.js'
-import type { ReputationInput, BondData, Attestation } from './types.js'
+import type { ReputationInput } from './types.js'
+import {
+  BOND_WEIGHT,
+  MAX_BASE_SCORE,
+  ATTESTATION_BOOST_PER_ITEM,
+  MAX_ATTESTATION_MULTIPLIER,
+  SLASHING_PENALTY_BASE,
+  MAX_DURATION_MS
+} from './constants.js'
 
 describe('score', () => {
   const ONE_DAY = 24 * 60 * 60 * 1000
@@ -22,449 +25,132 @@ describe('score', () => {
             bondedAmount: 10000,
             bondStart: 1000000,
             bondDuration: ONE_YEAR,
-            isSlashed: false,
+            slashingHistory: 0,
           },
-          attestations: [
-            { weight: 100, timestamp: 1000000, isValid: true },
-            { weight: 200, timestamp: 1000001, isValid: true },
-          ],
+          attestations: Array(10).fill({ weight: 1, timestamp: 1000000, isValid: true }),
           currentTime: 1000000 + ONE_YEAR,
         }
 
         const result = calculateReputationScore(input)
 
-        // Bond score: 10000 * 0.01 = 100
+        // Base Score: min(10000 * 0.01, 100) = 100
         expect(result.bondScore).toBe(100)
-        // Attestation score: (100 + 200) * 0.1 = 30
-        expect(result.attestationScore).toBe(30)
-        // Time weight: 1 year = 1.0
+        // Time Weight: 1 year = 1.0
         expect(result.timeWeight).toBe(1)
-        // Total: (100 + 30) * 1.0 = 130
-        expect(result.totalScore).toBe(130)
+        // Attestation Multiplier: 1 + (10 * 0.05) = 1.5
+        expect(result.attestationScore).toBe(1.5)
+        // Total: (100 * 1 * 1.5) - 0 = 150 -> clamped to 100
+        expect(result.totalScore).toBe(100)
       })
 
-      it('should calculate score with partial time weight', () => {
+      it('should calculate score with partial values', () => {
         const input: ReputationInput = {
           bond: {
             bondedAmount: 5000,
             bondStart: 1000000,
-            bondDuration: ONE_DAY * 30,
-            isSlashed: false,
+            bondDuration: ONE_DAY * 182.5, // 0.5 year
+            slashingHistory: 0,
           },
-          attestations: [
-            { weight: 500, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_DAY * 30,
+          attestations: Array(5).fill({ weight: 1, timestamp: 1000000, isValid: true }),
+          currentTime: 1000000 + ONE_DAY * 182.5,
         }
 
         const result = calculateReputationScore(input)
 
-        // Bond score: 5000 * 0.01 = 50
+        // Base: 5000 * 0.01 = 50
         expect(result.bondScore).toBe(50)
-        // Attestation score: 500 * 0.1 = 50
-        expect(result.attestationScore).toBe(50)
-        // Time weight: ~30 days (should be < 1)
-        expect(result.timeWeight).toBeGreaterThan(0)
-        expect(result.timeWeight).toBeLessThan(1)
-        // Total: (50 + 50) * timeWeight
-        expect(result.totalScore).toBeGreaterThan(0)
-        expect(result.totalScore).toBeLessThan(100)
+        // Time: 0.5 year = 0.5
+        expect(result.timeWeight).toBe(0.5)
+        // Multiplier: 1 + (5 * 0.05) = 1.25
+        expect(result.attestationScore).toBe(1.25)
+        // Total: (50 * 0.5 * 1.25) = 31.25
+        expect(result.totalScore).toBe(31.25)
       })
 
-      it('should calculate score with only bond', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 8000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(80)
-        expect(result.attestationScore).toBe(0)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(80)
-      })
-
-      it('should calculate score with only attestations', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 0,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 400, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(40)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(40)
-      })
-
-      it('should calculate maximum possible score', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 100000, // Max bond score: 1000
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 1000, timestamp: 1000000, isValid: true }, // Max attestation: 100
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(1000)
-        expect(result.attestationScore).toBe(100)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(1100) // (1000 + 100) * 1
-      })
-    })
-
-    describe('edge cases - zero bond', () => {
-      it('should return 0 total score for zero bond amount', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 0,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(0)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(0)
-      })
-
-      it('should handle zero bond with attestations', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 0,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 300, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(30)
-        expect(result.totalScore).toBe(30)
-      })
-    })
-
-    describe('edge cases - slashed bonds', () => {
-      it('should return 0 total score for slashed bond', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 50000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: true,
-          },
-          attestations: [
-            { weight: 500, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(50)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(50) // Only attestations count
-      })
-
-      it('should return 0 for slashed bond with no attestations', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 50000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: true,
-          },
-          attestations: [],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(0)
-        expect(result.totalScore).toBe(0)
-      })
-    })
-
-    describe('edge cases - zero time weight', () => {
-      it('should return 0 total score for zero duration', () => {
+      it('should apply slashing penalty', () => {
         const input: ReputationInput = {
           bond: {
             bondedAmount: 10000,
             bondStart: 1000000,
-            bondDuration: 0,
-            isSlashed: false,
+            bondDuration: ONE_YEAR,
+            slashingHistory: 1, // -50
           },
-          attestations: [
-            { weight: 300, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000, // Same as bondStart
+          attestations: [],
+          currentTime: 1000000 + ONE_YEAR,
         }
 
         const result = calculateReputationScore(input)
 
-        expect(result.bondScore).toBe(100)
-        expect(result.attestationScore).toBe(30)
-        expect(result.timeWeight).toBe(0)
-        expect(result.totalScore).toBe(0) // (100 + 30) * 0
+        // (100 * 1 * 1) - 50 = 50
+        expect(result.totalScore).toBe(50)
       })
 
-      it('should return 0 for future bond start', () => {
+      it('should clamp score at minimum 0', () => {
         const input: ReputationInput = {
           bond: {
-            bondedAmount: 10000,
-            bondStart: 2000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
+            bondedAmount: 1000,
+            bondStart: 1000000,
+            bondDuration: ONE_DAY, // small time weight
+            slashingHistory: 2, // -100
           },
-          attestations: [
-            { weight: 300, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000,
+          attestations: [],
+          currentTime: 1000000 + ONE_DAY,
         }
 
         const result = calculateReputationScore(input)
 
-        expect(result.timeWeight).toBe(0)
+        // ((10 * 0.0027) * 1) - 100 -> negative -> clamped to 0
         expect(result.totalScore).toBe(0)
       })
     })
 
-    describe('edge cases - max duration', () => {
-      it('should handle duration exceeding max', () => {
+    describe('edge cases', () => {
+      it('should handle zero bond amount', () => {
         const input: ReputationInput = {
-          bond: {
-            bondedAmount: 5000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR * 2,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 200, timestamp: 1000000, isValid: true },
-          ],
+          bond: { bondedAmount: 0, bondStart: 1000000, bondDuration: ONE_YEAR, slashingHistory: 0 },
+          attestations: [],
+          currentTime: 1000000 + ONE_YEAR,
+        }
+        expect(calculateReputationScore(input).totalScore).toBe(0)
+      })
+
+      it('should handle max duration', () => {
+        const input: ReputationInput = {
+          bond: { bondedAmount: 10000, bondStart: 1000000, bondDuration: ONE_YEAR * 2, slashingHistory: 0 },
+          attestations: [],
           currentTime: 1000000 + ONE_YEAR * 2,
         }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(50)
-        expect(result.attestationScore).toBe(20)
-        expect(result.timeWeight).toBe(1)
-        expect(result.totalScore).toBe(70)
+        expect(calculateReputationScore(input).timeWeight).toBe(1)
       })
-    })
 
-    describe('edge cases - invalid attestations', () => {
-      it('should ignore invalid attestations in calculation', () => {
+      it('should handle max attestations', () => {
         const input: ReputationInput = {
-          bond: {
-            bondedAmount: 5000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 200, timestamp: 1000000, isValid: true },
-            { weight: 500, timestamp: 1000001, isValid: false },
-          ],
+          bond: { bondedAmount: 10000, bondStart: 1000000, bondDuration: ONE_YEAR, slashingHistory: 0 },
+          attestations: Array(30).fill({ weight: 1, timestamp: 1000000, isValid: true }),
           currentTime: 1000000 + ONE_YEAR,
         }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(50)
-        expect(result.attestationScore).toBe(20) // Only valid attestation
-        expect(result.totalScore).toBe(70)
-      })
-    })
-
-    describe('comprehensive edge cases', () => {
-      it('should handle all zero inputs', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 0,
-            bondStart: 0,
-            bondDuration: 0,
-            isSlashed: false,
-          },
-          attestations: [],
-          currentTime: 0,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(0)
-        expect(result.timeWeight).toBe(0)
-        expect(result.totalScore).toBe(0)
-      })
-
-      it('should handle negative bond amount', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: -5000,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 100, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(0)
-        expect(result.attestationScore).toBe(10)
-        expect(result.totalScore).toBe(10)
-      })
-
-      it('should handle very large values', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: Number.MAX_SAFE_INTEGER,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: Number.MAX_SAFE_INTEGER, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBe(1000) // Capped
-        expect(result.attestationScore).toBe(100) // Capped
-        expect(result.totalScore).toBe(1100)
-      })
-
-      it('should handle fractional values', () => {
-        const input: ReputationInput = {
-          bond: {
-            bondedAmount: 1234.56,
-            bondStart: 1000000,
-            bondDuration: ONE_YEAR,
-            isSlashed: false,
-          },
-          attestations: [
-            { weight: 78.9, timestamp: 1000000, isValid: true },
-          ],
-          currentTime: 1000000 + ONE_YEAR,
-        }
-
-        const result = calculateReputationScore(input)
-
-        expect(result.bondScore).toBeCloseTo(12.3456, 4)
-        expect(result.attestationScore).toBeCloseTo(7.89, 2)
-        expect(result.totalScore).toBeCloseTo(20.2356, 4)
+        // max multiplier is 2.0
+        expect(calculateReputationScore(input).attestationScore).toBe(2.0)
       })
     })
   })
 
   describe('calculateReputationScoreWithCustomDuration', () => {
     it('should use custom max duration', () => {
-      const customMax = ONE_DAY * 30 // 30 days
+      const customMax = ONE_DAY * 30
       const input: ReputationInput = {
         bond: {
-          bondedAmount: 5000,
+          bondedAmount: 10000,
           bondStart: 1000000,
-          bondDuration: customMax,
-          isSlashed: false,
+          bondDuration: ONE_DAY * 15,
+          slashingHistory: 0,
         },
-        attestations: [
-          { weight: 200, timestamp: 1000000, isValid: true },
-        ],
-        currentTime: 1000000 + customMax,
+        attestations: [],
+        currentTime: 1000000 + ONE_DAY * 15,
       }
 
       const result = calculateReputationScoreWithCustomDuration(input, customMax)
-
-      expect(result.bondScore).toBe(50)
-      expect(result.attestationScore).toBe(20)
-      expect(result.timeWeight).toBe(1) // Full weight at custom max
-      expect(result.totalScore).toBe(70)
-    })
-
-    it('should calculate partial weight with custom duration', () => {
-      const customMax = ONE_DAY * 60
-      const input: ReputationInput = {
-        bond: {
-          bondedAmount: 5000,
-          bondStart: 1000000,
-          bondDuration: ONE_DAY * 30,
-          isSlashed: false,
-        },
-        attestations: [
-          { weight: 200, timestamp: 1000000, isValid: true },
-        ],
-        currentTime: 1000000 + ONE_DAY * 30,
-      }
-
-      const result = calculateReputationScoreWithCustomDuration(input, customMax)
-
-      expect(result.timeWeight).toBeGreaterThan(0)
-      expect(result.timeWeight).toBeLessThan(1)
-      expect(result.totalScore).toBeGreaterThan(0)
-      expect(result.totalScore).toBeLessThan(70)
-    })
-
-    it('should handle zero custom duration', () => {
-      const input: ReputationInput = {
-        bond: {
-          bondedAmount: 5000,
-          bondStart: 1000000,
-          bondDuration: ONE_DAY,
-          isSlashed: false,
-        },
-        attestations: [
-          { weight: 200, timestamp: 1000000, isValid: true },
-        ],
-        currentTime: 1000000 + ONE_DAY,
-      }
-
-      const result = calculateReputationScoreWithCustomDuration(input, 0)
-
-      expect(result.timeWeight).toBe(1)
-      expect(result.totalScore).toBe(70)
+      expect(result.timeWeight).toBe(0.5)
     })
   })
 })

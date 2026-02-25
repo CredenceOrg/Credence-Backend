@@ -6,7 +6,7 @@ export interface BondData {
   bondedAmount: number
   bondStart: number // timestamp in ms
   bondDuration: number // duration in ms
-  isSlashed: boolean
+  slashingHistory: number // count of slashing events
 }
 
 export interface Attestation {

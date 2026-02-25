@@ -1,17 +1,13 @@
-/**
- * Time weight calculation for reputation scores
- * Applies exponential decay based on bond duration
- */
-
-const MAX_DURATION_MS = 365 * 24 * 60 * 60 * 1000 // 1 year in ms
-const DECAY_RATE = 0.5 // Half-life factor
+import { MAX_DURATION_MS, TIME_WEIGHT_MAX } from './constants.js'
 
 /**
  * Calculate time weight based on bond duration
+ * Linear growth from 0 to TIME_WEIGHT_MAX capped at MAX_DURATION_MS
+ * 
  * @param bondStart - Bond start timestamp in ms
  * @param currentTime - Current timestamp in ms
  * @param maxDuration - Maximum duration for full weight (default: 1 year)
- * @returns Time weight between 0 and 1
+ * @returns Time weight between 0 and TIME_WEIGHT_MAX
  */
 export function calculateTimeWeight(
   bondStart: number,
@@ -33,22 +29,13 @@ export function calculateTimeWeight(
   }
 
   if (duration >= maxDuration) {
-    return 1
+    return TIME_WEIGHT_MAX
   }
 
-  // Exponential growth: weight = 1 - e^(-k * t/T)
-  // where k is decay rate, t is duration, T is max duration
-  const normalizedTime = duration / maxDuration
-  const weight = 1 - Math.exp(-DECAY_RATE * normalizedTime * 10)
+  // Linear growth
+  const weight = (duration / maxDuration) * TIME_WEIGHT_MAX
 
-  return Math.min(Math.max(weight, 0), 1)
-}
-
-/**
- * Get the decay rate constant
- */
-export function getDecayRate(): number {
-  return DECAY_RATE
+  return Math.min(Math.max(weight, 0), TIME_WEIGHT_MAX)
 }
 
 /**
