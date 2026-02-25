@@ -5,10 +5,11 @@
  * Run:  npx jest tests/rbac.test.ts
  */
 
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import type { Request, Response, NextFunction } from 'express'
-import { requireRole, requireMinRole, requireAnyRole } from '../src/middleware/rbac'
-import { RoleService } from '../src/services/roles'
-import type { Role } from '../src/types/rbac'
+import { requireRole, requireMinRole, requireAnyRole } from '../src/middleware/rbac.js'
+import { RoleService } from '../src/services/roles.js'
+import type { Role } from '../src/types/rbac.js'
 
 
 // ---------------------------------------------------------------------------
@@ -37,10 +38,10 @@ function makeRes(): Response & { _status: number; _body: unknown } {
      return res
 }
 
-const next: NextFunction = jest.fn()
+const next: NextFunction = vi.fn()
 
 beforeEach(() => {
-     jest.clearAllMocks()
+     vi.clearAllMocks()
 })
 
 // ---------------------------------------------------------------------------

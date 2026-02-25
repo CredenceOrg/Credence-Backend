@@ -5,8 +5,8 @@ import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
 let mockStream: (op: any) => Promise<void>
 let events: any[] = []
 
-vi.mock('stellar-sdk', () => ({
-  Server: vi.fn(() => ({
+vi.mock('stellar-sdk', () => {
+  const mockServer = vi.fn().mockImplementation(() => ({
     operations: vi.fn(() => ({
       forAsset: vi.fn(() => ({
         cursor: vi.fn(() => ({
@@ -16,8 +16,10 @@ vi.mock('stellar-sdk', () => ({
         })),
       })),
     })),
-  })),
-}))
+  }))
+  // Make it work as both a constructor and a regular call
+  return { Server: mockServer }
+})
 
 vi.mock('../services/identityService.js', () => ({
   upsertIdentity: vi.fn().mockResolvedValue(true),
