@@ -8,6 +8,7 @@ This service is part of [Credence](../README.md). It will support:
 
 - Public query API (trust score, bond status, attestations)
 - **Horizon listener / identity state sync** – Reconciles DB with on-chain bond state (see [Identity state sync](#identity-state-sync)).
+- **Horizon listener / slashing events** – Subscribes to or polls for slash events, records in DB, updates bond slashed_amount, triggers score (see [Slashing events](#slashing-events)).
 - Reputation engine (off-chain score from bond data) (future)
 
 ## Prerequisites
@@ -90,6 +91,8 @@ npm test
 npm run test:coverage
 ```
 
+On **Windows**, `npm test` runs via a wrapper script that normalizes the drive letter to avoid Vitest’s “No test suite found” issue. If you still see that error, open the project from `C:\...` (uppercase `C`) and run `npm test` again.
+
 Scenarios covered: all dependencies up, DB down (503), Redis down (503), both down (503), only external down (200 degraded), liveness always 200, and no dependencies configured (200 ok).
 
 ### Identity state sync
@@ -108,6 +111,20 @@ You supply:
 State shape is `IdentityState`: `address`, `bondedAmount`, `bondStart`, `bondDuration`, `active`. See `src/listeners/types.ts`.
 
 Tests cover: no drift (no update), single drift (one address corrected), full resync (multiple drifts), chain missing, store-only addresses, and error handling.
+
+### Slashing events
+
+The **Horizon slashing listener** detects slash events from the contract, records them in the database, updates bond `slashed_amount`, and can trigger score recalculation or snapshot.
+
+- **Location:** `src/listeners/horizonSlashEvents.ts`
+- **Subscribe or poll:** Implement `SlashEventSource`: `subscribe(handler)` for live events and optionally `poll()` for batch sync.
+- **Event shape:** Parsed events have `identity`, `amount`, `reason`, optional `evidenceRef` and `timestamp`. Use `parseSlashEvent(raw)` for your contract/Horizon event format (supports common field names like `identityAddress`, `slashedAmount`).
+- **DB:** Implement `SlashEventStore`: `insertSlashEvent(event)` (into `slash_events`) and `addSlashedAmountToBond(identity, amount)`.
+- **Score:** Optionally pass `ScoreTrigger`: `trigger(identity)` is called after each slash for recalculation or snapshot.
+
+Usage: `createHorizonSlashListener(source, store, scoreTrigger)`, then `listener.start()` to subscribe, or `listener.pollOnce()` to poll. Use `listener.handleRawEvent(raw)` when events arrive in raw form.
+
+Tests cover: event parse (valid/invalid, field name variants), DB update (insert + addSlashedAmountToBond), score trigger, subscribe/poll, start/stop.
 
 ## Tech
 
