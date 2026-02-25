@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express'
-import { requireApiKey, ApiScope } from '../middleware/auth.js'
+import { requireJwtAuth } from '../middleware/auth.js'
 import { IdentityService } from '../services/identityService.js'
 
 const router = Router()
@@ -26,7 +26,7 @@ interface BulkVerifyRequest {
  * Bulk identity verification endpoint for enterprise tier
  * Accepts a list of addresses and returns trust score and bond status for each
  * 
- * @requires Enterprise API key via X-API-Key header
+ * @requires JWT access token via Authorization: Bearer <token>
  * 
  * @body {string[]} addresses - Array of Stellar addresses to verify (1-100)
  * 
@@ -39,7 +39,7 @@ interface BulkVerifyRequest {
  * ```bash
  * curl -X POST http://localhost:3000/api/bulk/verify \
  *   -H "Content-Type: application/json" \
- *   -H "X-API-Key: test-enterprise-key-12345" \
+ *   -H "Authorization: Bearer <jwt-access-token>" \
  *   -d '{"addresses": ["GABC...", "GDEF..."]}'
  * ```
  * 
@@ -88,15 +88,7 @@ interface BulkVerifyRequest {
  * ```json
  * {
  *   "error": "Unauthorized",
- *   "message": "API key is required"
- * }
- * ```
- * 
- * @example Error Response (403 Forbidden)
- * ```json
- * {
- *   "error": "Forbidden",
- *   "message": "Enterprise API key required"
+ *   "message": "Authorization header is required"
  * }
  * ```
  * 
@@ -112,7 +104,7 @@ interface BulkVerifyRequest {
  */
 router.post(
   '/verify',
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireJwtAuth(),
   async (req: Request, res: Response): Promise<void> => {
     try {
       const { addresses } = req.body as BulkVerifyRequest

@@ -1,11 +1,18 @@
 import { describe, it, expect } from 'vitest'
 import request from 'supertest'
 import app from '../index.js'
+import { AuthService } from '../services/auth.js'
 
 describe('POST /api/bulk/verify', () => {
-  const ENTERPRISE_KEY = 'test-enterprise-key-12345'
-  const PUBLIC_KEY = 'test-public-key-67890'
-  const INVALID_KEY = 'invalid-key'
+  const authService = new AuthService({
+    issuer: 'credence-api',
+    accessTokenSecret: 'dev-access-secret-change-me',
+    refreshTokenSecret: 'dev-refresh-secret-change-me',
+    accessTokenExpiry: '15m',
+    refreshTokenExpiry: '7d',
+  })
+  const VALID_ACCESS_TOKEN = authService.issueTokenPair('integration-test-user').accessToken
+  const INVALID_TOKEN = 'invalid-token'
 
   const VALID_ADDRESS_1 = 'GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
   const VALID_ADDRESS_2 = 'GDEF7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
@@ -13,7 +20,7 @@ describe('POST /api/bulk/verify', () => {
   const INVALID_ADDRESS = 'INVALID'
 
   describe('Authentication', () => {
-    it('should return 401 when API key is missing', async () => {
+    it('should return 401 when authorization header is missing', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
         .send({ addresses: [VALID_ADDRESS_1] })
@@ -21,40 +28,40 @@ describe('POST /api/bulk/verify', () => {
       expect(response.status).toBe(401)
       expect(response.body).toEqual({
         error: 'Unauthorized',
-        message: 'API key is required',
+        message: 'Authorization header is required',
       })
     })
 
-    it('should return 401 when API key is invalid', async () => {
+    it('should return 401 when token is invalid', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', INVALID_KEY)
+        .set('Authorization', `Bearer ${INVALID_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1] })
 
       expect(response.status).toBe(401)
       expect(response.body).toEqual({
         error: 'Unauthorized',
-        message: 'Invalid API key',
+        message: 'token format must be header.payload.signature',
       })
     })
 
-    it('should return 403 when using public API key', async () => {
+    it('should return 401 when authorization header is malformed', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', PUBLIC_KEY)
+        .set('Authorization', 'malformed-token')
         .send({ addresses: [VALID_ADDRESS_1] })
 
-      expect(response.status).toBe(403)
+      expect(response.status).toBe(401)
       expect(response.body).toEqual({
-        error: 'Forbidden',
-        message: 'Enterprise API key required',
+        error: 'Unauthorized',
+        message: 'Authorization header must be in the format: Bearer <token>',
       })
     })
 
-    it('should accept valid enterprise API key', async () => {
+    it('should accept valid access token', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1] })
 
       expect(response.status).toBe(200)
@@ -65,7 +72,7 @@ describe('POST /api/bulk/verify', () => {
     it('should return 400 when addresses is missing', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({})
 
       expect(response.status).toBe(400)
@@ -78,7 +85,7 @@ describe('POST /api/bulk/verify', () => {
     it('should return 400 when addresses is not an array', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: 'not-an-array' })
 
       expect(response.status).toBe(400)
@@ -91,7 +98,7 @@ describe('POST /api/bulk/verify', () => {
     it('should return 400 when addresses contains non-string values', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1, 123, null] })
 
       expect(response.status).toBe(400)
@@ -104,7 +111,7 @@ describe('POST /api/bulk/verify', () => {
     it('should return 400 when batch size is too small', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [] })
 
       expect(response.status).toBe(400)
@@ -120,7 +127,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = Array(101).fill(VALID_ADDRESS_1)
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(413)
@@ -137,7 +144,7 @@ describe('POST /api/bulk/verify', () => {
     it('should verify a single valid address', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1] })
 
       expect(response.status).toBe(200)
@@ -169,7 +176,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = [VALID_ADDRESS_1, VALID_ADDRESS_2, VALID_ADDRESS_3]
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -198,7 +205,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = [VALID_ADDRESS_1, VALID_ADDRESS_1, VALID_ADDRESS_2]
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -218,7 +225,7 @@ describe('POST /api/bulk/verify', () => {
       
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -232,7 +239,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = [VALID_ADDRESS_1, INVALID_ADDRESS, VALID_ADDRESS_2]
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -257,7 +264,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = ['INVALID1', 'INVALID2', 'INVALID3']
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -275,7 +282,7 @@ describe('POST /api/bulk/verify', () => {
       const addresses = [VALID_ADDRESS_1, 'BAD1', 'BAD2']
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses })
 
       expect(response.status).toBe(200)
@@ -295,7 +302,7 @@ describe('POST /api/bulk/verify', () => {
     it('should return correct response structure', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1] })
 
       expect(response.status).toBe(200)
@@ -314,7 +321,7 @@ describe('POST /api/bulk/verify', () => {
     it('should include all required fields in verification result', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .send({ addresses: [VALID_ADDRESS_1] })
 
       const result = response.body.results[0]
@@ -334,7 +341,7 @@ describe('POST /api/bulk/verify', () => {
       // Send malformed JSON to trigger error handling
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', ENTERPRISE_KEY)
+        .set('Authorization', `Bearer ${VALID_ACCESS_TOKEN}`)
         .set('Content-Type', 'application/json')
         .send('{"addresses": [')
 

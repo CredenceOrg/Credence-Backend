@@ -1,5 +1,6 @@
 import express from 'express'
 import { createHealthRouter } from './routes/health.js'
+import bulkRouter from './routes/bulk.js'
 import { createDefaultProbes } from './services/health/probes.js'
 
 const app = express()

@@ -60,6 +60,9 @@ API runs at [http://localhost:3000](http://localhost:3000). The frontend proxies
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
+Authentication details (JWT, refresh flow, middleware):
+**[docs/auth.md](docs/auth.md)**
+
 ### OpenAPI spec
 
 ```

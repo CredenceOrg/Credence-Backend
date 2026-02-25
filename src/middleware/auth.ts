@@ -1,76 +1,64 @@
 import { Request, Response, NextFunction } from 'express'
+import { AuthError, AuthService, JwtClaims } from '../services/auth.js'
 
 /**
- * API key scopes for authorization
- */
-export enum ApiScope {
-  PUBLIC = 'public',
-  ENTERPRISE = 'enterprise',
-}
-
-/**
- * Extended Express Request with API key metadata
+ * Extended Express Request with JWT claims.
  */
 export interface AuthenticatedRequest extends Request {
-  apiKey?: {
-    key: string
-    scope: ApiScope
-  }
+  auth?: JwtClaims
 }
 
 /**
- * Mock API key store - in production, use database or secret manager
- * Format: { key: scope }
+ * Shared auth service instance. Reads config from env by default.
  */
-const API_KEYS: Record<string, ApiScope> = {
-  'test-enterprise-key-12345': ApiScope.ENTERPRISE,
-  'test-public-key-67890': ApiScope.PUBLIC,
-}
+const defaultAuthService = new AuthService()
 
 /**
- * Middleware to validate API key and check required scope
- * 
- * @param requiredScope - Minimum scope required for the endpoint
- * @returns Express middleware function
- * 
+ * Middleware to validate JWT bearer access tokens.
+ *
+ * @param authService - Optional AuthService override for tests/custom config.
+ * @returns Express middleware function.
+ *
  * @example
  * ```typescript
- * app.post('/api/bulk/verify', requireApiKey(ApiScope.ENTERPRISE), handler)
+ * app.post('/api/bulk/verify', requireJwtAuth(), handler)
  * ```
  */
-export function requireApiKey(requiredScope: ApiScope) {
+export function requireJwtAuth(authService: AuthService = defaultAuthService) {
   return (req: Request, res: Response, next: NextFunction): void => {
-    const apiKey = req.headers['x-api-key'] as string
+    const authorizationHeader = req.headers.authorization
 
-    if (!apiKey) {
+    if (!authorizationHeader) {
       res.status(401).json({
         error: 'Unauthorized',
-        message: 'API key is required',
+        message: 'Authorization header is required',
       })
       return
     }
 
-    const scope = API_KEYS[apiKey]
+    const [scheme, token] = authorizationHeader.split(' ')
 
-    if (!scope) {
+    if (scheme !== 'Bearer' || !token) {
       res.status(401).json({
         error: 'Unauthorized',
-        message: 'Invalid API key',
+        message: 'Authorization header must be in the format: Bearer <token>',
       })
       return
     }
 
-    // Check if the key has sufficient scope
-    if (requiredScope === ApiScope.ENTERPRISE && scope !== ApiScope.ENTERPRISE) {
-      res.status(403).json({
-        error: 'Forbidden',
-        message: 'Enterprise API key required',
+    try {
+      const claims = authService.verifyAccessToken(token)
+      ;(req as AuthenticatedRequest).auth = claims
+      next()
+    } catch (error) {
+      const message =
+        error instanceof AuthError
+          ? error.message
+          : 'Invalid or expired authentication token'
+      res.status(401).json({
+        error: 'Unauthorized',
+        message,
       })
-      return
     }
-
-    // Attach API key metadata to request
-    ;(req as AuthenticatedRequest).apiKey = { key: apiKey, scope }
-    next()
   }
 }

@@ -1,16 +1,24 @@
 import { Request, Response, NextFunction } from 'express'
-import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { requireApiKey, ApiScope, AuthenticatedRequest } from '../middleware/auth.js'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { AuthService } from '../services/auth.js'
+import { AuthenticatedRequest, requireJwtAuth } from '../middleware/auth.js'
 
-describe('Auth Middleware', () => {
+describe('JWT Auth Middleware', () => {
   let mockRequest: Partial<Request>
   let mockResponse: Partial<Response>
   let nextFunction: NextFunction
+  let authService: AuthService
 
   beforeEach(() => {
-    mockRequest = {
-      headers: {},
-    }
+    authService = new AuthService({
+      issuer: 'credence-test',
+      accessTokenSecret: 'access-test-secret',
+      refreshTokenSecret: 'refresh-test-secret',
+      accessTokenExpiry: '15m',
+      refreshTokenExpiry: '7d',
+    })
+
+    mockRequest = { headers: {} }
     mockResponse = {
       status: vi.fn().mockReturnThis(),
       json: vi.fn().mockReturnThis(),
@@ -18,142 +26,51 @@ describe('Auth Middleware', () => {
     nextFunction = vi.fn()
   })
 
-  describe('requireApiKey', () => {
-    describe('Missing API Key', () => {
-      it('should return 401 when API key header is missing', () => {
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
+  it('returns 401 when authorization header is missing', () => {
+    const middleware = requireJwtAuth(authService)
+    middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
-        expect(mockResponse.status).toHaveBeenCalledWith(401)
-        expect(mockResponse.json).toHaveBeenCalledWith({
-          error: 'Unauthorized',
-          message: 'API key is required',
-        })
-        expect(nextFunction).not.toHaveBeenCalled()
-      })
-
-      it('should return 401 when API key header is empty string', () => {
-        mockRequest.headers = { 'x-api-key': '' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(mockResponse.status).toHaveBeenCalledWith(401)
-        expect(mockResponse.json).toHaveBeenCalledWith({
-          error: 'Unauthorized',
-          message: 'API key is required',
-        })
-        expect(nextFunction).not.toHaveBeenCalled()
-      })
+    expect(mockResponse.status).toHaveBeenCalledWith(401)
+    expect(mockResponse.json).toHaveBeenCalledWith({
+      error: 'Unauthorized',
+      message: 'Authorization header is required',
     })
-
-    describe('Invalid API Key', () => {
-      it('should return 401 when API key is invalid', () => {
-        mockRequest.headers = { 'x-api-key': 'invalid-key-12345' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(mockResponse.status).toHaveBeenCalledWith(401)
-        expect(mockResponse.json).toHaveBeenCalledWith({
-          error: 'Unauthorized',
-          message: 'Invalid API key',
-        })
-        expect(nextFunction).not.toHaveBeenCalled()
-      })
-
-      it('should return 401 for random string', () => {
-        mockRequest.headers = { 'x-api-key': 'random-string' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(mockResponse.status).toHaveBeenCalledWith(401)
-        expect(nextFunction).not.toHaveBeenCalled()
-      })
-    })
-
-    describe('Insufficient Scope', () => {
-      it('should return 403 when public key is used for enterprise endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-public-key-67890' }
-        const middleware = requireApiKey(ApiScope.ENTERPRISE)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(mockResponse.status).toHaveBeenCalledWith(403)
-        expect(mockResponse.json).toHaveBeenCalledWith({
-          error: 'Forbidden',
-          message: 'Enterprise API key required',
-        })
-        expect(nextFunction).not.toHaveBeenCalled()
-      })
-    })
-
-    describe('Valid API Keys', () => {
-      it('should accept valid public API key for public endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-public-key-67890' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(nextFunction).toHaveBeenCalled()
-        expect(mockResponse.status).not.toHaveBeenCalled()
-        expect(mockResponse.json).not.toHaveBeenCalled()
-      })
-
-      it('should accept valid enterprise API key for public endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(nextFunction).toHaveBeenCalled()
-        expect(mockResponse.status).not.toHaveBeenCalled()
-      })
-
-      it('should accept valid enterprise API key for enterprise endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
-        const middleware = requireApiKey(ApiScope.ENTERPRISE)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(nextFunction).toHaveBeenCalled()
-        expect(mockResponse.status).not.toHaveBeenCalled()
-      })
-
-      it('should attach API key metadata to request', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
-        const middleware = requireApiKey(ApiScope.ENTERPRISE)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        const authReq = mockRequest as AuthenticatedRequest
-        expect(authReq.apiKey).toBeDefined()
-        expect(authReq.apiKey?.key).toBe('test-enterprise-key-12345')
-        expect(authReq.apiKey?.scope).toBe(ApiScope.ENTERPRISE)
-      })
-
-      it('should attach correct scope for public key', () => {
-        mockRequest.headers = { 'x-api-key': 'test-public-key-67890' }
-        const middleware = requireApiKey(ApiScope.PUBLIC)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        const authReq = mockRequest as AuthenticatedRequest
-        expect(authReq.apiKey?.scope).toBe(ApiScope.PUBLIC)
-      })
-    })
-
-    describe('Case Sensitivity', () => {
-      it('should handle header name case-insensitively', () => {
-        // Express normalizes headers to lowercase
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
-        const middleware = requireApiKey(ApiScope.ENTERPRISE)
-        middleware(mockRequest as Request, mockResponse as Response, nextFunction)
-
-        expect(nextFunction).toHaveBeenCalled()
-      })
-    })
+    expect(nextFunction).not.toHaveBeenCalled()
   })
 
-  describe('ApiScope Enum', () => {
-    it('should have PUBLIC scope', () => {
-      expect(ApiScope.PUBLIC).toBe('public')
-    })
+  it('returns 401 when authorization header is malformed', () => {
+    mockRequest.headers = { authorization: 'invalid-format' }
+    const middleware = requireJwtAuth(authService)
+    middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
-    it('should have ENTERPRISE scope', () => {
-      expect(ApiScope.ENTERPRISE).toBe('enterprise')
+    expect(mockResponse.status).toHaveBeenCalledWith(401)
+    expect(mockResponse.json).toHaveBeenCalledWith({
+      error: 'Unauthorized',
+      message: 'Authorization header must be in the format: Bearer <token>',
     })
+    expect(nextFunction).not.toHaveBeenCalled()
+  })
+
+  it('returns 401 when token is invalid', () => {
+    mockRequest.headers = { authorization: 'Bearer not-a-jwt' }
+    const middleware = requireJwtAuth(authService)
+    middleware(mockRequest as Request, mockResponse as Response, nextFunction)
+
+    expect(mockResponse.status).toHaveBeenCalledWith(401)
+    expect(nextFunction).not.toHaveBeenCalled()
+  })
+
+  it('accepts a valid access token and attaches claims', () => {
+    const tokens = authService.issueTokenPair('user-123')
+    mockRequest.headers = { authorization: `Bearer ${tokens.accessToken}` }
+    const middleware = requireJwtAuth(authService)
+
+    middleware(mockRequest as Request, mockResponse as Response, nextFunction)
+
+    expect(nextFunction).toHaveBeenCalled()
+    const authReq = mockRequest as AuthenticatedRequest
+    expect(authReq.auth?.sub).toBe('user-123')
+    expect(authReq.auth?.iss).toBe('credence-test')
+    expect(authReq.auth?.type).toBe('access')
   })
 })

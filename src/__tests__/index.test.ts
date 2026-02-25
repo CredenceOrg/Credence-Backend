@@ -1,6 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import request from 'supertest'
 import app from '../index.js'
+import { AuthService } from '../services/auth.js'
+
+const authService = new AuthService({
+  issuer: 'credence-api',
+  accessTokenSecret: 'dev-access-secret-change-me',
+  refreshTokenSecret: 'dev-refresh-secret-change-me',
+  accessTokenExpiry: '15m',
+  refreshTokenExpiry: '7d',
+})
+const accessToken = authService.issueTokenPair('index-test-user').accessToken
 
 describe('API Endpoints', () => {
   describe('GET /api/health', () => {
@@ -11,6 +21,10 @@ describe('API Endpoints', () => {
       expect(response.body).toEqual({
         status: 'ok',
         service: 'credence-backend',
+        dependencies: {
+          db: { status: 'not_configured' },
+          redis: { status: 'not_configured' },
+        },
       })
     })
   })
@@ -77,7 +91,7 @@ describe('API Endpoints', () => {
     it('should handle valid JSON in request body', async () => {
       const response = await request(app)
         .post('/api/bulk/verify')
-        .set('X-API-Key', 'test-enterprise-key-12345')
+        .set('Authorization', `Bearer ${accessToken}`)
         .set('Content-Type', 'application/json')
         .send(JSON.stringify({ addresses: ['GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'] }))
 
