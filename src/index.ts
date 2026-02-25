@@ -1,6 +1,7 @@
 import express from 'express'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
+import bulkRouter from './routes/bulk.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3000
