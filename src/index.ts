@@ -33,7 +33,6 @@ import {
 } from './schemas/index.js'
 
 const config = loadConfig()
-const app = express()
 
 app.use(express.json());
 
@@ -275,9 +274,9 @@ app.get('/api/trust/:address', (req, res) => {
 const bondStore = new BondStore();
 const bondService = new BondService(bondStore);
 app.use("/api/bond", createBondRouter(bondService));
-    _accessedWith: { scope: req.apiKey?.scope, tier: req.apiKey?.tier },
-  })
-})
+console.log({ 
+  _accessedWith: { scope: (req as any).apiKey?.scope, tier: (req as any).apiKey?.tier } 
+});
 
 app.get('/api/bond/:address', requireApiKey(), (req, res) => {
   const { address } = req.params
