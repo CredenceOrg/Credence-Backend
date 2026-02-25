@@ -40,17 +40,6 @@ app.use(express.json());
 const healthProbes = createDefaultProbes();
 app.use("/api/health", createHealthRouter(healthProbes));
 
-app.get("/api/trust/:address", (req, res) => {
-  const { address } = req.params;
-  // Placeholder: in production, fetch from DB / reputation engine
-// ── Health ────────────────────────────────────────────────────────────────────
-
-app.get('/api/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'credence-backend' })
-})
-const healthProbes = createDefaultProbes()
-app.use('/api/health', createHealthRouter(healthProbes))
-
 /** Public: trust score by address (path validation) */
 app.get(
   '/api/trust/:address',
@@ -254,30 +243,12 @@ app.post('/api/governance/slash-requests/:id/votes', (req, res) => {
 
 // ── Protected Endpoints ───────────────────────────────────────────────────────
 
-app.get('/api/trust/:address', requireApiKey(), (req, res) => {
-// ── Protected Endpoints ───────────────────────────────────────────────────────
-
-app.get('/api/trust/:address', requireApiKey(), (req, res) => {
 // Bulk verification endpoint (Enterprise)
 app.use('/api/bulk', bulkRouter)
-
-app.get('/api/trust/:address', (req, res) => {
-  const { address } = req.params
-  res.json({
-    address,
-    score: 0,
-    bondedAmount: "0",
-    bondStart: null,
-    attestationCount: 0,
-  });
-});
 
 const bondStore = new BondStore();
 const bondService = new BondService(bondStore);
 app.use("/api/bond", createBondRouter(bondService));
-    _accessedWith: { scope: req.apiKey?.scope, tier: req.apiKey?.tier },
-  })
-})
 
 app.get('/api/bond/:address', requireApiKey(), (req, res) => {
   const { address } = req.params
@@ -287,7 +258,6 @@ app.get('/api/bond/:address', requireApiKey(), (req, res) => {
     bondStart: null,
     bondDuration: null,
     active: false,
-    _accessedWith: { scope: req.apiKey?.scope, tier: req.apiKey?.tier },
   })
 })
 
@@ -313,16 +283,8 @@ app.get('/api/verification/:address', (req, res) => {
 // Bulk verification endpoint (Enterprise)
 app.use("/api/bulk", bulkRouter);
 
-// Only start server if not in test environment
-if (process.env.NODE_ENV !== "test") {
-  app.listen(PORT, () => {
-    console.log(`Credence API listening on http://localhost:${PORT}`);
-  });
-}
-
 export default app;
 export { app }
-export default app
 
 if (process.env.NODE_ENV !== 'test') {
   app.listen(config.port, () => {
