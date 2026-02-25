@@ -56,9 +56,20 @@ API runs at [http://localhost:3000](http://localhost:3000). The frontend proxies
 | GET    | `/api/health`           | Health check           |
 | GET    | `/api/trust/:address`   | Trust score            |
 | GET    | `/api/bond/:address`    | Bond status (stub)     |
+| GET    | `/metrics`              | Prometheus metrics     |
 
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
+
+### Prometheus Metrics
+
+The `/metrics` endpoint exposes Prometheus-compatible metrics for monitoring:
+
+- HTTP request duration and count (by method, route, status)
+- Business metrics (bonds, slashes, score calculations)
+- Node.js runtime metrics (memory, CPU, event loop)
+
+See **[docs/PROMETHEUS_METRICS.md](docs/PROMETHEUS_METRICS.md)** for complete documentation, integration guide, and example queries.
 
 ### OpenAPI spec
 

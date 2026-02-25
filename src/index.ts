@@ -2,11 +2,16 @@ import express from 'express'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
 import bulkRouter from './routes/bulk.js'
+import metricsRouter from './routes/metrics.js'
+import { metricsMiddleware } from './middleware/metrics.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3000
 
 app.use(express.json())
+
+// Metrics middleware - track all HTTP requests
+app.use(metricsMiddleware)
 
 const healthProbes = createDefaultProbes()
 app.use('/api/health', createHealthRouter(healthProbes))
@@ -36,6 +41,9 @@ app.get('/api/bond/:address', (req, res) => {
 
 // Bulk verification endpoint (Enterprise)
 app.use('/api/bulk', bulkRouter)
+
+// Prometheus metrics endpoint
+app.use('/metrics', metricsRouter)
 
 // Only start server if not in test environment
 if (process.env.NODE_ENV !== 'test') {

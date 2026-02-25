@@ -1,0 +1,44 @@
+﻿
+> credence-backend@0.1.0 test:coverage
+> vitest run --coverage
+
+
+[1m[46m RUN [49m[22m [36mv4.0.18 [39m[90mC:/Users/Sunday/Desktop/Github/Credence-Backend[39m
+      [2mCoverage enabled with [22m[33mv8[39m
+
+ [32mΓ£ô[39m src/services/metrics/metricsService.test.ts [2m([22m[2m24 tests[22m[2m)[22m[33m 458[2mms[22m[39m
+ [32mΓ£ô[39m src/routes/health.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 168[2mms[22m[39m
+ [32mΓ£ô[39m src/routes/metrics.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 500[2mms[22m[39m
+ [32mΓ£ô[39m src/__tests__/metrics.integration.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 785[2mms[22m[39m
+ [32mΓ£ô[39m src/__tests__/index.test.ts [2m([22m[2m7 tests[22m[2m)[22m[33m 391[2mms[22m[39m
+ [32mΓ£ô[39m src/middleware/metrics.test.ts [2m([22m[2m11 tests[22m[2m)[22m[33m 883[2mms[22m[39m
+ [32mΓ£ô[39m src/__tests__/bulk.test.ts [2m([22m[2m19 tests[22m[2m)[22m[33m 956[2mms[22m[39m
+ [32mΓ£ô[39m src/__tests__/identityService.test.ts [2m([22m[2m16 tests[22m[2m)[22m[33m 335[2mms[22m[39m
+ [32mΓ£ô[39m src/services/governance/disputes.test.ts [2m([22m[2m35 tests[22m[2m)[22m[32m 96[2mms[22m[39m
+ [32mΓ£ô[39m src/services/governance/votes.test.ts [2m([22m[2m24 tests[22m[2m)[22m[32m 51[2mms[22m[39m
+ [32mΓ£ô[39m src/services/health/probes.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32mΓ£ô[39m src/services/governance/multisig.test.ts [2m([22m[2m40 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32mΓ£ô[39m src/services/reputation/attestationScore.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32mΓ£ô[39m src/__tests__/auth.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32mΓ£ô[39m src/listeners/identityStateSync.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32mΓ£ô[39m src/services/governance/arbitration.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 87[2mms[22m[39m
+ [32mΓ£ô[39m src/services/health/checks.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 38[2mms[22m[39m
+ [32mΓ£ô[39m src/services/reputation/timeWeight.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 43[2mms[22m[39m
+ [32mΓ£ô[39m src/services/reputation/score.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32mΓ£ô[39m src/services/reputation/bondScore.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 48[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m20 passed[39m[22m[90m (20)[39m
+[2m      Tests [22m [1m[32m360 passed[39m[22m[90m (360)[39m
+[2m   Start at [22m 14:52:24
+[2m   Duration [22m 11.05s[2m (transform 6.89s, setup 0ms, import 21.14s, tests 5.14s, environment 11ms)[22m
+
+[34m % [39m[2mCoverage report from [22m[33mv8[39m
+----------------|---------|----------|---------|---------|-------------------
+File            | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+----------------|---------|----------|---------|---------|-------------------
+All files       |     100 |      100 |     100 |     100 |                   
+ arbitration.ts |     100 |      100 |     100 |     100 |                   
+ disputes.ts    |     100 |      100 |     100 |     100 |                   
+ multisig.ts    |     100 |      100 |     100 |     100 |                   
+ votes.ts       |     100 |      100 |     100 |     100 |                   
+----------------|---------|----------|---------|---------|-------------------
