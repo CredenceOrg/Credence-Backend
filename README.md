@@ -56,6 +56,12 @@ API runs at [http://localhost:3000](http://localhost:3000). The frontend proxies
 | GET    | `/api/health`           | Health check           |
 | GET    | `/api/trust/:address`   | Trust score            |
 | GET    | `/api/bond/:address`    | Bond status (stub)     |
+| POST   | `/api/bulk/verify`      | Bulk verification (Enterprise) |
+| POST   | `/api/slash/submit`     | Submit slash request (Enterprise) |
+| GET    | `/api/slash/list`       | List slash requests (Enterprise) |
+| GET    | `/api/slash/:id`        | Get slash request by ID (Enterprise) |
+| POST   | `/api/slash/:id/review` | Review slash request (Enterprise) |
+| POST   | `/api/slash/:id/execute`| Execute slash request (Enterprise) |
 
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**

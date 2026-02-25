@@ -2,6 +2,7 @@ import express from 'express'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
 import bulkRouter from './routes/bulk.js'
+import slashRouter from './routes/slash.js'
 
 const app = express()
 const PORT = process.env.PORT ?? 3000
@@ -36,6 +37,9 @@ app.get('/api/bond/:address', (req, res) => {
 
 // Bulk verification endpoint (Enterprise)
 app.use('/api/bulk', bulkRouter)
+
+// Slash request endpoints (Enterprise)
+app.use('/api/slash', slashRouter)
 
 // Only start server if not in test environment
 if (process.env.NODE_ENV !== 'test') {
