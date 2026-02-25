@@ -1,0 +1,9 @@
+# Namespace for Credence Backend services.
+# Apply first: kubectl apply -f k8s/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: credence
+  labels:
+    app.kubernetes.io/name: credence-backend
+    app.kubernetes.io/part-of: credence
