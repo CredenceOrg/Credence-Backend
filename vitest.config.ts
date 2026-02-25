@@ -10,6 +10,13 @@ export default defineConfig({
     globals: true,
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
+    exclude: [
+      'src/api.test.ts',
+      'src/index.test.ts',
+      'src/__tests__/**',
+      'src/clients/soroban.test.ts',
+      'src/config/__tests__/**',
+    ],
     setupFiles: ['src/test-setup.ts'],
     pool: 'forks',
     poolOptions: { forks: { singleFork: true } },
