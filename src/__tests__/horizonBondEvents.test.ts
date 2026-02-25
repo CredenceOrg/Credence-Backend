@@ -6,19 +6,21 @@ let mockStream: (op: any) => Promise<void>
 let events: any[] = []
 
 vi.mock('stellar-sdk', () => {
-  const mockServer = vi.fn().mockImplementation(() => ({
-    operations: vi.fn(() => ({
-      forAsset: vi.fn(() => ({
-        cursor: vi.fn(() => ({
-          stream: vi.fn(({ onmessage }: { onmessage: (op: any) => Promise<void> }) => {
-            mockStream = onmessage
-          }),
+  // Must use `function` keyword (not arrow) so it works with `new`
+  function MockServer() {
+    return {
+      operations: vi.fn(() => ({
+        forAsset: vi.fn(() => ({
+          cursor: vi.fn(() => ({
+            stream: vi.fn(({ onmessage }: { onmessage: (op: any) => Promise<void> }) => {
+              mockStream = onmessage
+            }),
+          })),
         })),
       })),
-    })),
-  }))
-  // Make it work as both a constructor and a regular call
-  return { Server: mockServer }
+    }
+  }
+  return { Server: MockServer }
 })
 
 vi.mock('../services/identityService.js', () => ({

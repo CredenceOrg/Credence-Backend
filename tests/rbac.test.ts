@@ -2,7 +2,7 @@
  * RBAC middleware + RoleService tests.
  * No database required – all tests run in memory.
  *
- * Run:  npx jest tests/rbac.test.ts
+ * Run:  npx vitest run tests/rbac.test.ts
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest'
@@ -87,7 +87,7 @@ describe('requireRole()', () => {
                mw(makeReq({ id: '1', address: '0x1', role: 'admin' }), resAdmin, next)
                expect(next).toHaveBeenCalledTimes(1)
 
-               jest.clearAllMocks()
+               vi.clearAllMocks()
 
                const resVerifier = makeRes()
                mw(makeReq({ id: '2', address: '0x2', role: 'verifier' }), resVerifier, next)
@@ -154,7 +154,7 @@ describe('requireMinRole()', () => {
           test.each(cases)(
                'caller=%s minRole=%s → allowed=%s',
                (callerRole, minRole, expectAllowed) => {
-                    jest.clearAllMocks()
+                    vi.clearAllMocks()
                     const mw = requireMinRole(minRole)
                     const res = makeRes()
                     mw(makeReq({ id: '1', address: '0x1', role: callerRole }), res, next)
@@ -187,7 +187,7 @@ describe('requireAnyRole()', () => {
 
      const roles: Role[] = ['admin', 'verifier', 'user', 'public']
      test.each(roles)('calls next for role=%s', (role) => {
-          jest.clearAllMocks()
+          vi.clearAllMocks()
           const mw = requireAnyRole()
           const res = makeRes()
           mw(makeReq({ id: '1', address: '0x1', role }), res, next)

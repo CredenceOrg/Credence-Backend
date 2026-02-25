@@ -1,13 +1,10 @@
 import { Pool } from 'pg'
-import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers'
 
 export interface TestDatabase {
   pool: Pool
   close: () => Promise<void>
   connectionString: string
 }
-
-const waitForReadyLog = Wait.forLogMessage(/database system is ready to accept connections/i)
 
 export async function createTestDatabase(): Promise<TestDatabase> {
   const externalConnectionString = process.env.TEST_DATABASE_URL
@@ -25,11 +22,16 @@ export async function createTestDatabase(): Promise<TestDatabase> {
     }
   }
 
+  // Dynamically import testcontainers only when needed (not installed in CI)
+  const { GenericContainer, Wait } = await import('testcontainers')
+
   const user = 'credence'
   const password = 'credence'
   const database = 'credence_test'
 
-  const container: StartedTestContainer = await new GenericContainer('postgres:16-alpine')
+  const waitForReadyLog = Wait.forLogMessage(/database system is ready to accept connections/i)
+
+  const container = await new GenericContainer('postgres:16-alpine')
     .withEnvironment({
       POSTGRES_DB: database,
       POSTGRES_PASSWORD: password,

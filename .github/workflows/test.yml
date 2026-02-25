@@ -50,6 +50,14 @@ jobs:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm run coverage
 
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
+        run: npm run test:integration
+
+      - name: Run Node.js native tests
+        run: npm run test:node
+
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
