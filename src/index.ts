@@ -1,9 +1,19 @@
 import express from 'express'
 
+import { ArbitrationLogService } from './services/governance/arbitrationLogs.js'
+import { createGovernanceRouter } from './routes/governance.js'
+
 const app = express()
 const PORT = process.env.PORT ?? 3000
 
 app.use(express.json())
+
+// Governance – Arbitration Logs
+const arbitrationLogService = new ArbitrationLogService()
+app.use(
+  '/api/governance/arbitration-logs',
+  createGovernanceRouter(arbitrationLogService),
+)
 
 app.get('/api/health', (_req, res) => {
   res.json({ status: 'ok', service: 'credence-backend' })
