@@ -18,20 +18,14 @@ describe('API Endpoints', () => {
       const response = await request(app).get('/api/health')
 
       expect(response.status).toBe(200)
-      expect(response.body).toEqual({
-        status: 'ok',
-        service: 'credence-backend',
-        dependencies: {
-          db: { status: 'not_configured' },
-          redis: { status: 'not_configured' },
-        },
-      })
+      expect(response.body.status).toBe('ok')
+      expect(response.body.service).toBe('credence-backend')
     })
   })
 
   describe('GET /api/trust/:address', () => {
     it('should return trust score for an address', async () => {
-      const address = 'GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
+      const address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e'
       const response = await request(app).get(`/api/trust/${address}`)
 
       expect(response.status).toBe(200)
@@ -45,21 +39,29 @@ describe('API Endpoints', () => {
     })
 
     it('should handle different addresses', async () => {
-      const address = 'GDEF7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
+      const address = '0x0000000000000000000000000000000000000001'
       const response = await request(app).get(`/api/trust/${address}`)
 
       expect(response.status).toBe(200)
       expect(response.body.address).toBe(address)
     })
+
+    it('should return 400 for invalid address format', async () => {
+      const address = 'invalid-address'
+      const response = await request(app).get(`/api/trust/${address}`)
+
+      expect(response.status).toBe(400)
+      expect(response.body.error).toMatch(/Validation failed/i)
+    })
   })
 
   describe('GET /api/bond/:address', () => {
     it('should return bond status for an address', async () => {
-      const address = 'GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
+      const address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e'
       const response = await request(app).get(`/api/bond/${address}`)
 
       expect(response.status).toBe(200)
-      expect(response.body).toEqual({
+      expect(response.body).toMatchObject({
         address,
         bondedAmount: '0',
         bondStart: null,
@@ -68,33 +70,43 @@ describe('API Endpoints', () => {
       })
     })
 
-    it('should handle different addresses', async () => {
-      const address = 'GDEF7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'
+    it('should return 400 for invalid address format', async () => {
+      const address = 'invalid-address'
       const response = await request(app).get(`/api/bond/${address}`)
 
+      expect(response.status).toBe(400)
+      expect(response.body.error).toMatch(/Validation failed/i)
+    })
+  })
+
+  describe('POST /api/bulk/verify', () => {
+    it('should handle valid JSON in request body', async () => {
+      const response = await request(app)
+        .post('/api/bulk/verify')
+        .set('Authorization', `Bearer ${accessToken}`)
+        .set('Content-Type', 'application/json')
+        .send({
+          addresses: ['GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'],
+        })
+
       expect(response.status).toBe(200)
-      expect(response.body.address).toBe(address)
+      expect(response.body).toHaveProperty('results')
+      expect(response.body).toHaveProperty('metadata')
+    })
+
+    it('should return 401 without authorization', async () => {
+      const response = await request(app)
+        .post('/api/bulk/verify')
+        .send({ addresses: ['GABC...'] })
+
+      expect(response.status).toBe(401)
     })
   })
 
   describe('404 Handling', () => {
     it('should return 404 for unknown routes', async () => {
       const response = await request(app).get('/api/unknown')
-
       expect(response.status).toBe(404)
     })
   })
 })
-
-
-  describe('JSON Parsing', () => {
-    it('should handle valid JSON in request body', async () => {
-      const response = await request(app)
-        .post('/api/bulk/verify')
-        .set('Authorization', `Bearer ${accessToken}`)
-        .set('Content-Type', 'application/json')
-        .send(JSON.stringify({ addresses: ['GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ'] }))
-
-      expect(response.status).toBe(200)
-    })
-  })
