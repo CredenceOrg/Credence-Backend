@@ -16,6 +16,29 @@ export interface IdentityState {
 }
 
 /**
+ * Event type associated with identity state updates.
+ */
+export type IdentityStateEventType = 'bond' | 'attestation' | 'slash'
+
+/**
+ * Payload emitted when identity state is updated in store.
+ */
+export interface IdentityStateUpdatedEvent {
+  address: string
+  previousState: IdentityState | null
+  chainState: IdentityState
+  eventType: IdentityStateEventType
+  updatedAt: Date
+}
+
+/**
+ * Optional event hooks used by sync orchestrators.
+ */
+export interface IdentityStateSyncHooks {
+  onStateUpdated?(event: IdentityStateUpdatedEvent): Promise<void> | void
+}
+
+/**
  * Fetches current identity/bond state from the contract (on-chain).
  * Implement with your chain client (e.g. Horizon, ethers).
  */

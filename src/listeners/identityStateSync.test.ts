@@ -4,6 +4,7 @@ import {
   createIdentityStateSync,
   type ContractReader,
   type IdentityState,
+  type IdentityStateSyncHooks,
   type IdentityStateStore,
 } from './index.js'
 
@@ -113,6 +114,46 @@ describe('IdentityStateSync', () => {
       expect(saved).toEqual(chainState)
     })
 
+    it('emits onStateUpdated hook when state changes', async () => {
+      const chainState = makeState({
+        address: '0xevt',
+        bondedAmount: '300',
+        bondStart: 3000,
+        active: true,
+      })
+      const dbState = makeState({
+        address: '0xevt',
+        bondedAmount: '100',
+        bondStart: 1000,
+        active: false,
+      })
+      const contract: ContractReader = {
+        getIdentityState: async () => chainState,
+      }
+      const store: IdentityStateStore = {
+        get: async () => dbState,
+        set: async () => {},
+        getAllAddresses: async () => [],
+      }
+      const hooks: IdentityStateSyncHooks = {
+        onStateUpdated: vi.fn(),
+      }
+      const sync = new IdentityStateSync(contract, store, hooks)
+      const result = await sync.reconcileByAddress('0xevt', 'slash')
+
+      expect(result).toEqual({ address: '0xevt', updated: true })
+      expect(hooks.onStateUpdated).toHaveBeenCalledOnce()
+      expect(hooks.onStateUpdated).toHaveBeenCalledWith(
+        expect.objectContaining({
+          address: '0xevt',
+          previousState: dbState,
+          chainState,
+          eventType: 'slash',
+          updatedAt: expect.any(Date),
+        })
+      )
+    })
+
     it('contract throws: returns error reason, does not update', async () => {
       const contract: ContractReader = {
         getIdentityState: async () => {
@@ -129,6 +170,77 @@ describe('IdentityStateSync', () => {
       const result = await sync.reconcileByAddress('0xerr')
       expect(result).toEqual({ address: '0xerr', updated: false, reason: 'error' })
       expect(setSpy).not.toHaveBeenCalled()
+    })
+
+    it('does not emit hook for no_drift, chain_missing, or error results', async () => {
+      const hooks: IdentityStateSyncHooks = {
+        onStateUpdated: vi.fn(),
+      }
+
+      const noDriftState = makeState({ address: '0xsame', bondedAmount: '9' })
+      const noDriftSync = new IdentityStateSync(
+        { getIdentityState: async () => noDriftState },
+        {
+          get: async () => noDriftState,
+          set: async () => {},
+          getAllAddresses: async () => [],
+        },
+        hooks
+      )
+      await noDriftSync.reconcileByAddress('0xsame')
+
+      const missingSync = new IdentityStateSync(
+        { getIdentityState: async () => null },
+        {
+          get: async () => null,
+          set: async () => {},
+          getAllAddresses: async () => [],
+        },
+        hooks
+      )
+      await missingSync.reconcileByAddress('0xmissing')
+
+      const errorSync = new IdentityStateSync(
+        {
+          getIdentityState: async () => {
+            throw new Error('boom')
+          },
+        },
+        {
+          get: async () => null,
+          set: async () => {},
+          getAllAddresses: async () => [],
+        },
+        hooks
+      )
+      await errorSync.reconcileByAddress('0xerror')
+
+      expect(hooks.onStateUpdated).not.toHaveBeenCalled()
+    })
+
+    it('swallows hook errors and still reports update', async () => {
+      const chainState = makeState({
+        address: '0xevt-err',
+        bondedAmount: '300',
+        bondStart: 3000,
+        active: true,
+      })
+      const contract: ContractReader = {
+        getIdentityState: async () => chainState,
+      }
+      const store: IdentityStateStore = {
+        get: async () => null,
+        set: async () => {},
+        getAllAddresses: async () => [],
+      }
+      const sync = new IdentityStateSync(contract, store, {
+        onStateUpdated: async () => {
+          throw new Error('hook failure')
+        },
+      })
+
+      const result = await sync.reconcileByAddress('0xevt-err')
+      expect(result).toEqual({ address: '0xevt-err', updated: true })
     })
   })
 
@@ -260,5 +372,18 @@ describe('createIdentityStateSync', () => {
     expect(sync).toBeInstanceOf(IdentityStateSync)
     expect(sync.reconcileByAddress).toBeDefined()
     expect(sync.fullResync).toBeDefined()
+  })
+
+  it('accepts optional hooks', () => {
+    const contract: ContractReader = { getIdentityState: async () => null }
+    const store: IdentityStateStore = {
+      get: async () => null,
+      set: async () => {},
+      getAllAddresses: async () => [],
+    }
+    const hooks: IdentityStateSyncHooks = { onStateUpdated: vi.fn() }
+    const sync = createIdentityStateSync(contract, store, hooks)
+
+    expect(sync).toBeInstanceOf(IdentityStateSync)
   })
 })

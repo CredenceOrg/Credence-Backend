@@ -1,4 +1,10 @@
-import type { ContractReader, IdentityState, IdentityStateStore } from './types.js'
+import type {
+  ContractReader,
+  IdentityState,
+  IdentityStateEventType,
+  IdentityStateStore,
+  IdentityStateSyncHooks,
+} from './types.js'
 
 /** Result of reconciling one identity. */
 export interface ReconcileResult {
@@ -41,7 +47,8 @@ function statesEqual(a: IdentityState | null, b: IdentityState | null): boolean 
 export class IdentityStateSync {
   constructor(
     private readonly contract: ContractReader,
-    private readonly store: IdentityStateStore
+    private readonly store: IdentityStateStore,
+    private readonly hooks: IdentityStateSyncHooks = {}
   ) {}
 
   /**
@@ -49,7 +56,10 @@ export class IdentityStateSync {
    * @param address - Identity address to reconcile
    * @returns Result indicating whether the store was updated
    */
-  async reconcileByAddress(address: string): Promise<ReconcileResult> {
+  async reconcileByAddress(
+    address: string,
+    eventType: IdentityStateEventType = 'bond'
+  ): Promise<ReconcileResult> {
     try {
       const chainState = await this.contract.getIdentityState(address)
       if (chainState === null) {
@@ -60,6 +70,13 @@ export class IdentityStateSync {
         return { address, updated: false, reason: 'no_drift' }
       }
       await this.store.set(chainState)
+      await this.emitStateUpdated({
+        address,
+        previousState: dbState,
+        chainState,
+        eventType,
+        updatedAt: new Date(),
+      })
       return { address, updated: true }
     } catch {
       return { address, updated: false, reason: 'error' }
@@ -89,6 +106,20 @@ export class IdentityStateSync {
       results,
     }
   }
+
+  private async emitStateUpdated(event: {
+    address: string
+    previousState: IdentityState | null
+    chainState: IdentityState
+    eventType: IdentityStateEventType
+    updatedAt: Date
+  }): Promise<void> {
+    try {
+      await this.hooks.onStateUpdated?.(event)
+    } catch {
+      // Hook failures must not fail chain/store reconciliation.
+    }
+  }
 }
 
 /**
@@ -100,7 +131,8 @@ export class IdentityStateSync {
  */
 export function createIdentityStateSync(
   contract: ContractReader,
-  store: IdentityStateStore
+  store: IdentityStateStore,
+  hooks: IdentityStateSyncHooks = {}
 ): IdentityStateSync {
-  return new IdentityStateSync(contract, store)
+  return new IdentityStateSync(contract, store, hooks)
 }
