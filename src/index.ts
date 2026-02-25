@@ -318,14 +318,13 @@ if (process.env.NODE_ENV !== "test") {
   app.listen(PORT, () => {
     console.log(`Credence API listening on http://localhost:${PORT}`);
   });
-}
-
-export default app;
-export { app }
-export default app
-
+  }
+  
 if (process.env.NODE_ENV !== 'test') {
   app.listen(config.port, () => {
     console.log(`Credence API listening on http://localhost:${config.port}`)
   })
 }
+
+export default app;
+
