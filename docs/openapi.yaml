@@ -1,0 +1,276 @@
+openapi: 3.1.0
+
+info:
+  title: Credence API
+  version: 0.1.0
+  description: |
+    Public query API for the Credence economic trust protocol.
+
+    Provides trust scores, bond status, and health checks. Trust scores are
+    computed off-chain from bonded amount, bond duration, and attestation
+    history.
+
+    ### Authentication
+    All read endpoints are public. Supply an `X-API-Key` header to unlock
+    the **premium** rate tier for higher request throughput.
+
+    ### Address format
+    All `:address` path parameters must be Ethereum addresses:
+    `0x` followed by exactly 40 hexadecimal characters (case-insensitive).
+
+servers:
+  - url: http://localhost:3000
+    description: Local development
+  - url: https://api.credence.example.com
+    description: Production (placeholder)
+
+tags:
+  - name: Health
+    description: Service liveness checks
+  - name: Trust
+    description: Trust score queries
+  - name: Bond
+    description: Bond status queries
+
+components:
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: |
+        Optional API key. Recognised keys unlock the **premium** rate tier.
+        Requests without a key are served at the **standard** rate tier.
+
+  parameters:
+    address:
+      name: address
+      in: path
+      required: true
+      description: |
+        Ethereum address — `0x`-prefixed, 40 hex characters.
+        Accepted in any case (EIP-55 checksummed or all lower-case).
+      schema:
+        type: string
+        pattern: '^0x[0-9a-fA-F]{40}$'
+        example: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+
+  schemas:
+    HealthResponse:
+      type: object
+      required: [status, service]
+      properties:
+        status:
+          type: string
+          enum: [ok]
+          example: ok
+        service:
+          type: string
+          example: credence-backend
+
+    TrustScore:
+      type: object
+      required: [address, score, bondedAmount, bondStart, attestationCount]
+      properties:
+        address:
+          type: string
+          description: Normalised (lower-case) Ethereum address.
+          example: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+        score:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: |
+            Computed trust score (0–100).
+
+            Breakdown:
+            - Bond amount  → up to 50 pts (maxes at ≥ 1 ETH)
+            - Bond duration → up to 20 pts (maxes at ≥ 365 days)
+            - Attestations → up to 30 pts (maxes at ≥ 5 attestations)
+          example: 80
+        bondedAmount:
+          type: string
+          description: Amount bonded in wei (string-encoded bigint).
+          example: '1000000000000000000'
+        bondStart:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp when the bond was first posted, or null if unbonded.
+          example: '2024-01-15T00:00:00.000Z'
+        attestationCount:
+          type: integer
+          minimum: 0
+          description: Number of on-chain attestations recorded for this address.
+          example: 5
+        agreedFields:
+          type: object
+          additionalProperties:
+            type: string
+          nullable: true
+          description: Key/value fields the identity has explicitly attested to (omitted if none).
+          example:
+            name: Alice
+            role: validator
+
+    BondStatus:
+      type: object
+      required: [address, bondedAmount, bondStart, bondDuration, active]
+      properties:
+        address:
+          type: string
+          example: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+        bondedAmount:
+          type: string
+          description: Amount currently bonded in wei.
+          example: '1000000000000000000'
+        bondStart:
+          type: string
+          format: date-time
+          nullable: true
+          description: ISO 8601 timestamp of first bond, or null.
+          example: '2024-01-15T00:00:00.000Z'
+        bondDuration:
+          type: integer
+          nullable: true
+          description: Duration of the current bond in seconds, or null if unbonded.
+          example: null
+        active:
+          type: boolean
+          description: Whether the bond is currently active.
+          example: false
+
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable description of what went wrong.
+          example: 'Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.'
+
+paths:
+  /api/health:
+    get:
+      operationId: getHealth
+      summary: Health check
+      description: Returns service liveness. No authentication required.
+      tags: [Health]
+      responses:
+        '200':
+          description: Service is healthy.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+              example:
+                status: ok
+                service: credence-backend
+
+  /api/trust/{address}:
+    get:
+      operationId: getTrustScore
+      summary: Get trust score
+      description: |
+        Returns the computed trust score and identity data for an Ethereum
+        address. The score is derived from bonded amount, bond duration, and
+        attestation count.
+
+        Supply `X-API-Key` to use the premium rate tier.
+      tags: [Trust]
+      security:
+        - {}           # public (no key)
+        - ApiKeyAuth: []  # or with key
+      parameters:
+        - $ref: '#/components/parameters/address'
+      responses:
+        '200':
+          description: Trust score found.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TrustScore'
+              examples:
+                fullScore:
+                  summary: Fully bonded identity with agreed fields
+                  value:
+                    address: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+                    score: 100
+                    bondedAmount: '1000000000000000000'
+                    bondStart: '2024-01-15T00:00:00.000Z'
+                    attestationCount: 5
+                    agreedFields:
+                      name: Alice
+                      role: validator
+                partialScore:
+                  summary: Partially bonded identity
+                  value:
+                    address: '0x70997970c51812dc3a010c7d01b50e0d17dc79c8'
+                    score: 57
+                    bondedAmount: '500000000000000000'
+                    bondStart: '2024-06-01T00:00:00.000Z'
+                    attestationCount: 2
+                zeroScore:
+                  summary: Unbonded identity (score 0)
+                  value:
+                    address: '0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc'
+                    score: 0
+                    bondedAmount: '0'
+                    bondStart: null
+                    attestationCount: 0
+        '400':
+          description: Address format is invalid.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: 'Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.'
+        '404':
+          description: No identity record found for this address.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              example:
+                error: 'No identity record found for address 0x1234567890123456789012345678901234567890.'
+
+  /api/bond/{address}:
+    get:
+      operationId: getBondStatus
+      summary: Get bond status
+      description: |
+        Returns the raw bond status for an Ethereum address.
+
+        > **Note:** This endpoint currently returns stub data. Full Horizon
+        > event ingestion is planned for a future milestone.
+      tags: [Bond]
+      security:
+        - {}
+        - ApiKeyAuth: []
+      parameters:
+        - $ref: '#/components/parameters/address'
+      responses:
+        '200':
+          description: Bond status returned (may be zeroed if address is unknown).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BondStatus'
+              examples:
+                active:
+                  summary: Active bond
+                  value:
+                    address: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+                    bondedAmount: '1000000000000000000'
+                    bondStart: '2024-01-15T00:00:00.000Z'
+                    bondDuration: null
+                    active: true
+                inactive:
+                  summary: No bond (stub response)
+                  value:
+                    address: '0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266'
+                    bondedAmount: '0'
+                    bondStart: null
+                    bondDuration: null
+                    active: false

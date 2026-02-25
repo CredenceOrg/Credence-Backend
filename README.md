@@ -52,13 +52,30 @@ API runs at [http://localhost:3000](http://localhost:3000). The frontend proxies
 
 ## API (current)
 
-| Method | Path               | Description        |
-|--------|--------------------|--------------------|
-| GET    | `/api/health`      | Health check (readiness + dependency status) |
-| GET    | `/api/health/ready`| Readiness (same as `/api/health`) |
-| GET    | `/api/health/live` | Liveness (process up; always 200) |
-| GET    | `/api/trust/:address` | Trust score (stub) |
-| GET    | `/api/bond/:address`   | Bond status (stub) |
+| Method | Path                    | Description            |
+|--------|-------------------------|------------------------|
+| GET    | `/api/health`           | Health check           |
+| GET    | `/api/trust/:address`   | Trust score            |
+| GET    | `/api/bond/:address`    | Bond status (stub)     |
+
+Full request/response documentation, cURL examples, and import instructions:
+**[docs/api.md](docs/api.md)**
+
+### OpenAPI spec
+
+```
+docs/openapi.yaml
+```
+
+Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
+
+### Postman / Insomnia collection
+
+```
+docs/credence.postman_collection.json
+```
+
+Import via **File → Import** in Postman or Insomnia. See [docs/api.md](docs/api.md#importing-the-postman-collection) for step-by-step instructions and Newman CLI usage.
 
 ### Health endpoint (detailed)
 
