@@ -100,14 +100,38 @@ Response shape (readiness):
 
 ### Testing
 
-Health endpoints are covered by unit and route tests. Run:
+Unit tests cover services, routes, and listeners. Integration tests cover full API endpoints against a real database.
+
+Run unit tests:
 
 ```bash
 npm test
 npm run test:coverage
 ```
 
-Scenarios covered: all dependencies up, DB down (503), Redis down (503), both down (503), only external down (200 degraded), liveness always 200, and no dependencies configured (200 ok).
+Run integration tests (requires PostgreSQL):
+
+```bash
+# Set up a test database
+export DATABASE_URL="postgresql://user:password@localhost:5432/credence_test"
+
+# Run all tests including integration
+npm test
+npm run test:coverage
+```
+
+Integration test scenarios:
+- Full request/response cycles for `/api/trust/:address` and `/api/bond/:address`
+- Address validation (400 for invalid format)
+- 404 responses for unknown addresses
+- Trust score calculation accuracy
+- Authentication and rate limiting (when implemented)
+
+Unit test scenarios covered:
+- Health endpoints: all dependencies up, DB down (503), Redis down (503), both down (503), only external down (200 degraded), liveness always 200, and no dependencies configured (200 ok).
+- Trust service: score calculation for various bond amounts, durations, and attestation counts
+- Bond service: status retrieval and address normalization
+- Identity state sync: drift detection, reconciliation, and full resync
 
 ### Identity state sync
 
