@@ -171,14 +171,32 @@ export function createGovernanceRouter(
     if (req.query.disputeId) q.disputeId = req.query.disputeId as string;
     if (req.query.identity) q.identity = req.query.identity as string;
     if (req.query.eventTypes) {
-      q.eventTypes = (req.query.eventTypes as string).split(
-        ',',
-      ) as ArbitrationEventType[];
+      const rawEventTypes = (req.query.eventTypes as string).split(',');
+      const sanitizedEventTypes = rawEventTypes
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0) as ArbitrationEventType[];
+      if (sanitizedEventTypes.length > 0) {
+        q.eventTypes = sanitizedEventTypes;
+      }
     }
     if (req.query.from) q.from = req.query.from as string;
     if (req.query.to) q.to = req.query.to as string;
-    if (req.query.limit) q.limit = Number(req.query.limit);
-    if (req.query.offset) q.offset = Number(req.query.offset);
+    if (req.query.limit !== undefined) {
+      const limit = Number.parseInt(req.query.limit as string, 10);
+      if (Number.isNaN(limit) || limit < 0) {
+        res.status(400).json({ error: 'Invalid "limit" query parameter' });
+        return;
+      }
+      q.limit = limit;
+    }
+    if (req.query.offset !== undefined) {
+      const offset = Number.parseInt(req.query.offset as string, 10);
+      if (Number.isNaN(offset) || offset < 0) {
+        res.status(400).json({ error: 'Invalid "offset" query parameter' });
+        return;
+      }
+      q.offset = offset;
+    }
 
     const entries = service.query(q);
     res.json(entries);
