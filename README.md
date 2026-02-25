@@ -56,6 +56,8 @@ API runs at [http://localhost:3000](http://localhost:3000). The frontend proxies
 | GET    | `/api/health`           | Health check           |
 | GET    | `/api/trust/:address`   | Trust score            |
 | GET    | `/api/bond/:address`    | Bond status (stub)     |
+| POST   | `/api/bulk/verify`      | Bulk verification (JWT)|
+| POST   | `/api/governance/disputes` | Submit dispute (JWT) |
 
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
@@ -66,10 +68,17 @@ Authentication details (JWT, refresh flow, middleware):
 ### OpenAPI spec
 
 ```
-docs/openapi.yaml
+/api-docs/openapi.json
 ```
 
-Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
+Swagger UI is served at `GET /api-docs`.
+Runtime spec source lives in `src/openapi/spec.ts`. See [docs/openapi.md](docs/openapi.md).
+
+Static compatibility pointer file remains at:
+
+```
+docs/openapi.yaml
+```
 
 ### Postman / Insomnia collection
 
@@ -134,5 +143,17 @@ Tests cover: no drift (no update), single drift (one address corrected), full re
 - Node.js
 - TypeScript
 - Express
+
+## Graceful shutdown
+
+Server shutdown is graceful and signal-aware (`SIGTERM`, `SIGINT`) with in-flight drain and resource cleanup.
+
+Required env:
+
+```bash
+SHUTDOWN_TIMEOUT_MS=10000
+```
+
+See [docs/shutdown.md](docs/shutdown.md) for behavior details.
 
 Extend with PostgreSQL, Redis, and Horizon event ingestion when implementing the full architecture.
