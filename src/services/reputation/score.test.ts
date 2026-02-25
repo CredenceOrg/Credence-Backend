@@ -8,7 +8,7 @@ import {
   calculateReputationScore,
   calculateReputationScoreWithCustomDuration,
 } from './score.js'
-import type { ReputationInput, BondData, Attestation } from './types.js'
+import type { ReputationInput } from './types.js'
 
 describe('score', () => {
   const ONE_DAY = 24 * 60 * 60 * 1000
