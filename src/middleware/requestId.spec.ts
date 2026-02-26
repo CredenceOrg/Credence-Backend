@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { vi } from 'vitest'
 import { requestIdMiddleware } from './requestId.js'
 
 describe('RequestId Middleware', () => {

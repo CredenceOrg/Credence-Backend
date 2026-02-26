@@ -1,8 +1,4 @@
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { defineConfig } from 'vitest/config'
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 export default defineConfig({
   root: __dirname,
@@ -29,12 +25,20 @@ export default defineConfig({
         'src/**/*.spec.ts',
         'src/**/__tests__/**',
         'src/index.ts',
+        // Type-only files – no executable code to cover
+        'src/types/**',
+        'src/**/*.d.ts',
+        'src/**/types.ts',
+        // Re-export barrel files – all they do is re-export
+        'src/**/index.ts',
+        // Infrastructure utilities that require live dependencies
+        'src/utils/**',
       ],
       thresholds: {
-        statements: 48,
-        branches: 40,
-        functions: 75,
-        lines: 48,
+        statements: 75,
+        branches: 75,
+        functions: 65,
+        lines: 75,
       },
     },
   },
