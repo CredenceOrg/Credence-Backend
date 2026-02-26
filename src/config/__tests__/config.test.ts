@@ -135,7 +135,6 @@ describe('validateConfig – missing required variables', () => {
     expect(config.redis.url).toBe('redis://localhost:6379')
     expect(config.jwt.secret).toBe('test-jwt-secret-key-for-testing-only-min-32-chars-long')
   })
-  })
 })
 
 // ─── Invalid values ──────────────────────────────────────────────────────────
