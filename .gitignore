@@ -1,7 +1,10 @@
 node_modules
 dist
+*.db
+coverage
 *.local
 .DS_Store
 .env
 .env.*
 !.env.example
+coverage

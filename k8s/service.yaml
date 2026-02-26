@@ -1,0 +1,22 @@
+# Service exposes the Credence Backend pods inside the cluster.
+# Default type is ClusterIP (internal only). Change to LoadBalancer
+# or add an Ingress resource for external access.
+apiVersion: v1
+kind: Service
+metadata:
+  name: credence-backend
+  namespace: credence
+  labels:
+    app.kubernetes.io/name: credence-backend
+    app.kubernetes.io/component: api
+spec:
+  # ClusterIP for internal access; switch to LoadBalancer for direct
+  # external exposure, or use an Ingress controller instead.
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: credence-backend
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: http

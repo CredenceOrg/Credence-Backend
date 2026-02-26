@@ -1,0 +1,282 @@
+{
+  "info": {
+    "name": "Credence API",
+    "_postman_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "description": "Public query API for the Credence economic trust protocol.\n\n## Environment variables\n\n| Variable   | Default                   | Description                         |\n|------------|---------------------------|-------------------------------------|\n| `baseUrl`  | `http://localhost:3000`   | Base URL of the Credence API        |\n| `apiKey`   | _(empty)_                 | Optional API key for premium tier   |\n| `address`  | `0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266` | Ethereum address under test |\n\n## Rate tiers\n\nInclude `X-API-Key: {{apiKey}}` to use the **premium** tier. Omit the header for the **standard** tier.\n\n## Address format\n\nAll `:address` parameters must be Ethereum addresses: `0x` followed by exactly 40 hex characters.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string",
+      "description": "Base URL of the Credence API. Change to your staging or production URL as needed."
+    },
+    {
+      "key": "apiKey",
+      "value": "",
+      "type": "string",
+      "description": "API key for premium rate tier. Leave blank for standard (unauthenticated) access."
+    },
+    {
+      "key": "address",
+      "value": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+      "type": "string",
+      "description": "Default Ethereum address used in requests. Override per-request or update this variable."
+    }
+  ],
+  "item": [
+    {
+      "name": "Health",
+      "description": "Service liveness checks.",
+      "item": [
+        {
+          "name": "Health check",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "health"]
+            },
+            "description": "Returns `{ status: 'ok', service: 'credence-backend' }` when the service is running. No authentication required."
+          },
+          "response": [
+            {
+              "name": "200 OK",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"status\": \"ok\",\n  \"service\": \"credence-backend\"\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/health",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "health"]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Trust Score",
+      "description": "Query trust scores for Ethereum addresses. Scores are computed from bonded amount (≤50 pts), bond duration (≤20 pts), and attestation count (≤30 pts).",
+      "item": [
+        {
+          "name": "Get trust score – found (standard tier)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/trust/{{address}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "trust", "{{address}}"]
+            },
+            "description": "Returns the trust score for the address specified by `{{address}}`. No API key supplied → standard rate tier."
+          },
+          "response": [
+            {
+              "name": "200 – fully bonded identity",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"address\": \"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\",\n  \"score\": 100,\n  \"bondedAmount\": \"1000000000000000000\",\n  \"bondStart\": \"2024-01-15T00:00:00.000Z\",\n  \"attestationCount\": 5,\n  \"agreedFields\": {\n    \"name\": \"Alice\",\n    \"role\": \"validator\"\n  }\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/trust/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "trust", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get trust score – found (premium tier)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/trust/{{address}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "trust", "{{address}}"]
+            },
+            "header": [
+              {
+                "key": "X-API-Key",
+                "value": "{{apiKey}}",
+                "description": "API key for premium rate tier"
+              }
+            ],
+            "description": "Same as the standard-tier request but includes `X-API-Key` to use the premium rate tier. Set the `apiKey` collection variable to your key."
+          },
+          "response": [
+            {
+              "name": "200 – premium tier (same body, higher rate limit)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"address\": \"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\",\n  \"score\": 100,\n  \"bondedAmount\": \"1000000000000000000\",\n  \"bondStart\": \"2024-01-15T00:00:00.000Z\",\n  \"attestationCount\": 5,\n  \"agreedFields\": {\n    \"name\": \"Alice\",\n    \"role\": \"validator\"\n  }\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/trust/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "trust", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"]
+                },
+                "header": [
+                  { "key": "X-API-Key", "value": "test-premium-key" }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get trust score – partial bond",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/trust/0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "trust", "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"]
+            },
+            "description": "Address with a partial bond (0.5 ETH) and fewer attestations; demonstrates a mid-range score."
+          },
+          "response": [
+            {
+              "name": "200 – partial bond (mid-range score)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"address\": \"0x70997970c51812dc3a010c7d01b50e0d17dc79c8\",\n  \"score\": 57,\n  \"bondedAmount\": \"500000000000000000\",\n  \"bondStart\": \"2024-06-01T00:00:00.000Z\",\n  \"attestationCount\": 2\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/trust/0x70997970c51812dc3a010c7d01b50e0d17dc79c8",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "trust", "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get trust score – not found (404)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/trust/0x1234567890123456789012345678901234567890",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "trust", "0x1234567890123456789012345678901234567890"]
+            },
+            "description": "Valid Ethereum address format but no identity record exists in the store. Expect a 404 response."
+          },
+          "response": [
+            {
+              "name": "404 – address not found",
+              "status": "Not Found",
+              "code": 404,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"error\": \"No identity record found for address 0x1234567890123456789012345678901234567890.\"\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/trust/0x1234567890123456789012345678901234567890",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "trust", "0x1234567890123456789012345678901234567890"]
+                }
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get trust score – invalid address (400)",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/trust/not-an-address",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "trust", "not-an-address"]
+            },
+            "description": "Malformed address — does not match the `0x` + 40-hex-char pattern. Expect a 400 response."
+          },
+          "response": [
+            {
+              "name": "400 – invalid address format",
+              "status": "Bad Request",
+              "code": 400,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"error\": \"Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.\"\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/trust/not-an-address",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "trust", "not-an-address"]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Bond Status",
+      "description": "Raw bond status for an address. Currently returns stub data; full Horizon event ingestion is planned.",
+      "item": [
+        {
+          "name": "Get bond status",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/bond/{{address}}",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "bond", "{{address}}"]
+            },
+            "description": "Returns bond status for the given address. Currently a stub — always returns zeroed data regardless of address."
+          },
+          "response": [
+            {
+              "name": "200 – stub response (unbonded)",
+              "status": "OK",
+              "code": 200,
+              "header": [
+                { "key": "Content-Type", "value": "application/json" }
+              ],
+              "body": "{\n  \"address\": \"0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266\",\n  \"bondedAmount\": \"0\",\n  \"bondStart\": null,\n  \"bondDuration\": null,\n  \"active\": false\n}",
+              "_postman_previewlanguage": "json",
+              "originalRequest": {
+                "method": "GET",
+                "url": {
+                  "raw": "{{baseUrl}}/api/bond/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+                  "host": ["{{baseUrl}}"],
+                  "path": ["api", "bond", "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
