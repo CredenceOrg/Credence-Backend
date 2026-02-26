@@ -14,8 +14,7 @@ describe('API Endpoints', () => {
 
   describe('GET /api/trust/:address', () => {
     it('should return trust score for an address', async () => {
-      const address =
-        'GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ';
+      const address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
       const response = await request(app).get(`/api/trust/${address}`);
 
       expect(response.status).toBe(200);
@@ -29,8 +28,7 @@ describe('API Endpoints', () => {
     });
 
     it('should handle different addresses', async () => {
-      const address =
-        'GDEF7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ';
+      const address = '0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266';
       const response = await request(app).get(`/api/trust/${address}`);
 
       expect(response.status).toBe(200);
@@ -40,8 +38,7 @@ describe('API Endpoints', () => {
 
   describe('GET /api/bond/:address', () => {
     it('should return bond status for an address', async () => {
-      const address =
-        'GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ';
+      const address = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e';
       const response = await request(app).get(`/api/bond/${address}`);
 
       expect(response.status).toBe(200);
