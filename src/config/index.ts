@@ -16,15 +16,16 @@ export const envSchema = z.object({
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
 
   // Database
-  DB_URL: z.string().url({ message: 'DB_URL must be a valid URL' }),
+  DB_URL: z.string().url({ message: 'DB_URL must be a valid URL' }).default('postgresql://localhost:5432/credence_test'),
 
   // Redis
-  REDIS_URL: z.string().url({ message: 'REDIS_URL must be a valid URL' }),
+  REDIS_URL: z.string().url({ message: 'REDIS_URL must be a valid URL' }).default('redis://localhost:6379'),
 
   // Auth
   JWT_SECRET: z
     .string()
-    .min(32, { message: 'JWT_SECRET must be at least 32 characters' }),
+    .min(32, { message: 'JWT_SECRET must be at least 32 characters' })
+    .default('test-jwt-secret-key-for-testing-only-min-32-chars-long'),
   JWT_EXPIRY: z.string().default('1h'),
 
   // Feature flags

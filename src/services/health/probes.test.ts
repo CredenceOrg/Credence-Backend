@@ -113,11 +113,18 @@ describe('createDbProbe', () => {
 })
 
 describe('createRedisProbe', () => {
+  const originalRedisUrl = process.env.REDIS_URL;
+  
   afterEach(() => {
-    delete process.env.REDIS_URL
+    if (originalRedisUrl) {
+      process.env.REDIS_URL = originalRedisUrl;
+    } else {
+      delete process.env.REDIS_URL;
+    }
   })
 
   it('returns undefined when REDIS_URL is unset and no options', () => {
+    delete process.env.REDIS_URL;
     expect(createRedisProbe()).toBeUndefined()
   })
 

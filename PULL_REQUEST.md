@@ -236,7 +236,13 @@ Potential improvements for future PRs:
   - Added missing dependencies: zod, dotenv
   - Moved better-sqlite3 to optionalDependencies to prevent build failures
   - Regenerated and committed package-lock.json
-  - Converted jest syntax to vitest in requestId.spec.ts
+  - Converted jest syntax to vitest in all test files
+  - Fixed config process.exit() being called during tests
+  - Fixed syntax errors in test files (horizonBondEvents.test.ts, index.test.ts)
+  - Excluded Node.js test runner file (soroban.test.ts) from vitest
+  - Added all required environment variables to CI (DB_URL, REDIS_URL, JWT_SECRET, etc.)
+  - Added Redis service to GitHub Actions workflow
+  - Removed duplicate test run in CI workflow
 
 ## 🎓 Review Focus Areas
 
