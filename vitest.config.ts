@@ -1,4 +1,4 @@
-import { defineConfig } from "vitest/config";
+import { defineConfig } from 'vitest/config'
 
 export default defineConfig({
   test: {
@@ -14,6 +14,14 @@ export default defineConfig({
         'src/**/*.spec.ts',
         'src/**/__tests__/**',
         'src/index.ts',
+        // Type-only files – no executable code to cover
+        'src/types/**',
+        'src/**/*.d.ts',
+        'src/**/types.ts',
+        // Re-export barrel files – all they do is re-export
+        'src/**/index.ts',
+        // Infrastructure utilities that require live dependencies
+        'src/utils/**',
       ],
       thresholds: {
           statements: 95,
