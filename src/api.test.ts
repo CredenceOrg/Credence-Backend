@@ -28,7 +28,7 @@ describe('API request validation', () => {
     it('returns 200 for valid address', async () => {
       const res = await request(app).get(`/api/trust/${validAddress}`)
       expect(res.status).toBe(200)
-      expect(res.body.address).toBe(validAddress)
+      expect(res.body.address).toBe(validAddress.toLowerCase())
       expect(res.body).toHaveProperty('score')
     })
 

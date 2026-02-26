@@ -83,9 +83,9 @@ The score is an integer `[0, 100]` built from three components:
 
 **Path parameters**
 
-| Param     | Description                            |
-| --------- | -------------------------------------- |
-| `address` | Ethereum address (`0x` + 40 hex chars) |
+| Parameter | Type   | Description                                                   |
+| --------- | ------ | ------------------------------------------------------------- |
+| `address` | string | Ethereum address — `0x`-prefixed, 40 hex chars (EIP-55 or lower-case) |
 
 **Headers (optional)**
 
@@ -147,14 +147,14 @@ The score is an integer `[0, 100]` built from three components:
 
 **Response fields**
 
-| Field              | Type                | Description                                |
-| ------------------ | ------------------- | ------------------------------------------ |
-| `address`          | string              | Normalised lower-case address              |
-| `score`            | integer 0–100       | Computed trust score                       |
-| `bondedAmount`     | string (bigint wei) | Amount bonded                              |
-| `bondStart`        | string \| null      | ISO 8601 bond timestamp                    |
-| `attestationCount` | integer             | Number of attestations                     |
-| `agreedFields`     | object?             | Attested key/value pairs (omitted if none) |
+| Field              | Type                | Description                                                      |
+| ------------------ | ------------------- | ---------------------------------------------------------------- |
+| `address`          | string              | Normalised (lower-case) Ethereum address                         |
+| `score`            | integer 0–100       | Computed trust score                                             |
+| `bondedAmount`     | string (bigint wei) | Amount bonded in wei                                             |
+| `bondStart`        | string \| null      | ISO 8601 timestamp when the bond was first posted                |
+| `attestationCount` | integer             | Number of on-chain attestations                                  |
+| `agreedFields`     | object?             | Key/value pairs the identity has explicitly attested to (omitted if none) |
 
 **cURL examples**
 

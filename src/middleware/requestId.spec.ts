@@ -1,10 +1,10 @@
-import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest'
+import { vi } from 'vitest'
 import { requestIdMiddleware } from './requestId.js'
 
 describe('RequestId Middleware', () => {
   let mockReq: any
   let mockRes: any
-  let nextFunction: Mock
+  let nextFunction: ReturnType<typeof vi.fn>
 
   beforeEach(() => {
     mockReq = { header: vi.fn().mockReturnValue(null) }

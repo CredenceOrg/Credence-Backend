@@ -1,4 +1,5 @@
 import express from 'express'
+<<<<<<< HEAD
 import { cache } from './cache/redis.js'
 import { generateApiKey, revokeApiKey, rotateApiKey, listApiKeys } from './services/apiKeys.js'
 import { requireApiKey } from './middleware/apiKey.js'
@@ -10,11 +11,14 @@ import {
   type SlashRequestStatus,
   type VoteChoice,
 } from './services/governance/slashingVotes.js'
+=======
+>>>>>>> upstream/main
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
 import { createBondRouter } from './routes/bond.js'
 import { BondStore, BondService } from './services/bond/index.js'
 import bulkRouter from './routes/bulk.js'
+<<<<<<< HEAD
 import { validate } from './middleware/validate.js'
 import {
   trustPathParamsSchema,
@@ -27,10 +31,16 @@ import { ArbitrationLogService } from './services/governance/arbitrationLogs.js'
 import { createGovernanceRouter } from './routes/governance.js'
 
 const app = express()
+=======
+import { createAdminRouter } from './routes/admin/index.js'
+import app from './app.js'
+
+>>>>>>> upstream/main
 const PORT = process.env.PORT ?? 3000
 
 app.use(express.json())
 
+<<<<<<< HEAD
 // ── Health ────────────────────────────────────────────────────────────────────
 
 const healthProbes = createDefaultProbes()
@@ -270,6 +280,41 @@ app.post('/api/governance/slash-requests/:id/votes', (req, res) => {
 
 // ── Server start ──────────────────────────────────────────────────────────────
 
+=======
+const healthProbes = createDefaultProbes()
+app.use('/api/health', createHealthRouter(healthProbes))
+
+app.get('/api/trust/:address', (req, res) => {
+  const { address } = req.params
+  // Placeholder: in production, fetch from DB / reputation engine
+  res.json({
+    address,
+    score: 0,
+    bondedAmount: '0',
+    bondStart: null,
+    attestationCount: 0,
+  })
+})
+
+app.get('/api/bond/:address', (req, res) => {
+  const { address } = req.params
+  res.json({
+    address,
+    bondedAmount: '0',
+    bondStart: null,
+    bondDuration: null,
+    active: false,
+  })
+})
+
+// Bulk verification endpoint (Enterprise)
+app.use('/api/bulk', bulkRouter)
+
+// Admin API endpoints (requires admin role)
+app.use('/api/admin', createAdminRouter())
+
+// Only start server if not in test environment
+>>>>>>> upstream/main
 if (process.env.NODE_ENV !== 'test') {
   app.listen(PORT, () => {
     console.log(`Credence API listening on http://localhost:${PORT}`)
