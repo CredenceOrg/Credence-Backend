@@ -1,13 +1,6 @@
 import express from "express";
-import { createHealthRouter } from "./routes/health.js";
-import { createBondRouter } from "./routes/bond.js";
-import bulkRouter from "./routes/bulk.js";
-import { createDefaultProbes } from "./services/health/probes.js";
 import { BondStore, BondService } from "./services/bond/index.js";
 
-const app = express();
-const PORT = process.env.PORT ?? 3000;
-import express from 'express'
 import { cache } from './cache/redis.js'
 import { generateApiKey, revokeApiKey, rotateApiKey, listApiKeys } from './services/apiKeys.js'
 import { requireApiKey } from './middleware/apiKey.js'
@@ -34,7 +27,7 @@ import {
 
 const config = loadConfig()
 const app = express()
-
+const PORT = process.env.PORT ?? 3000;
 app.use(express.json());
 
 const healthProbes = createDefaultProbes();
@@ -42,6 +35,7 @@ app.use("/api/health", createHealthRouter(healthProbes));
 
 app.get("/api/trust/:address", (req, res) => {
   const { address } = req.params;
+)
   // Placeholder: in production, fetch from DB / reputation engine
 // ── Health ────────────────────────────────────────────────────────────────────
 
