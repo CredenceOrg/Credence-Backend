@@ -38,16 +38,15 @@ describe('validateConfig – valid environments', () => {
   })
 
   it('applies defaults when optional fields are omitted', () => {
-    const minimal = {
-      DB_URL: 'postgresql://localhost:5432/credence',
-      REDIS_URL: 'redis://localhost:6379',
-      JWT_SECRET: 'a]r$8kL!qZ3wX#mN9pT&vB6yD0fH2jU4',
-    }
+    const minimal = {}
     const config = validateConfig(minimal)
 
     expect(config.port).toBe(3000)
     expect(config.nodeEnv).toBe('development')
     expect(config.logLevel).toBe('info')
+    expect(config.db.url).toBe('postgresql://localhost:5432/credence_test')
+    expect(config.redis.url).toBe('redis://localhost:6379')
+    expect(config.jwt.secret).toBe('test-jwt-secret-key-for-testing-only-min-32-chars-long')
     expect(config.jwt.expiry).toBe('1h')
     expect(config.features.trustScoring).toBe(false)
     expect(config.features.bondEvents).toBe(false)
@@ -102,42 +101,39 @@ describe('validateConfig – valid environments', () => {
   })
 })
 
-// ─── Missing required variables ──────────────────────────────────────────────
+// ─── Missing required variables (now have defaults) ──────────────────────────
 
 describe('validateConfig – missing required variables', () => {
-  it('throws ConfigValidationError when DB_URL is missing', () => {
+  it('uses default DB_URL when missing', () => {
     const env = validEnv()
     delete (env as Record<string, string | undefined>).DB_URL
 
-    expect(() => validateConfig(env)).toThrow(ConfigValidationError)
+    const config = validateConfig(env)
+    expect(config.db.url).toBe('postgresql://localhost:5432/credence_test')
   })
 
-  it('throws ConfigValidationError when REDIS_URL is missing', () => {
+  it('uses default REDIS_URL when missing', () => {
     const env = validEnv()
     delete (env as Record<string, string | undefined>).REDIS_URL
 
-    expect(() => validateConfig(env)).toThrow(ConfigValidationError)
+    const config = validateConfig(env)
+    expect(config.redis.url).toBe('redis://localhost:6379')
   })
 
-  it('throws ConfigValidationError when JWT_SECRET is missing', () => {
+  it('uses default JWT_SECRET when missing', () => {
     const env = validEnv()
     delete (env as Record<string, string | undefined>).JWT_SECRET
 
-    expect(() => validateConfig(env)).toThrow(ConfigValidationError)
+    const config = validateConfig(env)
+    expect(config.jwt.secret).toBe('test-jwt-secret-key-for-testing-only-min-32-chars-long')
   })
 
-  it('throws with all missing fields reported at once', () => {
-    try {
-      validateConfig({})
-      expect.fail('Expected ConfigValidationError')
-    } catch (err) {
-      expect(err).toBeInstanceOf(ConfigValidationError)
-      const error = err as ConfigValidationError
-      const paths = error.issues.map((i) => i.path[0])
-      expect(paths).toContain('DB_URL')
-      expect(paths).toContain('REDIS_URL')
-      expect(paths).toContain('JWT_SECRET')
-    }
+  it('validates successfully with all defaults', () => {
+    const config = validateConfig({})
+    expect(config.port).toBe(3000)
+    expect(config.db.url).toBe('postgresql://localhost:5432/credence_test')
+    expect(config.redis.url).toBe('redis://localhost:6379')
+    expect(config.jwt.secret).toBe('test-jwt-secret-key-for-testing-only-min-32-chars-long')
   })
 })
 
@@ -204,7 +200,7 @@ describe('validateConfig – invalid values', () => {
 describe('ConfigValidationError', () => {
   it('has descriptive message with field names', () => {
     try {
-      validateConfig({})
+      validateConfig({ DB_URL: 'invalid-url', REDIS_URL: 'invalid-url' })
       expect.fail('Expected error')
     } catch (err) {
       expect(err).toBeInstanceOf(ConfigValidationError)
@@ -217,7 +213,7 @@ describe('ConfigValidationError', () => {
 
   it('exposes raw Zod issues', () => {
     try {
-      validateConfig({})
+      validateConfig({ PORT: 'invalid', NODE_ENV: 'invalid' })
       expect.fail('Expected error')
     } catch (err) {
       const error = err as ConfigValidationError
