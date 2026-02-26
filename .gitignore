@@ -7,12 +7,8 @@ coverage
 .env
 .env.*
 !.env.example
-<<<<<<< HEAD
-=======
-coverage
 
 # Monitoring data
 monitoring/data/
 prometheus-data/
 grafana-data/
->>>>>>> upstream/main
