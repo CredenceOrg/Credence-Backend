@@ -2,7 +2,7 @@ name: Integration Tests
 
 on:
   push:
-    branches: [main, develop, test/repository-integration-tests]
+    branches: [main, develop, test/repository-integration-tests, feature/prometheus-metrics]
   pull_request:
     branches: [main, develop]
 
@@ -53,12 +53,14 @@ jobs:
       - name: Run tests with coverage
         env:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
-        run: npm run coverage
+        run: npm run test:coverage
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
+        if: always()
         with:
           file: ./coverage/lcov.info
           flags: integration
           name: integration-tests
           fail_ci_if_error: false
+        continue-on-error: true
