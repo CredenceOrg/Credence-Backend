@@ -7,10 +7,10 @@
 
 ## Base URL
 
-| Environment | URL |
-|---|---|
-| Local development | `http://localhost:3000` |
-| Production | _(configured via `BASE_URL` env var)_ |
+| Environment       | URL                                   |
+| ----------------- | ------------------------------------- |
+| Local development | `http://localhost:3000`               |
+| Production        | _(configured via `BASE_URL` env var)_ |
 
 ---
 
@@ -23,10 +23,10 @@ the **premium** rate tier.
 X-API-Key: <your-key>
 ```
 
-| Header present | Tier |
-|---|---|
-| No | standard |
-| Yes (valid key) | premium |
+| Header present    | Tier     |
+| ----------------- | -------- |
+| No                | standard |
+| Yes (valid key)   | premium  |
 | Yes (invalid key) | standard |
 
 ---
@@ -75,31 +75,31 @@ GET /api/trust/:address
 
 The score is an integer `[0, 100]` built from three components:
 
-| Component | Max pts | Maxes when |
-|---|---|---|
-| Bond amount | 50 | ≥ 1 ETH bonded |
-| Bond duration | 20 | bonded ≥ 365 days |
-| Attestations | 30 | ≥ 5 attestations |
+| Component     | Max pts | Maxes when        |
+| ------------- | ------- | ----------------- |
+| Bond amount   | 50      | ≥ 1 ETH bonded    |
+| Bond duration | 20      | bonded ≥ 365 days |
+| Attestations  | 30      | ≥ 5 attestations  |
 
 **Path parameters**
 
-| Param | Description |
-|---|---|
+| Param     | Description                            |
+| --------- | -------------------------------------- |
 | `address` | Ethereum address (`0x` + 40 hex chars) |
 
 **Headers (optional)**
 
-| Header | Description |
-|---|---|
+| Header      | Description                   |
+| ----------- | ----------------------------- |
 | `X-API-Key` | API key for premium rate tier |
 
 **Responses**
 
-| Status | Condition |
-|---|---|
-| `200` | Identity found; returns TrustScore object |
-| `400` | Address format invalid |
-| `404` | No identity record for this address |
+| Status | Condition                                 |
+| ------ | ----------------------------------------- |
+| `200`  | Identity found; returns TrustScore object |
+| `400`  | Address format invalid                    |
+| `404`  | No identity record for this address       |
 
 **`200` example — fully bonded identity**
 
@@ -147,14 +147,14 @@ The score is an integer `[0, 100]` built from three components:
 
 **Response fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `address` | string | Normalised lower-case address |
-| `score` | integer 0–100 | Computed trust score |
-| `bondedAmount` | string (bigint wei) | Amount bonded |
-| `bondStart` | string \| null | ISO 8601 bond timestamp |
-| `attestationCount` | integer | Number of attestations |
-| `agreedFields` | object? | Attested key/value pairs (omitted if none) |
+| Field              | Type                | Description                                |
+| ------------------ | ------------------- | ------------------------------------------ |
+| `address`          | string              | Normalised lower-case address              |
+| `score`            | integer 0–100       | Computed trust score                       |
+| `bondedAmount`     | string (bigint wei) | Amount bonded                              |
+| `bondStart`        | string \| null      | ISO 8601 bond timestamp                    |
+| `attestationCount` | integer             | Number of attestations                     |
+| `agreedFields`     | object?             | Attested key/value pairs (omitted if none) |
 
 **cURL examples**
 
@@ -177,36 +177,97 @@ curl http://localhost:3000/api/trust/not-an-address
 
 ### `GET /api/bond/:address`
 
-Returns raw bond status for an Ethereum address.
-
-> **Note:** This endpoint currently returns stub data. Full Horizon event
-> ingestion is planned for a future milestone.
+Returns bond status for an Ethereum address from the database.
 
 ```
 GET /api/bond/:address
 ```
 
-**`200` example**
+**Path parameters**
+
+| Param     | Description                            |
+| --------- | -------------------------------------- |
+| `address` | Ethereum address (`0x` + 40 hex chars) |
+
+**Headers (optional)**
+
+| Header      | Description                   |
+| ----------- | ----------------------------- |
+| `X-API-Key` | API key for premium rate tier |
+
+**Responses**
+
+| Status | Condition                                    |
+| ------ | -------------------------------------------- |
+| `200`  | Bond record found; returns BondStatus object |
+| `400`  | Address format invalid                       |
+| `404`  | No bond record for this address              |
+
+**`200` example — active bond**
 
 ```json
 {
   "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+  "bondedAmount": "1000000000000000000",
+  "bondStart": "2024-01-15T00:00:00.000Z",
+  "bondDuration": 31536000,
+  "active": true,
+  "slashedAmount": "0"
+}
+```
+
+**`200` example — inactive / no bond**
+
+```json
+{
+  "address": "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc",
   "bondedAmount": "0",
   "bondStart": null,
   "bondDuration": null,
-  "active": false
+  "active": false,
+  "slashedAmount": "0"
+}
+```
+
+**`400` example**
+
+```json
+{
+  "error": "Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters."
+}
+```
+
+**`404` example**
+
+```json
+{
+  "error": "No bond record found for address 0x1234567890123456789012345678901234567890."
 }
 ```
 
 **Response fields**
 
-| Field | Type | Description |
-|---|---|---|
-| `address` | string | The queried address |
-| `bondedAmount` | string (bigint wei) | Currently bonded amount |
-| `bondStart` | string \| null | ISO 8601 bond start timestamp |
-| `bondDuration` | integer \| null | Bond duration in seconds |
-| `active` | boolean | Whether the bond is currently active |
+| Field           | Type                | Description                          |
+| --------------- | ------------------- | ------------------------------------ |
+| `address`       | string              | Normalised lower-case address        |
+| `bondedAmount`  | string (bigint wei) | Currently bonded amount              |
+| `bondStart`     | string \| null      | ISO 8601 bond start timestamp        |
+| `bondDuration`  | integer \| null     | Bond duration in seconds             |
+| `active`        | boolean             | Whether the bond is currently active |
+| `slashedAmount` | string (bigint wei) | Total amount slashed from this bond  |
+
+**cURL examples**
+
+```bash
+# Active bond
+curl http://localhost:3000/api/bond/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266
+
+# Not found (valid address, no record)
+curl http://localhost:3000/api/bond/0x1234567890123456789012345678901234567890
+
+# Invalid address format
+curl http://localhost:3000/api/bond/not-an-address
+```
 
 ---
 
@@ -234,11 +295,11 @@ All errors follow this shape:
 The collection ships with three built-in variables. Edit them via the
 collection's **Variables** tab (click the collection name → Variables):
 
-| Variable | Default | Change to |
-|---|---|---|
-| `baseUrl` | `http://localhost:3000` | Your staging/production URL |
-| `apiKey` | _(empty)_ | Your API key (leave blank for standard tier) |
-| `address` | `0xf39fd...2266` | Any valid address you want to query |
+| Variable  | Default                 | Change to                                    |
+| --------- | ----------------------- | -------------------------------------------- |
+| `baseUrl` | `http://localhost:3000` | Your staging/production URL                  |
+| `apiKey`  | _(empty)_               | Your API key (leave blank for standard tier) |
+| `address` | `0xf39fd...2266`        | Any valid address you want to query          |
 
 ### Option B – Insomnia
 

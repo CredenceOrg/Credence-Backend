@@ -1,0 +1,15 @@
+-- init-db/001_schema.sql
+-- This file is automatically executed by PostgreSQL on first container start.
+-- Add your schema definitions and seed data here.
+--
+-- Example:
+--
+-- CREATE TABLE IF NOT EXISTS trust_scores (
+--     address   VARCHAR(56) PRIMARY KEY,
+--     score     INTEGER DEFAULT 0,
+--     updated   TIMESTAMPTZ DEFAULT NOW()
+-- );
+--
+-- INSERT INTO trust_scores (address, score)
+-- VALUES ('GABCDEFG...', 42)
+-- ON CONFLICT DO NOTHING;

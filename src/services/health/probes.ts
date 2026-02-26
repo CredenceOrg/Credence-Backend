@@ -1,15 +1,15 @@
-import type { HealthProbe } from './types.js'
+import type { HealthProbe } from "./types.js";
 
 /** Default timeout (ms) for each dependency check to avoid hanging. */
-const CHECK_TIMEOUT_MS = 5000
+const CHECK_TIMEOUT_MS = 5000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), ms)
+      setTimeout(() => reject(new Error("timeout")), ms),
     ),
-  ])
+  ]);
 }
 
 /**
@@ -17,35 +17,37 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  */
 export interface DbProbeOptions {
   /** When set (e.g. in tests), used instead of real DB; throw to simulate down. */
-  runQuery?: () => Promise<unknown>
+  runQuery?: () => Promise<unknown>;
 }
 
 /**
  * Creates a DB health probe when DATABASE_URL is set.
  * Uses pg Pool; runs a simple query. Does not expose errors.
  */
-export function createDbProbe(options: DbProbeOptions = {}): HealthProbe | undefined {
-  const url = process.env.DATABASE_URL
-  if (!url && !options.runQuery) return undefined
+export function createDbProbe(
+  options: DbProbeOptions = {},
+): HealthProbe | undefined {
+  const url = process.env.DATABASE_URL;
+  if (!url && !options.runQuery) return undefined;
 
-  let pool: import('pg').Pool | null = null
+  let pool: import("pg").Pool | null = null;
 
   return async () => {
     try {
       if (options.runQuery) {
-        await withTimeout(options.runQuery(), CHECK_TIMEOUT_MS)
-        return { status: 'up' }
+        await withTimeout(options.runQuery(), CHECK_TIMEOUT_MS);
+        return { status: "up" };
       }
       if (!pool) {
-        const pg = (await import('pg')).default
-        pool = new pg.Pool({ connectionString: url })
+        const pg = (await import("pg")).default;
+        pool = new pg.Pool({ connectionString: url });
       }
-      await withTimeout(pool.query('SELECT 1'), CHECK_TIMEOUT_MS)
-      return { status: 'up' }
+      await withTimeout(pool.query("SELECT 1"), CHECK_TIMEOUT_MS);
+      return { status: "up" };
     } catch {
-      return { status: 'down' }
+      return { status: "down" };
     }
-  }
+  };
 }
 
 /**
@@ -53,35 +55,42 @@ export function createDbProbe(options: DbProbeOptions = {}): HealthProbe | undef
  */
 export interface RedisProbeOptions {
   /** When set (e.g. in tests), used instead of real Redis; throw to simulate down. */
-  ping?: () => Promise<unknown>
+  ping?: () => Promise<unknown>;
 }
 
 /**
  * Creates a Redis health probe when REDIS_URL is set.
  * Uses ioredis PING. Does not expose errors.
  */
-export function createRedisProbe(options: RedisProbeOptions = {}): HealthProbe | undefined {
-  const url = process.env.REDIS_URL
-  if (!url && !options.ping) return undefined
+export function createRedisProbe(
+  options: RedisProbeOptions = {},
+): HealthProbe | undefined {
+  const url = process.env.REDIS_URL;
+  if (!url && !options.ping) return undefined;
 
-  let client: import('ioredis').default | null = null
+  let client: {
+    ping: () => Promise<string>;
+    quit: () => Promise<string>;
+  } | null = null;
 
   return async () => {
     try {
       if (options.ping) {
-        await withTimeout(options.ping(), CHECK_TIMEOUT_MS)
-        return { status: 'up' }
+        await withTimeout(options.ping(), CHECK_TIMEOUT_MS);
+        return { status: "up" };
       }
       if (!client) {
-        const Redis = (await import('ioredis')).default
-        client = new Redis(url!, { maxRetriesPerRequest: 1 })
+        const ioredis = await import("ioredis");
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const Redis = ioredis.default as any;
+        client = new Redis(url!, { maxRetriesPerRequest: 1 });
       }
-      await withTimeout(client.ping(), CHECK_TIMEOUT_MS)
-      return { status: 'up' }
+      await withTimeout(client!.ping(), CHECK_TIMEOUT_MS);
+      return { status: "up" };
     } catch {
-      return { status: 'down' }
+      return { status: "down" };
     }
-  }
+  };
 }
 
 /**
@@ -89,16 +98,16 @@ export function createRedisProbe(options: RedisProbeOptions = {}): HealthProbe |
  * When provided, failure is reported as degraded, not unhealthy.
  */
 export function createExternalProbe(
-  check: () => Promise<boolean>
+  check: () => Promise<boolean>,
 ): HealthProbe {
   return async () => {
     try {
-      const ok = await withTimeout(check(), CHECK_TIMEOUT_MS)
-      return { status: ok ? 'up' : 'down' }
+      const ok = await withTimeout(check(), CHECK_TIMEOUT_MS);
+      return { status: ok ? "up" : "down" };
     } catch {
-      return { status: 'down' }
+      return { status: "down" };
     }
-  }
+  };
 }
 
 /**
@@ -106,12 +115,13 @@ export function createExternalProbe(
  * When pg/ioredis are not installed, skips that probe (reported as not_configured).
  */
 export function createDefaultProbes(): {
-  db?: HealthProbe
-  redis?: HealthProbe
-  external?: HealthProbe
+  db?: HealthProbe;
+  redis?: HealthProbe;
+  external?: HealthProbe;
 } {
-  const out: { db?: HealthProbe; redis?: HealthProbe; external?: HealthProbe } = {}
-  if (process.env.DATABASE_URL) out.db = createDbProbe()
-  if (process.env.REDIS_URL) out.redis = createRedisProbe()
-  return out
+  const out: { db?: HealthProbe; redis?: HealthProbe; external?: HealthProbe } =
+    {};
+  if (process.env.DATABASE_URL) out.db = createDbProbe();
+  if (process.env.REDIS_URL) out.redis = createRedisProbe();
+  return out;
 }

@@ -1,0 +1,83 @@
+###############################################################################
+# Credence Backend – Docker Compose for local development
+#
+# Services:
+#   backend  – Express/TypeScript API (built from ./Dockerfile)
+#   postgres – PostgreSQL 16 database
+#   redis    – Redis 7 in-memory store
+#
+# Usage:
+#   cp .env.example .env        # create local env file
+#   docker compose up --build   # start all services
+#   docker compose down -v      # stop and remove volumes
+###############################################################################
+
+services:
+  # ---- Backend API --------------------------------------------------------
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: credence-backend
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      # Override individual vars here if needed; .env takes precedence
+      NODE_ENV: development
+      PORT: 3000
+      DATABASE_URL: postgres://${POSTGRES_USER:-credence}:${POSTGRES_PASSWORD:-credence}@postgres:5432/${POSTGRES_DB:-credence}
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # Healthcheck hits the /api/health endpoint
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # ---- PostgreSQL ---------------------------------------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: credence-postgres
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-credence}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-credence}
+      POSTGRES_DB: ${POSTGRES_DB:-credence}
+    volumes:
+      # Persist data across restarts
+      - pgdata:/var/lib/postgresql/data
+      # Drop .sql files in ./init-db/ to auto-run on first start
+      - ./init-db:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-credence}"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ---- Redis --------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: credence-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  redisdata:
