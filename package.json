@@ -13,7 +13,8 @@
     "lint": "eslint src",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "coverage": "vitest run --coverage"
   },
   "dependencies": {
     "dotenv": "^17.3.1",
