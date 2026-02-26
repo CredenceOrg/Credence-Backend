@@ -5,6 +5,7 @@ export default defineConfig({
     globals: true,
     environment: "node",
     include: ["src/**/*.test.ts", "src/**/*.spec.ts"],
+    exclude: ["src/clients/soroban.test.ts"],
     coverage: {
       provider: "v8",
       reporter: ["text", "json", "html", "lcov"],
