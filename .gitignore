@@ -8,3 +8,8 @@ coverage
 .env.*
 !.env.example
 coverage
+
+# Monitoring data
+monitoring/data/
+prometheus-data/
+grafana-data/

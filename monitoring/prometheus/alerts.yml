@@ -1,0 +1,87 @@
+groups:
+  - name: credence_backend_alerts
+    interval: 30s
+    rules:
+      # High error rate
+      - alert: HighErrorRate
+        expr: |
+          rate(http_requests_total{job="credence-backend", status=~"5.."}[5m]) 
+          / rate(http_requests_total{job="credence-backend"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+          service: credence-backend
+        annotations:
+          summary: "High HTTP error rate detected"
+          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+
+      # High latency
+      - alert: HighLatency
+        expr: |
+          histogram_quantile(0.95, 
+            rate(http_request_duration_seconds_bucket{job="credence-backend"}[5m])
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "High request latency detected"
+          description: "P95 latency is {{ $value }}s (threshold: 2s)"
+
+      # Database down
+      - alert: DatabaseDown
+        expr: health_check_status{job="credence-backend", dependency="db"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: credence-backend
+        annotations:
+          summary: "Database is down"
+          description: "PostgreSQL health check failing"
+
+      # Redis down
+      - alert: RedisDown
+        expr: health_check_status{job="credence-backend", dependency="redis"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          service: credence-backend
+        annotations:
+          summary: "Redis is down"
+          description: "Redis health check failing"
+
+      # Slow health checks
+      - alert: SlowHealthCheck
+        expr: health_check_duration_seconds{job="credence-backend"} > 3
+        for: 5m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "Health check is slow"
+          description: "{{ $labels.dependency }} health check taking {{ $value }}s"
+
+      # Low verification rate (business metric)
+      - alert: LowVerificationRate
+        expr: rate(identity_verifications_total{job="credence-backend"}[10m]) < 0.1
+        for: 30m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "Low identity verification rate"
+          description: "Verification rate dropped to {{ $value }} req/s"
+
+      # High bulk verification failure rate
+      - alert: HighBulkVerificationFailureRate
+        expr: |
+          rate(bulk_verifications_total{job="credence-backend", status="error"}[5m])
+          / rate(bulk_verifications_total{job="credence-backend"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: credence-backend
+        annotations:
+          summary: "High bulk verification failure rate"
+          description: "Bulk verification failure rate is {{ $value | humanizePercentage }}"
