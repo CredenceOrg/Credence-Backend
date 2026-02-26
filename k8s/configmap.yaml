@@ -1,0 +1,22 @@
+# ConfigMap for non-secret configuration values.
+# Edit values below to match your environment before deploying.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: credence-backend-config
+  namespace: credence
+  labels:
+    app.kubernetes.io/name: credence-backend
+    app.kubernetes.io/component: config
+data:
+  # Port the Express server listens on inside the container.
+  PORT: "3000"
+  # Node environment (production, staging, development).
+  NODE_ENV: "production"
+  # PostgreSQL connection string (non-secret portion; password in Secret).
+  # Override with your actual host/port/dbname.
+  DATABASE_URL: "postgresql://credence:CHANGEME@postgres:5432/credence"
+  # Redis connection string.
+  REDIS_URL: "redis://redis:6379"
+  # Log level for the application.
+  LOG_LEVEL: "info"
