@@ -3,6 +3,7 @@ import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
 import trustRouter from './routes/trust.js'
 import bulkRouter from './routes/bulk.js'
+import identityRouter from './routes/identities.js' // Added import for Issue #128
 import { createAdminRouter } from './routes/admin/index.js'
 import { validate } from './middleware/validate.js'
 import {
@@ -22,6 +23,9 @@ app.use('/api/health', createHealthRouter(healthProbes))
 
 // Trust score
 app.use('/api/trust', trustRouter)
+
+// Identities & Profiles – Handles Optimistic Locking (Issue #128)
+app.use('/api/identities', identityRouter) 
 
 // Bond status (stub – to be wired to Horizon in a future milestone)
 app.get(

@@ -1,3 +1,15 @@
+import { IdentitiesRepository, Identity } from '../repositories/identities.repository.js';
+
+/**
+ * Custom error for version conflicts in optimistic locking
+ */
+export class ConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConflictError';
+  }
+}
+
 /**
  * Identity verification result for a single address
  */
@@ -12,110 +24,89 @@ export interface IdentityVerification {
   }
   attestationCount: number
   lastUpdated: string
+  version?: number 
 }
 
-/**
- * Error details for failed verification
- */
 export interface VerificationError {
   address: string
   error: string
   message: string
 }
 
-/**
- * Service for identity verification operations
- */
 export class IdentityService {
+  private repo: IdentitiesRepository;
+
+  constructor(repo: IdentitiesRepository) {
+    this.repo = repo;
+  }
+
   /**
-   * Verify a single address and return trust score and bond status
-   * 
-   * @param address - Stellar address to verify
-   * @returns Identity verification result
-   * @throws Error if address format is invalid
+   * Fetches all identities (Used for the GET /api/identities debugging route)
    */
-  async verifyIdentity(address: string): Promise<IdentityVerification> {
-    // Validate address format (basic Stellar address validation)
-    if (!this.isValidStellarAddress(address)) {
-      throw new Error('Invalid Stellar address format')
+  async getAllIdentities(): Promise<Identity[]> {
+    return this.repo.findAll();
+  }
+
+  /**
+   * Updates an identity address with optimistic locking.
+   */
+  async updateIdentityAddress(id: number, expectedVersion: number, newAddress: string): Promise<Identity> {
+    if (!this.isValidStellarAddress(newAddress)) {
+      throw new Error('Invalid Stellar address format');
     }
 
-    // Simulate async operation (in production: query DB, Horizon, reputation engine)
-    await this.simulateDelay(10)
+    const updated = this.repo.updateWithLock(id, expectedVersion, newAddress);
 
-    // Mock data - in production, fetch from database/reputation engine
-    const trustScore = Math.floor(Math.random() * 100)
-    const hasBond = Math.random() > 0.5
-    const bondedAmount = hasBond ? (Math.random() * 10000).toFixed(2) : '0'
+    if (!updated) {
+      // This is where the magic happens: if the DB version != expectedVersion, we throw
+      throw new ConflictError(
+        `Update failed: The profile (ID: ${id}) was modified by another session. Please refresh and try again.`
+      );
+    }
 
+    return updated;
+  }
+
+  /**
+   * Verify a single address
+   */
+  async verifyIdentity(address: string): Promise<IdentityVerification> {
+    if (!this.isValidStellarAddress(address)) {
+      throw new Error('Invalid Stellar address format');
+    }
+
+    const identity = this.repo.findByAddress(address);
+    await this.simulateDelay(10);
+
+    const hasBond = Math.random() > 0.5;
     return {
       address,
-      trustScore,
+      trustScore: Math.floor(Math.random() * 100),
       bondStatus: {
-        bondedAmount,
+        bondedAmount: hasBond ? (Math.random() * 10000).toFixed(2) : '0',
         bondStart: hasBond ? new Date(Date.now() - 86400000 * 30).toISOString() : null,
         bondDuration: hasBond ? 365 : null,
         active: hasBond,
       },
       attestationCount: Math.floor(Math.random() * 50),
       lastUpdated: new Date().toISOString(),
-    }
+      version: identity?.version 
+    };
   }
 
-  /**
-   * Verify multiple addresses in bulk
-   * Returns partial results on partial failure
-   * 
-   * @param addresses - Array of Stellar addresses to verify
-   * @returns Object containing successful results and errors
-   */
-  async verifyBulk(
-    addresses: string[]
-  ): Promise<{
-    results: IdentityVerification[]
-    errors: VerificationError[]
-  }> {
-    const results: IdentityVerification[] = []
-    const errors: VerificationError[] = []
-
-    // Process each address, capturing both successes and failures
-    await Promise.all(
-      addresses.map(async (address) => {
-        try {
-          const result = await this.verifyIdentity(address)
-          results.push(result)
-        } catch (error) {
-          errors.push({
-            address,
-            error: 'VerificationFailed',
-            message: error instanceof Error ? error.message : 'Unknown error',
-          })
-        }
-      })
-    )
-
-    return { results, errors }
-  }
-
-  /**
-   * Validate Stellar address format
-   * Basic validation - in production, use stellar-sdk
-   * 
-   * @param address - Address to validate
-   * @returns True if valid format
-   */
   private isValidStellarAddress(address: string): boolean {
-    // Stellar addresses are 56 characters, start with G, and are base32
-    const stellarAddressRegex = /^G[A-Z2-7]{55}$/
-    return stellarAddressRegex.test(address)
+    // Basic Stellar G-address validation (starts with G, 56 chars)
+    return /^G[A-Z2-7]{55}$/.test(address);
   }
 
-  /**
-   * Simulate async delay for testing
-   * 
-   * @param ms - Milliseconds to delay
-   */
-  private simulateDelay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms))
+  private async simulateDelay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
   }
 }
+
+// --- INITIALIZATION ---
+// We create the repository instance first
+const identitiesRepository = new IdentitiesRepository();
+
+// Then we export the service instance for the routes to use
+export const identityService = new IdentityService(identitiesRepository);

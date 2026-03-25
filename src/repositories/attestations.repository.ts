@@ -48,7 +48,9 @@ export class AttestationsRepository {
       identity_id: input.identity_id,
       weight,
     })
-    return this.findById(result.lastInsertRowid as number)!
+    const record = this.findById(result.lastInsertRowid as number)
+    if (!record) throw new Error('Failed to create attestation')
+    return record
   }
 
   /**

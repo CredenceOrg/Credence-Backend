@@ -117,4 +117,5 @@ export class AuditLogService {
 export const auditLogService = new AuditLogService()
 
 // Export types
-export { AuditLogEntry, AuditAction } from './types.js'
+export type { AuditLogEntry } from './types.js'
+export { AuditAction } from './types.js'

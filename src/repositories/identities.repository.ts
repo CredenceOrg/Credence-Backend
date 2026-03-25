@@ -1,9 +1,10 @@
-import type Database from 'better-sqlite3'
+import Database from 'better-sqlite3'
 
 /** Row shape for the identities table. */
 export interface Identity {
   id: number
   address: string
+  version: number 
   created_at: string
 }
 
@@ -12,39 +13,59 @@ export interface CreateIdentityInput {
   address: string
 }
 
-/**
- * Repository for the `identities` table.
- * Provides basic CRUD operations for identity records.
- */
 export class IdentitiesRepository {
   private db: Database.Database
 
   /**
-   * @param db - A better-sqlite3 Database instance with migrations already applied.
+   * @param db - A better-sqlite3 Database instance.
    */
   constructor(db: Database.Database) {
     this.db = db
   }
 
   /**
-   * Create a new identity.
-   *
-   * @param input - The identity data to insert.
-   * @returns The newly created identity record.
+   * Create a new identity with a default version of 1.
    */
   create(input: CreateIdentityInput): Identity {
     const stmt = this.db.prepare(
-      'INSERT INTO identities (address) VALUES (@address)'
+      'INSERT INTO identities (address, version) VALUES (@address, 1)'
     )
     const result = stmt.run({ address: input.address })
-    return this.findById(result.lastInsertRowid as number)!
+    const lastId = result.lastInsertRowid as number
+    
+    const record = this.findById(lastId)
+    if (!record) throw new Error('Failed to retrieve record after creation')
+    return record
+  }
+
+  /**
+   * Update an identity using optimistic locking.
+   * Returns the updated Identity or null if the version mismatched (Conflict).
+   */
+  updateWithLock(id: number, expectedVersion: number, address: string): Identity | null {
+    // The core of Issue #128: Match ID AND Version. Increment version on success.
+    const stmt = this.db.prepare(`
+      UPDATE identities 
+      SET address = @address, version = version + 1 
+      WHERE id = @id AND version = @expectedVersion
+    `)
+
+    const result = stmt.run({ 
+      address, 
+      id, 
+      expectedVersion 
+    })
+
+    // If result.changes is 0, it means someone else updated this ID already
+    if (result.changes === 0) {
+      return null
+    }
+
+    return this.findById(id) || null
   }
 
   /**
    * Find an identity by its ID.
-   *
-   * @param id - The identity ID.
-   * @returns The identity record, or undefined if not found.
    */
   findById(id: number): Identity | undefined {
     const stmt = this.db.prepare('SELECT * FROM identities WHERE id = ?')
@@ -53,9 +74,6 @@ export class IdentitiesRepository {
 
   /**
    * Find an identity by its on-chain address.
-   *
-   * @param address - The on-chain address.
-   * @returns The identity record, or undefined if not found.
    */
   findByAddress(address: string): Identity | undefined {
     const stmt = this.db.prepare('SELECT * FROM identities WHERE address = ?')
@@ -63,9 +81,7 @@ export class IdentitiesRepository {
   }
 
   /**
-   * List all identities.
-   *
-   * @returns An array of all identity records.
+   * List all identities (ordered by ID).
    */
   findAll(): Identity[] {
     const stmt = this.db.prepare('SELECT * FROM identities ORDER BY id ASC')
