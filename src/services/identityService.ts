@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto'; // Added for secure key generation
 import { IdentitiesRepository, Identity } from '../repositories/identities.repository.js';
 
 /**
@@ -41,7 +42,26 @@ export class IdentityService {
   }
 
   /**
-   * Fetches all identities (Used for the GET /api/identities debugging route)
+   * ISSUE #130: Generates a new secure API key and rotates it in the database.
+   */
+  async rotateIdentityApiKey(id: number): Promise<Identity> {
+    // Generate a secure 32-character hex key (16 bytes)
+    const newKey = `cred_${randomBytes(16).toString('hex')}`;
+
+    const success = this.repo.updateApiKey(id, newKey);
+
+    if (!success) {
+      throw new Error(`Rotation failed: Identity with ID ${id} not found.`);
+    }
+
+    const updatedIdentity = this.repo.findById(id);
+    if (!updatedIdentity) throw new Error('Failed to retrieve identity after rotation');
+    
+    return updatedIdentity;
+  }
+
+  /**
+   * Fetches all identities
    */
   async getAllIdentities(): Promise<Identity[]> {
     return this.repo.findAll();
@@ -58,7 +78,6 @@ export class IdentityService {
     const updated = this.repo.updateWithLock(id, expectedVersion, newAddress);
 
     if (!updated) {
-      // This is where the magic happens: if the DB version != expectedVersion, we throw
       throw new ConflictError(
         `Update failed: The profile (ID: ${id}) was modified by another session. Please refresh and try again.`
       );
@@ -95,7 +114,6 @@ export class IdentityService {
   }
 
   private isValidStellarAddress(address: string): boolean {
-    // Basic Stellar G-address validation (starts with G, 56 chars)
     return /^G[A-Z2-7]{55}$/.test(address);
   }
 
@@ -105,8 +123,9 @@ export class IdentityService {
 }
 
 // --- INITIALIZATION ---
-// We create the repository instance first
-const identitiesRepository = new IdentitiesRepository();
+// Ensure we pass the DB instance correctly if needed, 
+// or let the route handler handle the dependency injection.
+import Database from 'better-sqlite3';
+const db = new Database('src/db/identities.db'); 
 
-// Then we export the service instance for the routes to use
-export const identityService = new IdentityService(identitiesRepository);
+export const identityService = new IdentityService(new IdentitiesRepository(db));

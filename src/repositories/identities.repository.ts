@@ -5,6 +5,7 @@ export interface Identity {
   id: number
   address: string
   version: number 
+  api_key: string | null // Added for Issue #130
   created_at: string
 }
 
@@ -43,7 +44,6 @@ export class IdentitiesRepository {
    * Returns the updated Identity or null if the version mismatched (Conflict).
    */
   updateWithLock(id: number, expectedVersion: number, address: string): Identity | null {
-    // The core of Issue #128: Match ID AND Version. Increment version on success.
     const stmt = this.db.prepare(`
       UPDATE identities 
       SET address = @address, version = version + 1 
@@ -56,12 +56,26 @@ export class IdentitiesRepository {
       expectedVersion 
     })
 
-    // If result.changes is 0, it means someone else updated this ID already
     if (result.changes === 0) {
       return null
     }
 
     return this.findById(id) || null
+  }
+
+  /**
+   * ISSUE #130: Update the API Key for a specific identity.
+   * Returns true if the update was successful.
+   */
+  updateApiKey(id: number, newKey: string): boolean {
+    const stmt = this.db.prepare(`
+      UPDATE identities 
+      SET api_key = @newKey, version = version + 1 
+      WHERE id = @id
+    `)
+    
+    const result = stmt.run({ id, newKey })
+    return result.changes > 0
   }
 
   /**
