@@ -4,6 +4,15 @@ import { loadConfig } from './config/index.js'
 import { pool } from './db/pool.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
+import {
+  OrganizationRepository,
+  RetentionPolicyRepository,
+  RetentionRecordRepository,
+} from './db/repositories/index.js'
+import {
+  RetentionCleanupWorker,
+  getRetentionCleanupIntervalMs,
+} from './jobs/retentionCleanupWorker.js'
 
 export { app }
 export default app
@@ -43,6 +52,41 @@ try {
     setInterval(() => {
       void tick()
     }, intervalMs)
+
+    const retentionWorker = new RetentionCleanupWorker(
+      new OrganizationRepository(pool),
+      new RetentionPolicyRepository(pool),
+      new RetentionRecordRepository(pool),
+      {
+        eventBatchSize: Number(process.env.RETENTION_EVENT_BATCH_SIZE ?? '250'),
+        auditBatchSize: Number(process.env.RETENTION_AUDIT_BATCH_SIZE ?? '250'),
+        maxBatchesPerClass: Number(process.env.RETENTION_MAX_BATCHES_PER_CLASS ?? '20'),
+        logger: console.log,
+      }
+    )
+    const retentionIntervalMs = getRetentionCleanupIntervalMs()
+    let retentionRunning = false
+
+    const retentionTick = async (): Promise<void> => {
+      if (retentionRunning) {
+        console.log('Retention cleanup is already running, skipping interval')
+        return
+      }
+      retentionRunning = true
+      try {
+        await retentionWorker.run()
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown retention cleanup error'
+        console.error(`Retention cleanup failed: ${message}`)
+      } finally {
+        retentionRunning = false
+      }
+    }
+
+    void retentionTick()
+    setInterval(() => {
+      void retentionTick()
+    }, retentionIntervalMs)
   }
 } catch (error) {
   console.error("Failed to start Credence API:", error)

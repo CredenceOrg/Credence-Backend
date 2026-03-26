@@ -1,5 +1,8 @@
-import type { ScoreSnapshotJob } from './scoreSnapshot.js'
 import type { DistributedLock } from './distributedLock.js'
+
+export interface SchedulableJob {
+  run(): Promise<unknown>
+}
 
 /**
  * Scheduler options.
@@ -57,7 +60,7 @@ export class JobScheduler {
   private readonly lockTtlMs: number
 
   constructor(
-    private readonly job: ScoreSnapshotJob,
+    private readonly job: SchedulableJob,
     options: {
       intervalMs: number
       runOnStart?: boolean
@@ -210,7 +213,7 @@ export function parseCronToInterval(cronExpression: string): number {
  * @returns JobScheduler instance
  */
 export function createScheduler(
-  job: ScoreSnapshotJob,
+  job: SchedulableJob,
   options: SchedulerOptions = {}
 ): JobScheduler {
   const cronExpression = options.cronExpression ?? '0 * * * *'

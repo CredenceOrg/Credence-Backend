@@ -4,6 +4,9 @@ export * from './identitiesRepository.js'
 export * from './scoreHistoryRepository.js'
 export * from './slashEventsRepository.js'
 export * from './reportRepository.js'
+export * from './organizationRepository.js'
+export * from './retentionPolicyRepository.js'
+export * from './retentionRecordRepository.js'
 
 export interface Identity {
      /** Surrogate UUID primary key. */
