@@ -1,9 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import {
   createDbProbe,
-  createRedisProbe,
+  createCacheProbe,
+  createQueueProbe,
   createDefaultProbes,
-  createExternalProbe,
+  createGatewayProbe,
 } from './probes.js'
 
 // Mock pg so createDbProbe() real path returns up without a real DB
@@ -25,12 +26,15 @@ vi.mock('ioredis', () => ({
 describe('createDefaultProbes', () => {
   let savedDbUrl: string | undefined
   let savedRedisUrl: string | undefined
+  let savedQueueUrl: string | undefined
 
   beforeEach(() => {
     savedDbUrl = process.env.DATABASE_URL
     savedRedisUrl = process.env.REDIS_URL
+    savedQueueUrl = process.env.QUEUE_URL
     delete process.env.DATABASE_URL
     delete process.env.REDIS_URL
+    delete process.env.QUEUE_URL
   })
 
   afterEach(() => {
@@ -38,13 +42,16 @@ describe('createDefaultProbes', () => {
     else delete process.env.DATABASE_URL
     if (savedRedisUrl !== undefined) process.env.REDIS_URL = savedRedisUrl
     else delete process.env.REDIS_URL
+    if (savedQueueUrl !== undefined) process.env.QUEUE_URL = savedQueueUrl
+    else delete process.env.QUEUE_URL
   })
 
-  it('returns no db/redis probes when env vars are unset', () => {
+  it('returns no db/cache/queue probes when env vars are unset', () => {
     const probes = createDefaultProbes()
     expect(probes.db).toBeUndefined()
-    expect(probes.redis).toBeUndefined()
-    expect(probes.external).toBeUndefined()
+    expect(probes.cache).toBeUndefined()
+    expect(probes.queue).toBeUndefined()
+    expect(probes.gateway).toBeUndefined()
   })
 
   it('returns db probe when DATABASE_URL is set', () => {
@@ -54,32 +61,44 @@ describe('createDefaultProbes', () => {
     expect(typeof probes.db).toBe('function')
   })
 
-  it('returns redis probe when REDIS_URL is set', () => {
+  it('returns cache probe when REDIS_URL is set', () => {
     process.env.REDIS_URL = 'redis://localhost'
     const probes = createDefaultProbes()
-    expect(probes.redis).toBeDefined()
-    expect(typeof probes.redis).toBe('function')
+    expect(probes.cache).toBeDefined()
+    expect(typeof probes.cache).toBe('function')
+  })
+
+  it('returns queue probe when QUEUE_URL is set', () => {
+    process.env.QUEUE_URL = 'redis://localhost:6379/1'
+    const probes = createDefaultProbes()
+    expect(probes.queue).toBeDefined()
+    expect(typeof probes.queue).toBe('function')
   })
 })
 
-describe('createExternalProbe', () => {
+describe('createGatewayProbe', () => {
+  it('returns undefined if check not provided', () => {
+    const probe = createGatewayProbe()
+    expect(probe).toBeUndefined()
+  })
+
   it('returns up when check resolves to true', async () => {
-    const probe = createExternalProbe(async () => true)
-    const result = await probe()
+    const probe = createGatewayProbe(async () => true)
+    const result = await probe!()
     expect(result).toEqual({ status: 'up' })
   })
 
   it('returns down when check resolves to false', async () => {
-    const probe = createExternalProbe(async () => false)
-    const result = await probe()
+    const probe = createGatewayProbe(async () => false)
+    const result = await probe!()
     expect(result).toEqual({ status: 'down' })
   })
 
   it('returns down when check throws', async () => {
-    const probe = createExternalProbe(async () => {
+    const probe = createGatewayProbe(async () => {
       throw new Error('network error')
     })
-    const result = await probe()
+    const result = await probe!()
     expect(result).toEqual({ status: 'down' })
   })
 })
@@ -116,7 +135,7 @@ describe('createDbProbe', () => {
   })
 })
 
-describe('createRedisProbe', () => {
+describe('createCacheProbe', () => {
   beforeEach(() => {
     delete process.env.REDIS_URL
   })
@@ -126,18 +145,18 @@ describe('createRedisProbe', () => {
   })
 
   it('returns undefined when REDIS_URL is unset and no options', () => {
-    expect(createRedisProbe()).toBeUndefined()
+    expect(createCacheProbe()).toBeUndefined()
   })
 
   it('returns up when ping option succeeds', async () => {
-    const probe = createRedisProbe({ ping: async () => 'PONG' })
+    const probe = createCacheProbe({ ping: async () => 'PONG' })
     expect(probe).toBeDefined()
     const result = await probe!()
     expect(result).toEqual({ status: 'up' })
   })
 
   it('returns down when ping option throws', async () => {
-    const probe = createRedisProbe({
+    const probe = createCacheProbe({
       ping: async () => {
         throw new Error('ECONNREFUSED')
       },
@@ -169,7 +188,7 @@ describe('createDbProbe with real pg path (mocked)', () => {
   })
 })
 
-describe('createRedisProbe with real redis path (mocked)', () => {
+describe('createCacheProbe with real redis path (mocked)', () => {
   beforeEach(() => {
     process.env.REDIS_URL = 'redis://localhost'
   })
@@ -178,12 +197,12 @@ describe('createRedisProbe with real redis path (mocked)', () => {
   })
 
   it('returns probe when REDIS_URL is set', () => {
-    const probe = createRedisProbe()
+    const probe = createCacheProbe()
     expect(probe).toBeDefined()
   })
 
   it('returns up when using real redis path with mocked ioredis', async () => {
-    const probe = createRedisProbe()
+    const probe = createCacheProbe()
     expect(probe).toBeDefined()
     const result = await probe!()
     expect(result).toEqual({ status: 'up' })

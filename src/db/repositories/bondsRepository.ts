@@ -1,23 +1,29 @@
+import { AppError, ErrorCode } from '../../lib/errors.js'
 import type { Pool } from 'pg'
 import type { Queryable } from './queryable.js'
+import {
+  TransactionManager,
+  LockTimeoutPolicy,
+  LockTimeoutError,
+} from '../transaction.js'
 
 export type BondStatus = 'active' | 'released' | 'slashed'
 
 /**
  * Thrown when a debit would reduce a bond's amount below zero.
- * Callers should surface this as HTTP 422 / error code INSUFFICIENT_FUNDS.
  */
-export class InsufficientFundsError extends Error {
-  readonly code = 'INSUFFICIENT_FUNDS' as const
+export class InsufficientFundsError extends AppError {
   constructor(
     readonly bondId: number,
     readonly available: string,
     readonly requested: string
   ) {
     super(
-      `Insufficient funds on bond ${bondId}: available ${available}, requested ${requested}`
+      `Insufficient funds on bond ${bondId}: available ${available}, requested ${requested}`,
+      ErrorCode.INSUFFICIENT_FUNDS,
+      422,
+      { bondId, available, requested }
     )
-    this.name = 'InsufficientFundsError'
   }
 }
 
@@ -63,15 +69,23 @@ const mapBond = (row: BondRow): Bond => ({
 })
 
 export class BondsRepository {
+  private readonly txManager?: TransactionManager
+
   /**
    * @param db   - A `Queryable` (Pool or PoolClient) for read/write queries.
    * @param pool - The underlying `Pool`; required only for `debit()` which
    *               needs an exclusive client to run a serialisable transaction.
+   * @param lockTimeouts - Optional lock timeout configuration for transactions.
    */
   constructor(
     private readonly db: Queryable,
-    private readonly pool?: Pool
-  ) {}
+    private readonly pool?: Pool,
+    lockTimeouts?: { readonly: number; default: number; critical: number }
+  ) {
+    if (pool) {
+      this.txManager = new TransactionManager(pool, lockTimeouts)
+    }
+  }
 
   async create(input: CreateBondInput): Promise<Bond> {
     const result = await this.db.query<BondRow>(
@@ -137,78 +151,74 @@ export class BondsRepository {
    * Atomically debit `amount` from a bond's balance using a row-level lock.
    *
    * The operation runs inside a `REPEATABLE READ` transaction with
-   * `SELECT … FOR UPDATE` so concurrent debits on the same bond are
-   * serialised at the DB level — no in-memory locking required.
+   * `SELECT … FOR UPDATE` and configurable lock timeout. Concurrent debits
+   * on the same bond are serialised at the DB level.
    *
-   * Latency impact: one extra round-trip for BEGIN/COMMIT (~0.5–2 ms on a
-   * local PG instance; measure with `EXPLAIN ANALYZE` under load).
+   * Uses CRITICAL lock timeout policy (10s default) with automatic retry
+   * on lock timeout to balance throughput and contention fairness.
    *
    * @param id     - Bond primary key.
    * @param amount - Positive numeric string to subtract (same unit as `Bond.amount`).
    * @returns      The updated bond after the debit.
    * @throws {InsufficientFundsError} when `amount > bond.amount`.
+   * @throws {LockTimeoutError}       when lock cannot be acquired within timeout.
    * @throws {Error}                  when the bond does not exist.
    * @throws {Error}                  when `pool` was not supplied to the constructor.
    */
   async debit(id: number, amount: string): Promise<Bond> {
-    if (!this.pool) {
+    if (!this.txManager) {
       throw new Error(
         'BondsRepository.debit() requires a Pool instance passed to the constructor'
       )
     }
 
-    const client = await this.pool.connect()
-    let committed = false
-    try {
-      await client.query('BEGIN')
+    return this.txManager.withTransaction(
+      async (client) => {
+        // Lock the row so concurrent debits queue up rather than racing.
+        const lockResult = await client.query<BondRow>(
+          `
+          SELECT id, identity_address, amount, start_time, duration_days, status, created_at
+          FROM bonds
+          WHERE id = $1
+          FOR UPDATE
+          `,
+          [id]
+        )
 
-      // Lock the row so concurrent debits queue up rather than racing.
-      const lockResult = await client.query<BondRow>(
-        `
-        SELECT id, identity_address, amount, start_time, duration_days, status, created_at
-        FROM bonds
-        WHERE id = $1
-        FOR UPDATE
-        `,
-        [id]
-      )
+        if (!lockResult.rows[0]) {
+          throw new Error(`Bond ${id} not found`)
+        }
 
-      if (!lockResult.rows[0]) {
-        throw new Error(`Bond ${id} not found`)
+        const current = mapBond(lockResult.rows[0])
+
+        // Use NUMERIC arithmetic in JS with BigInt-safe string comparison to
+        // avoid floating-point drift on large wei values.
+        const availableNum = Number(current.amount)
+        const requestedNum = Number(amount)
+
+        if (requestedNum > availableNum) {
+          throw new InsufficientFundsError(id, current.amount, amount)
+        }
+
+        const updateResult = await client.query<BondRow>(
+          `
+          UPDATE bonds
+          SET amount = (amount - $2::NUMERIC)
+          WHERE id = $1
+          RETURNING id, identity_address, amount, start_time, duration_days, status, created_at
+          `,
+          [id, amount]
+        )
+
+        return mapBond(updateResult.rows[0])
+      },
+      {
+        policy: LockTimeoutPolicy.CRITICAL,
+        isolationLevel: 'REPEATABLE READ',
+        retryOnLockTimeout: true,
+        maxRetries: 2,
       }
-
-      const current = mapBond(lockResult.rows[0])
-
-      // Use NUMERIC arithmetic in JS with BigInt-safe string comparison to
-      // avoid floating-point drift on large wei values.
-      const availableNum = Number(current.amount)
-      const requestedNum = Number(amount)
-
-      if (requestedNum > availableNum) {
-        throw new InsufficientFundsError(id, current.amount, amount)
-      }
-
-      const updateResult = await client.query<BondRow>(
-        `
-        UPDATE bonds
-        SET amount = (amount - $2::NUMERIC)
-        WHERE id = $1
-        RETURNING id, identity_address, amount, start_time, duration_days, status, created_at
-        `,
-        [id, amount]
-      )
-
-      await client.query('COMMIT')
-      committed = true
-      return mapBond(updateResult.rows[0])
-    } catch (err) {
-      if (!committed) {
-        await client.query('ROLLBACK').catch(() => undefined)
-      }
-      throw err
-    } finally {
-      client.release()
-    }
+    )
   }
 
   async delete(id: number): Promise<boolean> {

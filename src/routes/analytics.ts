@@ -1,30 +1,22 @@
 import { Router, type Request, type Response } from 'express'
 import type { AnalyticsService } from '../services/analytics/service.js'
+import { ServiceUnavailableError } from '../lib/errors.js'
 
 export function createAnalyticsRouter(analyticsService?: AnalyticsService): Router {
   const router = Router()
 
-  router.get('/summary', async (_req: Request, res: Response) => {
+  router.get('/summary', async (_req: Request, res: Response, next) => {
     if (!analyticsService) {
-      res.status(503).json({
-        error: 'AnalyticsUnavailable',
-        message: 'Analytics service is not configured.',
-      })
-      return
+      return next(new ServiceUnavailableError('Analytics service is not configured.'))
     }
 
     try {
       const data = await analyticsService.getSummary()
       res.status(200).json(data)
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown analytics error'
-      res.status(503).json({
-        error: 'AnalyticsUnavailable',
-        message,
-      })
+      next(new ServiceUnavailableError(error instanceof Error ? error.message : 'Unknown analytics error'))
     }
   })
 
   return router
 }
-

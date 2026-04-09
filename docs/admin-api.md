@@ -257,7 +257,12 @@ Retrieve audit logs of admin actions with pagination and filtering.
 | `offset` | number | 0 | Pagination offset |
 | `action` | string | - | Filter by action: LIST_USERS, ASSIGN_ROLE, REVOKE_API_KEY, etc. |
 | `adminId` | string | - | Filter by admin user ID |
+| `actorId` | string | - | Canonical actor filter (alias of `adminId`) |
 | `targetUserId` | string | - | Filter by target user ID |
+| `resourceId` | string | - | Canonical resource ID filter (alias of `targetUserId`) |
+| `resourceType` | string | - | Filter by resource type (`user`, `dispute`, `slash_request`, `evidence`, etc.) |
+| `from` | ISO date-time | - | Inclusive lower bound on event time |
+| `to` | ISO date-time | - | Inclusive upper bound on event time |
 | `status` | string | - | Filter by status: `success` or `failure` |
 
 #### Example Request
@@ -317,6 +322,22 @@ The system supports three user roles with different permission levels:
 ## Audit Logging
 
 All admin actions are automatically logged for compliance and security purposes.
+
+In addition to admin-specific actions, the audit stream now includes sensitive operations from other flows:
+- `DISPUTE_SUBMITTED`
+- `DISPUTE_MARKED_UNDER_REVIEW`
+- `DISPUTE_RESOLVED`
+- `DISPUTE_DISMISSED`
+- `SLASH_REQUEST_CREATED`
+- `SLASH_VOTE_CAST`
+- `EVIDENCE_UPLOADED`
+- `EVIDENCE_ACCESSED`
+
+Each entry contains immutable `who/what/when/resource` fields:
+- `actorId`, `actorEmail`
+- `action`
+- `timestamp`
+- `resourceType`, `resourceId`
 
 ### Audit Log Entry Structure
 

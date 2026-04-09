@@ -16,6 +16,7 @@
  */
 
 import type { Attestation, CreateAttestationParams } from '../types/attestation.js'
+import type { IdempotencyGuard } from '../lib/idempotencyGuard.js'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public types
@@ -67,6 +68,8 @@ export interface AttestationListenerConfig {
   pollingInterval?: number
   /** Cursor to resume from (default `"now"`). */
   lastCursor?: string
+  /** Optional idempotency guard for preventing duplicate processing. */
+  idempotencyGuard?: IdempotencyGuard
 }
 
 /** Runtime statistics exposed by `getStats()`. */
@@ -113,6 +116,7 @@ export class AttestationEventListener {
   private pollTimer?: ReturnType<typeof setTimeout>
   private lastCursor: string
   private readonly pollingInterval: number
+  private readonly idempotencyGuard?: IdempotencyGuard
 
   // Stats
   private eventsProcessed = 0
@@ -131,11 +135,13 @@ export class AttestationEventListener {
   constructor(
     private readonly store: AttestationStore,
     private readonly fetchEvents: EventFetcher,
+    private readonly replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> },
     config: AttestationListenerConfig = {},
     private readonly onScoreInvalidation?: ScoreInvalidationCallback,
   ) {
     this.pollingInterval = config.pollingInterval ?? 5_000
     this.lastCursor = config.lastCursor ?? 'now'
+    this.idempotencyGuard = config.idempotencyGuard
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────
@@ -173,11 +179,13 @@ export class AttestationEventListener {
 
       for (const event of events) {
         try {
-          const affected = this.processEvent(event)
+          const affected = await this.processEvent(event)
           if (affected) affectedAddresses.add(affected)
           this.lastCursor = event.pagingToken
-        } catch {
+        } catch (error: any) {
           this.errors += 1
+          // Capture failure for replay
+          await this.replayService.captureFailure('attestation', event, error.message)
         }
       }
 
@@ -205,22 +213,50 @@ export class AttestationEventListener {
    * Process a single attestation event.
    * @returns The subject address if the event was processed, or `null` if skipped.
    */
-  processEvent(event: AttestationEvent): string | null {
+  async processEvent(event: AttestationEvent): Promise<string | null> {
     if (event.type === 'add') {
-      return this.handleAddEvent(event)
+      return await this.handleAddEvent(event)
     } else if (event.type === 'revoke') {
-      return this.handleRevokeEvent(event)
+      return await this.handleRevokeEvent(event)
     }
     return null
   }
 
-  private handleAddEvent(event: AttestationEvent): string | null {
-    // Deduplicate: skip if we already ingested this event
+  private async handleAddEvent(event: AttestationEvent): Promise<string | null> {
+    // In-memory deduplication (fast path)
     if (this.eventIdToAttestationId.has(event.id)) {
       this.duplicatesSkipped += 1
       return null
     }
 
+    // Persistent idempotency guard (survives restarts)
+    if (this.idempotencyGuard) {
+      const result = await this.idempotencyGuard.process(
+        'attestation:add',
+        event.id,
+        async () => {
+          const attestation = this.store.create({
+            subject: event.subject,
+            verifier: event.verifier,
+            weight: event.weight,
+            claim: event.claim,
+          })
+          return { attestation, subject: event.subject }
+        }
+      )
+
+      if (!result.executed) {
+        this.duplicatesSkipped += 1
+        return null
+      }
+
+      this.eventIdToAttestationId.set(event.id, result.value!.attestation.id)
+      this.eventsProcessed += 1
+      this.addEvents += 1
+      return result.value!.subject
+    }
+
+    // Fallback: no idempotency guard (legacy behavior)
     const attestation = this.store.create({
       subject: event.subject,
       verifier: event.verifier,
@@ -234,16 +270,50 @@ export class AttestationEventListener {
     return event.subject
   }
 
-  private handleRevokeEvent(event: AttestationEvent): string | null {
-    // Deduplicate
+  private async handleRevokeEvent(event: AttestationEvent): Promise<string | null> {
+    // In-memory deduplication (fast path)
     if (this.eventIdToAttestationId.has(event.id)) {
       this.duplicatesSkipped += 1
       return null
     }
 
-    // Find the attestation to revoke.
-    // Look up by the original add-event's attestation ID if we have it,
-    // otherwise search by subject + verifier.
+    // Persistent idempotency guard (survives restarts)
+    if (this.idempotencyGuard) {
+      const result = await this.idempotencyGuard.process(
+        'attestation:revoke',
+        event.id,
+        async () => {
+          // Find the attestation to revoke
+          const { attestations } = this.store.findBySubject(event.subject, {
+            includeRevoked: false,
+          })
+
+          const target = attestations.find((a) => a.verifier === event.verifier)
+
+          if (target) {
+            try {
+              this.store.revoke(target.id)
+            } catch {
+              // Already revoked — idempotent
+            }
+          }
+
+          return { targetId: target?.id ?? event.id, subject: event.subject }
+        }
+      )
+
+      if (!result.executed) {
+        this.duplicatesSkipped += 1
+        return null
+      }
+
+      this.eventIdToAttestationId.set(event.id, result.value!.targetId)
+      this.eventsProcessed += 1
+      this.revokeEvents += 1
+      return result.value!.subject
+    }
+
+    // Fallback: no idempotency guard (legacy behavior)
     const { attestations } = this.store.findBySubject(event.subject, {
       includeRevoked: false,
     })

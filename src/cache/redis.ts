@@ -1,4 +1,6 @@
 import { createClient, RedisClientType } from 'redis'
+import { executeCacheOperation, createMetricsAdapter } from '../lib/timeoutExecutor.js'
+import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.js'
 
 export type RedisClient = RedisClientType
 
@@ -116,6 +118,7 @@ export class RedisConnection {
  */
 export class CacheService {
   private redis: RedisConnection
+  private metrics = createMetricsAdapter(createDefaultMetricsCollector())
 
   constructor(redis?: RedisConnection) {
     this.redis = redis || RedisConnection.getInstance()
@@ -131,24 +134,28 @@ export class CacheService {
   public async get<T = string>(namespace: string, key: string): Promise<T | null> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
     
-    try {
-      await this.redis.connect()
-      const value = await this.redis.getClient().get(namespacedKey)
-      
-      if (value === null) {
-        return null
-      }
+    return executeCacheOperation(
+      `cache.get.${namespace}.${key}`,
+      async () => {
+        await this.redis.connect()
+        const value = await this.redis.getClient().get(namespacedKey)
+        
+        if (value === null) {
+          return null
+        }
 
-      // Try to parse as JSON, fallback to string if it fails
-      try {
-        return JSON.parse(value) as T
-      } catch {
-        return value as T
-      }
-    } catch (error) {
+        // Try to parse as JSON, fallback to string if it fails
+        try {
+          return JSON.parse(value) as T
+        } catch {
+          return value as T
+        }
+      },
+      { metrics: this.metrics }
+    ).catch(error => {
       console.error(`Cache get failed for key ${namespacedKey}:`, error)
       return null
-    }
+    })
   }
 
   /**

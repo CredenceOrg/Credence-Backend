@@ -7,6 +7,7 @@
 
 import { runner, Migration } from 'node-pg-migrate'
 import { loadMigrationConfig, validateConfig, MigrationConfig } from './config.js'
+import { analyzeMigration, PreflightResult } from './guardrails.js'
 
 export interface MigrationOptions {
   /** Direction of migration: 'up' or 'down' */
@@ -19,6 +20,10 @@ export interface MigrationOptions {
   verbose?: boolean
   /** Custom configuration (uses loadMigrationConfig() if not provided) */
   config?: MigrationConfig
+  /** Skip preflight safety checks (not recommended) */
+  skipPreflight?: boolean
+  /** Allow blocking operations (use with caution) */
+  allowBlocking?: boolean
 }
 
 export interface MigrationResult {
@@ -28,6 +33,8 @@ export interface MigrationResult {
   applied: string[]
   /** Error message if failed */
   error?: string
+  /** Preflight check results */
+  preflight?: PreflightResult
 }
 
 /**
@@ -53,6 +60,51 @@ export async function runMigration(options: MigrationOptions): Promise<Migration
   validateConfig(config)
 
   const applied: string[] = []
+  let preflightResult: PreflightResult | undefined
+
+  // Run preflight checks unless explicitly skipped
+  if (!options.skipPreflight) {
+    if (options.file) {
+      preflightResult = analyzeMigration(options.file)
+    } else {
+      // For directory-based migrations, we'd need to scan which migrations will run
+      // For now, we'll skip directory preflight checks as it requires complex logic
+      if (options.verbose !== false) {
+        console.log('⚠️  Skipping preflight checks for directory-based migrations')
+      }
+    }
+
+    // Check preflight results
+    if (preflightResult && !preflightResult.passed) {
+      const blockingIssues = preflightResult.issues.filter(issue => issue.type === 'blocking')
+      
+      if (blockingIssues.length > 0 && !options.allowBlocking) {
+        return {
+          success: false,
+          applied,
+          error: `Blocking operations detected. Use allowBlocking: true to override. Issues: ${blockingIssues.map(i => i.message).join(', ')}`,
+          preflight: preflightResult
+        }
+      }
+
+      if (preflightResult.issues.length > 0) {
+        return {
+          success: false,
+          applied,
+          error: `Safety issues detected: ${preflightResult.issues.map(i => i.message).join(', ')}`,
+          preflight: preflightResult
+        }
+      }
+    }
+
+    // Log warnings if any
+    if (preflightResult && preflightResult.warnings.length > 0 && options.verbose !== false) {
+      console.log('⚠️  Migration warnings:')
+      preflightResult.warnings.forEach(warning => {
+        console.log(`  • ${warning.message}`)
+      })
+    }
+  }
 
   try {
     const migrations = await runner({
@@ -91,6 +143,7 @@ export async function runMigration(options: MigrationOptions): Promise<Migration
     return {
       success: true,
       applied,
+      preflight: preflightResult
     }
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error)
@@ -98,6 +151,7 @@ export async function runMigration(options: MigrationOptions): Promise<Migration
       success: false,
       applied,
       error: errorMessage,
+      preflight: preflightResult
     }
   }
 }

@@ -8,7 +8,7 @@
  *    endpoints use this so unauthenticated requests still pass through.
  *
  * 2. `requireApiKey` – Enforcing. Validates `Authorization: Bearer <key>` or
- *    `X-API-Key: <key>`, attaches the validated key record to `req.apiKey`,
+ *    `X-API-Key: <key>`, attaches the validated key record to `req.apiKeyRecord`,
  *    and returns 401/403 if the key is missing, revoked, or lacks scope.
  */
 
@@ -22,7 +22,7 @@ export type RateTier = 'standard' | 'premium'
 // Augment Express Request to carry the validated key record (set by requireApiKey)
 declare module 'express-serve-static-core' {
   interface Request {
-    apiKey?: StoredApiKey
+    apiKeyRecord?: StoredApiKey
   }
 }
 
@@ -78,28 +78,27 @@ function extractRawKey(req: Request): string | null {
  * // Require full-access key
  * router.post('/write', requireApiKey('full'), handler)
  */
+import { UnauthorizedError, ForbiddenError } from '../lib/errors.js'
+
 export function requireApiKey(requiredScope?: KeyScope) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const rawKey = extractRawKey(req)
 
     if (!rawKey) {
-      res.status(401).json({ error: 'API key required' })
-      return
+      throw new UnauthorizedError('API key required')
     }
 
     const apiKey = validateApiKey(rawKey)
 
     if (!apiKey) {
-      res.status(401).json({ error: 'Invalid or revoked API key' })
-      return
+      throw new UnauthorizedError('Invalid or revoked API key')
     }
 
     if (requiredScope === 'full' && apiKey.scope !== 'full') {
-      res.status(403).json({ error: 'Insufficient scope: full access required' })
-      return
+      throw new ForbiddenError('Insufficient scope: full access required')
     }
 
-    req.apiKey = apiKey
+    req.apiKeyRecord = apiKey
     next()
   }
 }

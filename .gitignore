@@ -1,5 +1,5 @@
-node_modules
-dist
+node_modules\
+dist\
 *.db
 coverage
 *.local
@@ -12,3 +12,4 @@ coverage
 monitoring/data/
 prometheus-data/
 grafana-data/
+node_modules

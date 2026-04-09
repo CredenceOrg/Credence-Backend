@@ -1,5 +1,6 @@
 import type { Request, Response, NextFunction } from 'express'
 import type { ZodSchema, ZodError } from 'zod'
+import { ValidationError } from '../lib/errors.js'
 
 /**
  * Validated request payload.
@@ -34,13 +35,12 @@ export interface ValidateOptions {
 }
 
 /**
- * Format Zod errors into a consistent 400 response shape.
+ * Format Zod errors into a consistent structure.
  * @param error - ZodError from schema.safeParse()
  * @returns Array of { path, message } for client consumption
  */
 function formatZodErrors(error: ZodError): Array<{ path: string; message: string }> {
-  const issues = (error as { issues?: Array<{ path: (string | number)[]; message: string }> }).issues ?? []
-  return issues.map((e) => ({
+  return error.issues.map((e) => ({
     path: e.path?.length ? e.path.join('.') : '(root)',
     message: e.message,
   }))
@@ -50,18 +50,10 @@ function formatZodErrors(error: ZodError): Array<{ path: string; message: string
  * Request validation middleware using Zod schemas.
  * Validates path params, query params, and/or body per route.
  * On success, assigns validated data to req.validated and calls next().
- * On failure, responds with 400 and a clear list of validation errors.
+ * On failure, calls next(ValidationError).
  *
  * @param options - Optional schemas for params, query, and body. Omit a key to skip that source.
  * @returns Express middleware
- *
- * @example
- * // Validate only path params (e.g. address)
- * app.get('/api/trust/:address', validate({ params: trustPathParamsSchema }), trustHandler)
- *
- * @example
- * // Validate query and body
- * app.post('/api/attestations', validate({ query: attestationsQuerySchema, body: createAttestationBodySchema }), handler)
  */
 export function validate<TParams = unknown, TQuery = unknown, TBody = unknown>(
   options: ValidateOptions,
@@ -100,10 +92,8 @@ export function validate<TParams = unknown, TQuery = unknown, TBody = unknown>(
     }
 
     if (errors.length > 0) {
-      res.status(400).json({
-        error: 'Validation failed',
-        details: errors,
-      })
+      // Throw ValidationError to be caught by global errorHandler
+      next(new ValidationError('Validation failed', errors))
       return
     }
 

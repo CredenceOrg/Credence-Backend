@@ -46,6 +46,11 @@ export interface IdentityDataSource {
   getActiveAddresses(): Promise<string[]>
   /** Get identity data for score computation. */
   getIdentityData(address: string): Promise<IdentityData | null>
+  /**
+   * Get identity data for a batch of addresses in a single query path.
+   * Results may be returned in any order; callers should restore the input order.
+   */
+  getIdentityDataBatch?(addresses: string[]): Promise<IdentityData[]>
 }
 
 /**
@@ -65,6 +70,8 @@ export interface SnapshotJobResult {
   errors: number
   /** Duration in milliseconds. */
   duration: number
+  /** Time spent loading and aggregating identity data in milliseconds. */
+  aggregationDuration: number
   /** Timestamp when job started. */
   startTime: string
 }

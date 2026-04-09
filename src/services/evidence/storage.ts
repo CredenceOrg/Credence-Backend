@@ -42,6 +42,13 @@ export class EvidenceStorageService {
     rawData: string,
     uploaderId: string
   ): Promise<EvidenceRecord> {
+    if (!evidenceId || evidenceId.trim().length === 0 || /\s/.test(evidenceId)) {
+      throw new Error('Invalid evidence id')
+    }
+    if (evidenceDB.has(evidenceId)) {
+      throw new Error('Evidence already exists')
+    }
+
     const iv = crypto.randomBytes(12)
     const cipher = crypto.createCipheriv(this.algorithm, this.key, iv)
 
@@ -75,6 +82,10 @@ export class EvidenceStorageService {
     evidenceId: string,
     role: Role
   ): Promise<string> {
+    if (!evidenceId || evidenceId.trim().length === 0 || /\s/.test(evidenceId)) {
+      throw new Error('Invalid evidence id')
+    }
+
     this.enforceAccessControl(role)
 
     const record = evidenceDB.get(evidenceId)

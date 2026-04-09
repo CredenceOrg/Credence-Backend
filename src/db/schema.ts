@@ -1,4 +1,5 @@
 import type { Queryable } from './repositories/queryable.js'
+import { OUTBOX_TABLE_SCHEMA, OUTBOX_INDEXES } from './outbox/schema.js'
 
 const CREATE_TABLE_STATEMENTS = [
   `
@@ -61,6 +62,21 @@ const CREATE_TABLE_STATEMENTS = [
   )
   `,
   `
+  CREATE TABLE IF NOT EXISTS audit_logs (
+    id TEXT PRIMARY KEY,
+    occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    actor_id TEXT NOT NULL,
+    actor_email TEXT NOT NULL,
+    action TEXT NOT NULL,
+    resource_type TEXT NOT NULL,
+    resource_id TEXT NOT NULL,
+    details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+    status TEXT NOT NULL CHECK (status IN ('success', 'failure')),
+    ip_address TEXT,
+    error_message TEXT
+  )
+  `,
+  `
   CREATE TABLE IF NOT EXISTS report_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     type TEXT NOT NULL,
@@ -68,7 +84,31 @@ const CREATE_TABLE_STATEMENTS = [
     failure_reason TEXT,
     artifact_url TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT notification_send_attempts_key_unique UNIQUE (idempotency_key)
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS settlements (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    bond_id BIGINT NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
+    amount NUMERIC(36, 18) NOT NULL CHECK (amount >= 0),
+    transaction_hash VARCHAR(128) NOT NULL,
+    settled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'settled', 'failed')),
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    CONSTRAINT settlements_bond_tx_unique UNIQUE (bond_id, transaction_hash)
+  )
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS idempotency_keys (
+    key TEXT PRIMARY KEY,
+    request_hash TEXT NOT NULL,
+    response_code INTEGER NOT NULL,
+    response_body JSONB NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
   `,
   `
@@ -149,6 +189,7 @@ const DROP_TABLE_STATEMENTS = [
   'DROP TABLE IF EXISTS retention_policies',
   'DROP TABLE IF EXISTS report_jobs',
   'DROP TABLE IF EXISTS score_history',
+  'DROP TABLE IF EXISTS audit_logs',
   'DROP TABLE IF EXISTS slash_events',
   'DROP TABLE IF EXISTS attestations',
   'DROP TABLE IF EXISTS bonds',

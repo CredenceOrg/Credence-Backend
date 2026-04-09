@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import type { BondService } from '../services/bond/index.js'
+import { deriveBondPaymentStatus } from '../services/bond/index.js'
 
 /**
  * Builds the bond status router.
@@ -43,8 +44,9 @@ export function createBondRouter(bondService: BondService): Router {
       bondedAmount: bond.bondedAmount,
       bondStart: bond.bondStart,
       bondDuration: bond.bondDuration,
-      active: bond.active,
+      active: bond.active, // deprecated: use `status` instead
       slashedAmount: bond.slashedAmount,
+      status: deriveBondPaymentStatus(bond),
     })
   })
 

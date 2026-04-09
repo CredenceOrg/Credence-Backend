@@ -44,6 +44,24 @@ describe('EvidenceStorageService', () => {
     ).rejects.toThrow('Evidence not found')
   })
 
+  it('should reject duplicate evidence IDs to keep records immutable', async () => {
+    const evidenceId = 'dispute-immutable'
+    await service.uploadEvidence(evidenceId, 'first payload', 'user-1')
+
+    await expect(
+      service.uploadEvidence(evidenceId, 'second payload', 'user-1')
+    ).rejects.toThrow('Evidence already exists')
+  })
+
+  it('should reject invalid evidence IDs', async () => {
+    await expect(service.uploadEvidence(' ', 'payload', 'user-1')).rejects.toThrow(
+      'Invalid evidence id'
+    )
+    await expect(service.retrieveEvidence(' ', 'ARBITRATOR')).rejects.toThrow(
+      'Invalid evidence id'
+    )
+  })
+
   it('should fail to initialize if key is missing or invalid length', () => {
     process.env.EVIDENCE_ENCRYPTION_KEY = 'short-key'
     expect(() => new EvidenceStorageService()).toThrow(

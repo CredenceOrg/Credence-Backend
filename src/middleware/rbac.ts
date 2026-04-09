@@ -25,19 +25,19 @@ function logDenial(
      console.warn(JSON.stringify(entry))
 }
 
+import { UnauthorizedError, ForbiddenError } from '../lib/errors.js'
+
 /**
  * Resolves the caller from `req.user`.
- * Returns `null` and writes a 401 response when the caller is unauthenticated.
+ * Throws UnauthorizedError when the caller is unauthenticated.
  */
 function resolveUser(
      req: Request,
-     res: Response,
-): AuthenticatedUser | null {
+): AuthenticatedUser {
      const user = (req as any).user as AuthenticatedUser | undefined
      if (!user) {
           logDenial(req, undefined, 'unauthenticated')
-          res.status(401).json({ error: 'Unauthenticated' })
-          return null
+          throw new UnauthorizedError('Unauthenticated')
      }
      return user
 }
@@ -55,17 +55,11 @@ function resolveUser(
  */
 export function requireRole(...roles: Role[]) {
      return (req: Request, res: Response, next: NextFunction): void => {
-          const user = resolveUser(req, res)
-          if (!user) return
+          const user = resolveUser(req)
 
           if (!roles.includes(user.role)) {
                logDenial(req, user, `role "${user.role}" not in [${roles.join(', ')}]`)
-               res.status(403).json({
-                    error: 'Forbidden',
-                    required: roles,
-                    actual: user.role,
-               })
-               return
+               throw new ForbiddenError(`Forbidden: role "${user.role}" not in [${roles.join(', ')}]`)
           }
 
           next()
@@ -82,17 +76,11 @@ export function requireRole(...roles: Role[]) {
  */
 export function requireMinRole(minRole: Role) {
      return (req: Request, res: Response, next: NextFunction): void => {
-          const user = resolveUser(req, res)
-          if (!user) return
+          const user = resolveUser(req)
 
           if (ROLE_HIERARCHY[user.role] < ROLE_HIERARCHY[minRole]) {
                logDenial(req, user, `role "${user.role}" below minimum "${minRole}"`)
-               res.status(403).json({
-                    error: 'Forbidden',
-                    requiredMinRole: minRole,
-                    actual: user.role,
-               })
-               return
+               throw new ForbiddenError(`Forbidden: role "${user.role}" below minimum "${minRole}"`)
           }
 
           next()
@@ -108,8 +96,7 @@ export function requireMinRole(minRole: Role) {
  */
 export function requireAnyRole() {
      return (req: Request, res: Response, next: NextFunction): void => {
-          const user = resolveUser(req, res)
-          if (!user) return
+          resolveUser(req)
           next()
      }
 }

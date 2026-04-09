@@ -5,7 +5,7 @@ import type {
   BondSnapshot,
   SignedVerificationProof,
   VerificationProof,
-} from '../types/verification'
+} from '../types/verification.js'
 
 /**
  * Service for building and signing verification proof packages

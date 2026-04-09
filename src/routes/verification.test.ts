@@ -1,8 +1,9 @@
-import { verificationService } from '../services/verificationService'
-import type { VerificationProof, BondSnapshot } from '../types/verification'
+import { verificationService } from '../services/verificationService.js'
+import type { VerificationProof, BondSnapshot } from '../types/verification.js'
 import * as crypto from 'crypto'
 import express from 'express'
-import { setupVerificationRoutes } from './verification'
+import request from 'supertest'
+import { setupVerificationRoutes } from './verification.js'
 import type { Application } from 'express'
 
 describe('VerificationService', () => {
@@ -372,6 +373,14 @@ describe('VerificationService', () => {
   })
 
   describe('Routes integration', () => {
+    let app: Application
+
+    beforeEach(() => {
+      app = express()
+      app.use(express.json())
+      setupVerificationRoutes(app)
+    })
+
     it('should have setupVerificationRoutes function', () => {
       expect(typeof setupVerificationRoutes).toBe('function')
     })
@@ -381,6 +390,107 @@ describe('VerificationService', () => {
       expect(() => {
         setupVerificationRoutes(app)
       }).not.toThrow()
+    })
+
+    it('GET /api/verification/:address returns unsigned proof by default', async () => {
+      const response = await request(app).get(`/api/verification/${mockAddress}`)
+
+      expect(response.status).toBe(200)
+      expect(response.body.address).toBe(mockAddress)
+      expect(response.body.signature).toBeUndefined()
+      expect(response.body.hash).toBeDefined()
+    })
+
+    it('GET /api/verification/:address returns 500 when signing key is missing', async () => {
+      delete process.env.VERIFICATION_PRIVATE_KEY
+      const response = await request(app)
+        .get(`/api/verification/${mockAddress}`)
+        .query({ sign: 'true' })
+
+      expect(response.status).toBe(500)
+      expect(response.body.error).toBe('Signing key not configured')
+    })
+
+    it('GET /api/verification/:address signs proof when key is configured', async () => {
+      const { privateKey } = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      })
+      process.env.VERIFICATION_PRIVATE_KEY = privateKey
+
+      const response = await request(app)
+        .get(`/api/verification/${mockAddress}`)
+        .query({ sign: 'true', expiry: '30' })
+
+      expect(response.status).toBe(200)
+      expect(response.body.signature).toBeDefined()
+      expect(response.body.expiresAt).toBeDefined()
+    })
+
+    it('POST /api/verification/verify returns 400 when proof is missing', async () => {
+      const response = await request(app).post('/api/verification/verify').send({})
+
+      expect(response.status).toBe(400)
+      expect(response.body.error).toBe('Missing proof in request body')
+    })
+
+    it('POST /api/verification/verify reports hash and expiry validation errors', async () => {
+      const proof = verificationService.createProof(
+        mockAddress,
+        75,
+        mockBondSnapshot,
+        5,
+        -1,
+      )
+      proof.hash = 'tampered-hash'
+
+      const response = await request(app)
+        .post('/api/verification/verify')
+        .send({ proof })
+
+      expect(response.status).toBe(200)
+      expect(response.body.valid).toBe(false)
+      expect(response.body.errors).toContain('Hash verification failed')
+      expect(response.body.errors).toContain('Proof has expired')
+    })
+
+    it('POST /api/verification/verify reports signature verification failure', async () => {
+      const { privateKey } = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      })
+      const { publicKey: wrongPublicKey } = crypto.generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'pem' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
+      })
+
+      const proof = verificationService.createProof(mockAddress, 75, mockBondSnapshot, 5)
+      const signedProof = verificationService.signProof(proof, privateKey)
+
+      const response = await request(app)
+        .post('/api/verification/verify')
+        .send({ proof: signedProof, publicKey: wrongPublicKey })
+
+      expect(response.status).toBe(200)
+      expect(response.body.valid).toBe(false)
+      expect(response.body.errors).toContain('Signature verification failed')
+    })
+
+    it('GET /api/verification/:address returns 500 when proof generation throws', async () => {
+      const createProofSpy = vi
+        .spyOn(verificationService, 'createProof')
+        .mockImplementationOnce(() => {
+          throw new Error('forced failure')
+        })
+
+      const response = await request(app).get(`/api/verification/${mockAddress}`)
+
+      expect(response.status).toBe(500)
+      expect(response.body.error).toBe('Failed to generate verification proof')
+      createProofSpy.mockRestore()
     })
   })
 })

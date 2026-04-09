@@ -5,10 +5,12 @@ import type { HealthProbe } from '../services/health/index.js'
 export interface HealthRouterOptions {
   /** DB probe; when omitted, db is reported as not_configured. */
   db?: HealthProbe
-  /** Redis probe; when omitted, redis is reported as not_configured. */
-  redis?: HealthProbe
-  /** Optional external (e.g. Horizon); failure does not cause 503. */
-  external?: HealthProbe
+  /** Cache probe; when omitted, cache is reported as not_configured. */
+  cache?: HealthProbe
+  /** Queue probe; when omitted, queue is reported as not_configured. */
+  queue?: HealthProbe
+  /** Optional gateway (e.g. Horizon); failure does not cause 503. */
+  gateway?: HealthProbe
 }
 
 /**
@@ -27,8 +29,9 @@ export function createHealthRouter(options: HealthRouterOptions = {}): Router {
   const runChecks = async () =>
     runHealthChecks({
       db: options.db,
-      redis: options.redis,
-      external: options.external,
+      cache: options.cache,
+      queue: options.queue,
+      gateway: options.gateway,
     })
 
   /**

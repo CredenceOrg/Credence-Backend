@@ -45,29 +45,33 @@ export class ImpersonationService {
     const { targetUserId, reason, ttlSeconds } = request
 
     if (!reason || reason.trim().length === 0) {
-      this.auditLog.logAction(
-        adminId, adminEmail,
-        AuditAction.ISSUE_IMPERSONATION_TOKEN,
-        targetUserId, '',
-        { reason },
-        'failure',
-        'reason is required',
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.ISSUE_IMPERSONATION_TOKEN,
+        resourceType: 'user',
+        resourceId: targetUserId,
+        details: { reason },
+        status: 'failure',
+        errorMessage: 'reason is required',
         ipAddress,
-      )
+      })
       throw new Error('reason is required and must not be empty')
     }
 
     const target = MOCK_USERS[targetUserId]
     if (!target) {
-      this.auditLog.logAction(
-        adminId, adminEmail,
-        AuditAction.ISSUE_IMPERSONATION_TOKEN,
-        targetUserId, '',
-        { reason },
-        'failure',
-        'target user not found',
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.ISSUE_IMPERSONATION_TOKEN,
+        resourceType: 'user',
+        resourceId: targetUserId,
+        details: { reason },
+        status: 'failure',
+        errorMessage: 'target user not found',
         ipAddress,
-      )
+      })
       throw new Error(`User not found: ${targetUserId}`)
     }
 
@@ -90,15 +94,22 @@ export class ImpersonationService {
 
     tokenStore.set(tokenId, record)
 
-    this.auditLog.logAction(
-      adminId, adminEmail,
-      AuditAction.ISSUE_IMPERSONATION_TOKEN,
-      targetUserId, target.email,
-      { tokenId, reason: reason.trim(), ttlSeconds: ttl, expiresAt: expiresAt.toISOString() },
-      'success',
-      undefined,
+    void this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.ISSUE_IMPERSONATION_TOKEN,
+      resourceType: 'user',
+      resourceId: targetUserId,
+      details: {
+        targetUserEmail: target.email,
+        tokenId,
+        reason: reason.trim(),
+        ttlSeconds: ttl,
+        expiresAt: expiresAt.toISOString(),
+      },
+      status: 'success',
       ipAddress,
-    )
+    })
 
     return { tokenId, targetUserId, targetUserEmail: target.email, expiresAt: expiresAt.toISOString(), ttlSeconds: ttl }
   }
@@ -126,15 +137,20 @@ export class ImpersonationService {
     record.revokedAt = new Date().toISOString()
     record.revokedBy = adminId
 
-    this.auditLog.logAction(
-      adminId, adminEmail,
-      AuditAction.REVOKE_IMPERSONATION_TOKEN,
-      record.targetUserId, record.targetUserEmail,
-      { tokenId, originalIssuedBy: record.issuedBy },
-      'success',
-      undefined,
+    void this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.REVOKE_IMPERSONATION_TOKEN,
+      resourceType: 'user',
+      resourceId: record.targetUserId,
+      details: {
+        targetUserEmail: record.targetUserEmail,
+        tokenId,
+        originalIssuedBy: record.issuedBy,
+      },
+      status: 'success',
       ipAddress,
-    )
+    })
   }
 
   /**

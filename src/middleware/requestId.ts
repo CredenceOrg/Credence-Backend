@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
+import { tracingContext } from '../utils/logger.js'
 
 /**
  * Middleware to handle Request ID and Correlation ID for distributed tracing.
@@ -23,5 +24,12 @@ export const requestIdMiddleware = (
   res.setHeader('x-correlation-id', correlationId)
   res.setHeader('x-request-id', requestId)
 
-  next()
+  // 5. Wrap the rest of the request in a tracing context
+  const context = new Map<string, string>()
+  context.set('correlationId', correlationId)
+  context.set('requestId', requestId)
+
+  tracingContext.run(context, () => {
+    next()
+  })
 }

@@ -14,13 +14,15 @@ describe('Health routes', () => {
     it('returns 200 and ok when all critical deps are up', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'up' }),
+        cache: async () => ({ status: 'up' }),
+        queue: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(200)
       expect(res.body.status).toBe('ok')
       expect(res.body.dependencies.db.status).toBe('up')
-      expect(res.body.dependencies.redis.status).toBe('up')
+      expect(res.body.dependencies.cache.status).toBe('up')
+      expect(res.body.dependencies.queue.status).toBe('up')
     })
 
     it('returns 200 when no deps configured', async () => {
@@ -29,43 +31,45 @@ describe('Health routes', () => {
       expect(res.status).toBe(200)
       expect(res.body.status).toBe('ok')
       expect(res.body.dependencies.db.status).toBe('not_configured')
-      expect(res.body.dependencies.redis.status).toBe('not_configured')
+      expect(res.body.dependencies.cache.status).toBe('not_configured')
+      expect(res.body.dependencies.queue.status).toBe('not_configured')
     })
 
     it('returns 503 when db is down', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'up' }),
+        cache: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
       expect(res.body.status).toBe('unhealthy')
     })
 
-    it('returns 503 when redis is down', async () => {
+    it('returns 503 when cache is down', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'down' }),
+        cache: async () => ({ status: 'down' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
       expect(res.body.status).toBe('unhealthy')
     })
 
-    it('returns 503 when both db and redis are down', async () => {
+    it('returns 503 when db, cache, and queue are down', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'down' }),
+        cache: async () => ({ status: 'down' }),
+        queue: async () => ({ status: 'down' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
     })
 
-    it('returns 200 when only external is down (degraded)', async () => {
+    it('returns 200 when only gateway is down (degraded)', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'up' }),
-        external: async () => ({ status: 'down' }),
+        cache: async () => ({ status: 'up' }),
+        gateway: async () => ({ status: 'down' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(200)
@@ -77,7 +81,7 @@ describe('Health routes', () => {
     it('behaves like GET /api/health', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'up' }),
+        cache: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health/ready')
       expect(res.status).toBe(503)
@@ -89,7 +93,7 @@ describe('Health routes', () => {
     it('returns 200 always', async () => {
       const app = appWithHealth({
         db: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'down' }),
+        cache: async () => ({ status: 'down' }),
       })
       const res = await request(app).get('/api/health/live')
       expect(res.status).toBe(200)

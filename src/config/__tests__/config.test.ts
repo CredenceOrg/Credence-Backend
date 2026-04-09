@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { validateConfig, ConfigValidationError, envSchema } from '../index.js'
+import { RETRY_POLICY_HARD_CAPS } from '../../lib/retryPolicy.js'
 
 /** Minimal valid env object reused across tests. */
 function validEnv(overrides: Record<string, string> = {}): Record<string, string> {
@@ -99,6 +100,58 @@ describe('validateConfig – valid environments', () => {
   it('accepts custom JWT_EXPIRY', () => {
     const config = validateConfig(validEnv({ JWT_EXPIRY: '7d' }))
     expect(config.jwt.expiry).toBe('7d')
+  })
+
+  it('applies outbound retry defaults when env overrides are omitted', () => {
+    const config = validateConfig(validEnv())
+
+    expect(config.outboundHttp.retry.defaults.maxAttempts).toBe(3)
+    expect(config.outboundHttp.retry.defaults.baseDelayMs).toBe(200)
+    expect(config.outboundHttp.retry.defaults.maxDelayMs).toBe(2000)
+    expect(config.outboundHttp.retry.defaults.backoffMultiplier).toBe(2)
+    expect(config.outboundHttp.retry.defaults.jitterStrategy).toBe('none')
+  })
+
+  it('supports provider-specific outbound retry overrides', () => {
+    const config = validateConfig(
+      validEnv({
+        OUTBOUND_RETRY_SOROBAN_MAX_ATTEMPTS: '5',
+        OUTBOUND_RETRY_SOROBAN_BASE_DELAY_MS: '750',
+        OUTBOUND_RETRY_SOROBAN_JITTER_STRATEGY: 'full',
+        OUTBOUND_RETRY_WEBHOOK_MAX_ATTEMPTS: '2',
+        OUTBOUND_RETRY_WEBHOOK_BASE_DELAY_MS: '1500',
+        OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY: 'equal',
+      }),
+    )
+
+    expect(config.outboundHttp.retry.providers!.soroban).toMatchObject({
+      maxAttempts: 5,
+      baseDelayMs: 750,
+      jitterStrategy: 'full',
+    })
+    expect(config.outboundHttp.retry.providers!.webhook).toMatchObject({
+      maxAttempts: 2,
+      baseDelayMs: 1500,
+      jitterStrategy: 'equal',
+    })
+  })
+
+  it('enforces hard caps on outbound retry defaults', () => {
+    const config = validateConfig(
+      validEnv({
+        OUTBOUND_RETRY_MAX_ATTEMPTS: '999',
+        OUTBOUND_RETRY_BASE_DELAY_MS: '9999999',
+        OUTBOUND_RETRY_MAX_DELAY_MS: '9999999',
+        OUTBOUND_RETRY_BACKOFF_MULTIPLIER: '999',
+      }),
+    )
+
+    expect(config.outboundHttp.retry.defaults.maxAttempts).toBe(RETRY_POLICY_HARD_CAPS.maxAttempts)
+    expect(config.outboundHttp.retry.defaults.baseDelayMs).toBe(RETRY_POLICY_HARD_CAPS.baseDelayMs)
+    expect(config.outboundHttp.retry.defaults.maxDelayMs).toBe(RETRY_POLICY_HARD_CAPS.maxDelayMs)
+    expect(config.outboundHttp.retry.defaults.backoffMultiplier).toBe(
+      RETRY_POLICY_HARD_CAPS.backoffMultiplier,
+    )
   })
 })
 

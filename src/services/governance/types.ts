@@ -64,14 +64,20 @@ export interface ArbitrationInput {
   reasoning: string
 }
 
-export type MultisigStatus = 'pending' | 'executed' | 'cancelled' | 'expired'
+export type MultisigStatus = 'pending' | 'approved' | 'rejected' | 'executed' | 'cancelled' | 'expired'
 
 export interface MultisigProposal {
   id: string
   signers: string[]
   requiredSignatures: number
+  /** The action to be performed (e.g. 'slash_validator', 'distribute_rewards') */
   action: string
-  signatures: Set<string>
+  /** Signatures from authorized signers: Map<signer_id, signature_token> */
+  signatures: Map<string, string>
+  /** Set of voter IDs who voted for slashing the proposal itself or associated entity */
+  slashingVotes: Set<string>
+  /** Optional data payload for the action */
+  payload?: any
   status: MultisigStatus
   createdAt: Date
   expiresAt: Date
@@ -81,5 +87,6 @@ export interface MultisigInput {
   signers: string[]
   requiredSignatures: number
   action: string
+  payload?: any
   ttlMs: number // time to live from now, in milliseconds
 }

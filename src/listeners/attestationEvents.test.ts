@@ -101,12 +101,12 @@ describe('AttestationEventListener', () => {
   // ── Add events ─────────────────────────────────────────────────────
 
   describe('add events', () => {
-    it('should create an attestation from an add event', () => {
+    it('should create an attestation from an add event', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
       const event = makeAddEvent()
-      const result = listener.processEvent(event)
+      const result = await listener.processEvent(event)
 
       expect(result).toBe(event.subject)
       expect(store.size).toBe(1)
@@ -118,13 +118,13 @@ describe('AttestationEventListener', () => {
       expect(attestations[0].claim).toBe('KYC verified')
     })
 
-    it('should process multiple add events for different subjects', () => {
+    it('should process multiple add events for different subjects', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
-      listener.processEvent(makeAddEvent({ id: 'evt-1', subject: 'SUBJECT_A' }))
-      listener.processEvent(makeAddEvent({ id: 'evt-2', subject: 'SUBJECT_B' }))
-      listener.processEvent(makeAddEvent({ id: 'evt-3', subject: 'SUBJECT_C' }))
+      await listener.processEvent(makeAddEvent({ id: 'evt-1', subject: 'SUBJECT_A' }))
+      await listener.processEvent(makeAddEvent({ id: 'evt-2', subject: 'SUBJECT_B' }))
+      await listener.processEvent(makeAddEvent({ id: 'evt-3', subject: 'SUBJECT_C' }))
 
       expect(store.size).toBe(3)
       expect(store.countBySubject('SUBJECT_A')).toBe(1)
@@ -132,12 +132,12 @@ describe('AttestationEventListener', () => {
       expect(store.countBySubject('SUBJECT_C')).toBe(1)
     })
 
-    it('should process multiple add events for the same subject from different verifiers', () => {
+    it('should process multiple add events for the same subject from different verifiers', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
-      listener.processEvent(makeAddEvent({ id: 'evt-1', verifier: 'VERIFIER_A' }))
-      listener.processEvent(makeAddEvent({ id: 'evt-2', verifier: 'VERIFIER_B' }))
+      await listener.processEvent(makeAddEvent({ id: 'evt-1', verifier: 'VERIFIER_A' }))
+      await listener.processEvent(makeAddEvent({ id: 'evt-2', verifier: 'VERIFIER_B' }))
 
       const { attestations } = store.findBySubject(
         'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV',
@@ -149,18 +149,18 @@ describe('AttestationEventListener', () => {
   // ── Revoke events ──────────────────────────────────────────────────
 
   describe('revoke events', () => {
-    it('should revoke an existing attestation', () => {
+    it('should revoke an existing attestation', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
       const addEvent = makeAddEvent()
-      listener.processEvent(addEvent)
+      await listener.processEvent(addEvent)
 
       const revokeEvent = makeRevokeEvent({
         subject: addEvent.subject,
         verifier: addEvent.verifier,
       })
-      const result = listener.processEvent(revokeEvent)
+      const result = await listener.processEvent(revokeEvent)
 
       expect(result).toBe(addEvent.subject)
 
@@ -176,12 +176,12 @@ describe('AttestationEventListener', () => {
       expect(all[0].revokedAt).not.toBeNull()
     })
 
-    it('should handle revoke for non-existent attestation gracefully', () => {
+    it('should handle revoke for non-existent attestation gracefully', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
       const revokeEvent = makeRevokeEvent({ subject: 'UNKNOWN_SUBJECT' })
-      const result = listener.processEvent(revokeEvent)
+      const result = await listener.processEvent(revokeEvent)
 
       // Still processed (recorded in stats), just no attestation to revoke
       expect(result).toBe('UNKNOWN_SUBJECT')
@@ -192,25 +192,25 @@ describe('AttestationEventListener', () => {
   // ── Duplicate handling ─────────────────────────────────────────────
 
   describe('duplicate handling', () => {
-    it('should skip duplicate add events', () => {
+    it('should skip duplicate add events', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
       const event = makeAddEvent({ id: 'same-id' })
-      listener.processEvent(event)
-      listener.processEvent(event) // duplicate
+      await listener.processEvent(event)
+      await listener.processEvent(event) // duplicate
 
       expect(store.size).toBe(1)
       expect(listener.getStats().duplicatesSkipped).toBe(1)
     })
 
-    it('should skip duplicate revoke events', () => {
+    it('should skip duplicate revoke events', async () => {
       const fetcher = createMockFetcher([])
       listener = new AttestationEventListener(store, fetcher)
 
       // Add then revoke
-      listener.processEvent(makeAddEvent({ id: 'add-1' }))
-      listener.processEvent(
+      await listener.processEvent(makeAddEvent({ id: 'add-1' }))
+      await listener.processEvent(
         makeRevokeEvent({
           id: 'revoke-1',
           subject: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV',
@@ -219,7 +219,7 @@ describe('AttestationEventListener', () => {
       )
 
       // Duplicate revoke
-      listener.processEvent(
+      await listener.processEvent(
         makeRevokeEvent({
           id: 'revoke-1',
           subject: 'GABCDEFGHIJKLMNOPQRSTUVWXYZ234567ABCDEFGHIJKLMNOPQRSTUV',

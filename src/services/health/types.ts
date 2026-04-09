@@ -13,9 +13,9 @@ export interface HealthResult {
   service: string
   dependencies: {
     db: DependencyHealth
-    redis: DependencyHealth
-    /** Optional external (e.g. Horizon); never affects overall unhealthy. */
-    external?: DependencyHealth
+    cache: DependencyHealth
+    queue: DependencyHealth
+    gateway: DependencyHealth
   }
 }
 

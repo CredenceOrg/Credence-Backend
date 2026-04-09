@@ -13,3 +13,12 @@ Access to decrypted evidence is strictly limited using Role-Based Access Control
 - **USER**: Denied access to view encrypted evidence blobs.
 - **ARBITRATOR**: Granted access to retrieve and decrypt evidence for reviewing active disputes.
 - **GOVERNANCE**: Granted access to retrieve and decrypt evidence for auditing, slashing events, and platform management.
+
+### Evidence Audit Trail
+
+All sensitive evidence actions are written to the immutable audit stream:
+
+- `EVIDENCE_UPLOADED` when evidence is stored
+- `EVIDENCE_ACCESSED` when evidence is decrypted and returned
+
+Each event includes actor metadata, action name, timestamp, and evidence resource id, enabling compliance queries by actor, resource, and time range.

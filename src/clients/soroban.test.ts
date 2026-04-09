@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { test } from 'vitest'
 
 import { createSorobanClient, SorobanClient, SorobanClientError } from './soroban.js'
 
@@ -224,6 +225,93 @@ test('retries on HTTP 429 and caps backoff at maxDelayMs', async () => {
   assert.equal(attempt, 3)
   assert.deepEqual(sleepCalls, [100, 150])
   assert.equal(result.cursor, 'done')
+})
+
+test('resolves provider-specific retry policy for soroban', async () => {
+  const sleepCalls: number[] = []
+  let attempt = 0
+
+  const client = new SorobanClient(
+    {
+      ...baseConfig,
+      retryPolicies: {
+        default: { baseDelayMs: 15 },
+        providers: {
+          soroban: {
+            maxAttempts: 2,
+            jitterStrategy: 'none',
+          },
+        },
+      },
+    },
+    {
+      fetchFn: async () => {
+        attempt += 1
+        if (attempt === 1) {
+          return new Response('unavailable', { status: 503 })
+        }
+
+        return new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'provider-policy-success',
+            result: { events: [], cursor: 'ok' },
+          }),
+          { status: 200 },
+        )
+      },
+      sleepFn: async (ms) => {
+        sleepCalls.push(ms)
+      },
+    },
+  )
+
+  const result = await client.getContractEvents()
+  assert.equal(attempt, 2)
+  assert.deepEqual(sleepCalls, [15])
+  assert.equal(result.cursor, 'ok')
+})
+
+test('applies jitter strategy when calculating soroban retry delay', async () => {
+  const sleepCalls: number[] = []
+  let attempt = 0
+
+  const client = new SorobanClient(
+    {
+      ...baseConfig,
+      retry: {
+        maxAttempts: 2,
+        baseDelayMs: 100,
+        maxDelayMs: 1_000,
+        backoffMultiplier: 2,
+        jitterStrategy: 'full',
+      },
+    },
+    {
+      fetchFn: async () => {
+        attempt += 1
+        if (attempt === 1) {
+          return new Response('unavailable', { status: 503 })
+        }
+
+        return new Response(
+          JSON.stringify({
+            jsonrpc: '2.0',
+            id: 'jitter-success',
+            result: { events: [], cursor: 'ok' },
+          }),
+          { status: 200 },
+        )
+      },
+      sleepFn: async (ms) => {
+        sleepCalls.push(ms)
+      },
+      randomFn: () => 0.5,
+    },
+  )
+
+  await client.getContractEvents()
+  assert.deepEqual(sleepCalls, [50])
 })
 
 test('does not retry non-retryable HTTP errors', async () => {

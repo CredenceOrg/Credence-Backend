@@ -11,13 +11,13 @@ describe('Admin API', () => {
   const INVALID_TOKEN = 'Bearer invalid-token'
   const NO_TOKEN = 'NoBearer invalid-token'
 
-  beforeEach(() => {
+  beforeEach(async () => {
     // Clear audit logs before each test
-    auditLogService.clearLogs()
+    await auditLogService.clearLogs()
     
     // Reset mock user data to avoid state contamination between tests
     MOCK_USERS['verifier-user-1'].apiKey = 'verifier-key-67890'
-    MOCK_USERS['admin-user-1'].role = UserRole.ADMIN
+  MOCK_USERS['admin-user-1'].role = UserRole.SUPER_ADMIN
     MOCK_USERS['verifier-user-1'].role = UserRole.VERIFIER
     
     // Reset API key mappings
@@ -220,7 +220,7 @@ describe('Admin API', () => {
         .get('/api/admin/users')
         .set('Authorization', ADMIN_TOKEN)
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const listLog = logs.find((log) => log.action === AuditAction.LIST_USERS)
       expect(listLog).toBeDefined()
       expect(listLog?.status).toBe('success')
@@ -319,7 +319,7 @@ describe('Admin API', () => {
           role: UserRole.ADMIN,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const assignLog = logs.find((log) => log.action === AuditAction.ASSIGN_ROLE)
       expect(assignLog).toBeDefined()
       expect(assignLog?.status).toBe('success')
@@ -335,7 +335,7 @@ describe('Admin API', () => {
           role: UserRole.VERIFIER,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const failedLog = logs.find(
         (log) => log.action === AuditAction.ASSIGN_ROLE && log.status === 'failure'
       )
@@ -446,7 +446,7 @@ describe('Admin API', () => {
           apiKey: oldKey,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const revokeLog = logs.find((log) => log.action === AuditAction.REVOKE_API_KEY)
       expect(revokeLog).toBeDefined()
       expect(revokeLog?.status).toBe('success')
@@ -563,8 +563,8 @@ describe('Admin API', () => {
   })
 
   describe('Audit Logging', () => {
-    beforeEach(() => {
-      auditLogService.clearLogs()
+    beforeEach(async () => {
+      await auditLogService.clearLogs()
     })
 
     it('should contain admin info in audit logs', async () => {
@@ -576,7 +576,7 @@ describe('Admin API', () => {
           role: UserRole.ADMIN,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const log = logs[0]
       expect(log).toHaveProperty('adminId', 'admin-user-1')
       expect(log).toHaveProperty('adminEmail', 'admin@credence.org')
@@ -592,7 +592,7 @@ describe('Admin API', () => {
           role: UserRole.ADMIN,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const log = logs[0]
       expect(log).toHaveProperty('targetUserId', 'verifier-user-1')
       expect(log).toHaveProperty('targetUserEmail', 'verifier@credence.org')
@@ -607,7 +607,7 @@ describe('Admin API', () => {
           role: UserRole.ADMIN,
         })
 
-      const logs = auditLogService.getAllLogs()
+      const logs = await auditLogService.getAllLogs()
       const log = logs[0]
       expect(log).toHaveProperty('details')
       expect(log.details).toHaveProperty('oldRole')
@@ -616,8 +616,8 @@ describe('Admin API', () => {
   })
 
   describe('End-to-End Scenarios', () => {
-    beforeEach(() => {
-      auditLogService.clearLogs()
+    beforeEach(async () => {
+      await auditLogService.clearLogs()
     })
 
     it('should complete full admin workflow: list, assign, revoke', async () => {
@@ -658,8 +658,8 @@ describe('Admin API', () => {
   })
 
   describe('GET /api/admin/audit-logs/export', () => {
-    beforeEach(() => {
-      auditLogService.clearLogs()
+    beforeEach(async () => {
+      await auditLogService.clearLogs()
       
       // Populate logs within a specific time range
       const baseTime = new Date('2025-01-01T12:00:00Z').getTime()
@@ -667,7 +667,7 @@ describe('Admin API', () => {
       // Log 1: Inside range
       const log1Time = new Date(baseTime)
       vi.setSystemTime(log1Time)
-      auditLogService.logAction(
+      await auditLogService.logAction(
         'admin-user-1',
         'admin@credence.org',
         AuditAction.LIST_USERS,
@@ -683,6 +683,7 @@ describe('Admin API', () => {
       const log2Time = new Date(baseTime + 1000 * 60 * 60 * 2) // 2 hours later
       vi.setSystemTime(log2Time)
       auditLogService.logAction(
+        'tenant-admin',
         'admin-user-1',
         'admin@credence.org',
         AuditAction.ASSIGN_ROLE,
@@ -698,6 +699,7 @@ describe('Admin API', () => {
       const log3Time = new Date(baseTime + 1000 * 60 * 60 * 24 * 5) // 5 days later
       vi.setSystemTime(log3Time)
       auditLogService.logAction(
+        'tenant-verifier',
         'admin-user-1',
         'admin@credence.org',
         AuditAction.REVOKE_API_KEY,
@@ -754,7 +756,7 @@ describe('Admin API', () => {
       expect(exportedLog1.ipAddress).toBe('192.168.1.***')
 
       // Check the final logs in the service to see if initiation/completion were logged
-      const allLogs = auditLogService.getAllLogs()
+      const allLogs = await auditLogService.getAllLogs()
       const exportInitLog = allLogs.find(l => l.action === AuditAction.EXPORT_AUDIT_LOGS && l.details.phase === 'initiation')
       const exportCompLog = allLogs.find(l => l.action === AuditAction.EXPORT_AUDIT_LOGS && l.details.phase === 'completion')
       

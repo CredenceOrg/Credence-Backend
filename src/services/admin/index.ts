@@ -1,4 +1,5 @@
 import { MOCK_USERS, API_KEY_TO_USER, UserRole } from '../../middleware/auth.js'
+import type { AuthenticatedRequest } from '../../middleware/auth.js'
 import { AuditLogService, AuditAction } from '../audit/index.js'
 import type {
   AdminUser,
@@ -30,25 +31,27 @@ export class AdminService {
    * @param filters - Optional filters
    * @returns List of users and pagination info
    */
-  listUsers(
+  async listUsers(
     adminId: string,
     adminEmail: string,
     pagination: PaginationOptions = {},
     filters?: { role?: UserRole; active?: boolean }
-  ): ListUsersResponse {
+  ): Promise<ListUsersResponse> {
     const page = pagination.page ?? 1
     const limit = pagination.limit ?? 50
     const offset = pagination.offset ?? 0
 
+    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
+
     // Log the list action
-    this.auditLog.logAction(
-      adminId,
-      adminEmail,
-      AuditAction.LIST_USERS,
-      adminId,
-      adminEmail,
-      { limit, offset, filters }
-    )
+    void this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.LIST_USERS,
+      resourceType: 'admin_user',
+      resourceId: adminId,
+      details: { limit, offset, filters },
+    })
 
     // Get all users
     const users = Object.values(MOCK_USERS).map((user) => this.formatUser(user))
@@ -85,41 +88,43 @@ export class AdminService {
    * @returns Assignment response with updated user info
    * @throws Error if user not found or invalid role
    */
-  assignRole(
+  async assignRole(
     adminId: string,
     adminEmail: string,
     request: AssignRoleRequest
-  ): AssignRoleResponse {
+  ): Promise<AssignRoleResponse> {
     const { userId, role } = request
+
+    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
 
     // Validate role
     const validRoles = Object.values(UserRole)
     if (!validRoles.includes(role)) {
-      this.auditLog.logAction(
-        adminId,
-        adminEmail,
-        AuditAction.ASSIGN_ROLE,
-        userId,
-        'unknown@credence.org',
-        { requestedRole: role },
-        'failure',
-        `Invalid role: ${role}`
-      )
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.ASSIGN_ROLE,
+        resourceType: 'user',
+        resourceId: userId,
+        details: { requestedRole: role },
+        status: 'failure',
+        errorMessage: `Invalid role: ${role}`,
+      })
       throw new Error(`Invalid role: ${role}`)
     }
 
     const user = MOCK_USERS[userId]
     if (!user) {
-      this.auditLog.logAction(
-        adminId,
-        adminEmail,
-        AuditAction.ASSIGN_ROLE,
-        userId,
-        'unknown@credence.org',
-        { requestedRole: role },
-        'failure',
-        'User not found'
-      )
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.ASSIGN_ROLE,
+        resourceType: 'user',
+        resourceId: userId,
+        details: { requestedRole: role },
+        status: 'failure',
+        errorMessage: 'User not found',
+      })
       throw new Error(`User not found: ${userId}`)
     }
 
@@ -127,15 +132,15 @@ export class AdminService {
     user.role = role
 
     // Log the successful assignment
-    this.auditLog.logAction(
-      adminId,
-      adminEmail,
-      AuditAction.ASSIGN_ROLE,
-      userId,
-      user.email,
-      { oldRole, newRole: role },
-      'success'
-    )
+    await this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.ASSIGN_ROLE,
+      resourceType: 'user',
+      resourceId: userId,
+      details: { oldRole, newRole: role, targetUserEmail: user.email },
+      status: 'success',
+    })
 
     return {
       success: true,
@@ -153,39 +158,41 @@ export class AdminService {
    * @returns Revoke response
    * @throws Error if key not found or doesn't belong to user
    */
-  revokeApiKey(
+  async revokeApiKey(
     adminId: string,
     adminEmail: string,
     request: RevokeApiKeyRequest
-  ): RevokeApiKeyResponse {
+  ): Promise<RevokeApiKeyResponse> {
     const { userId, apiKey } = request
+
+    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
 
     const user = MOCK_USERS[userId]
     if (!user) {
-      this.auditLog.logAction(
-        adminId,
-        adminEmail,
-        AuditAction.REVOKE_API_KEY,
-        userId,
-        'unknown@credence.org',
-        { revokedKey: apiKey },
-        'failure',
-        'User not found'
-      )
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.REVOKE_API_KEY,
+        resourceType: 'user',
+        resourceId: userId,
+        details: { revokedKey: apiKey },
+        status: 'failure',
+        errorMessage: 'User not found',
+      })
       throw new Error(`User not found: ${userId}`)
     }
 
     if (user.apiKey !== apiKey) {
-      this.auditLog.logAction(
-        adminId,
-        adminEmail,
-        AuditAction.REVOKE_API_KEY,
-        userId,
-        user.email,
-        { revokedKey: apiKey },
-        'failure',
-        'API key does not belong to this user'
-      )
+      void this.auditLog.logAction({
+        actorId: adminId,
+        actorEmail: adminEmail,
+        action: AuditAction.REVOKE_API_KEY,
+        resourceType: 'user',
+        resourceId: userId,
+        details: { revokedKey: apiKey, targetUserEmail: user.email },
+        status: 'failure',
+        errorMessage: 'API key does not belong to this user',
+      })
       throw new Error('API key does not belong to this user')
     }
 
@@ -199,15 +206,15 @@ export class AdminService {
     API_KEY_TO_USER[newKey] = userId
 
     // Log the successful revocation
-    this.auditLog.logAction(
-      adminId,
-      adminEmail,
-      AuditAction.REVOKE_API_KEY,
-      userId,
-      user.email,
-      { revokedKey: oldKey, newKey },
-      'success'
-    )
+    await this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.REVOKE_API_KEY,
+      resourceType: 'user',
+      resourceId: userId,
+      details: { revokedKey: oldKey, newKey, targetUserEmail: user.email },
+      status: 'success',
+    })
 
     return {
       success: true,
@@ -228,11 +235,20 @@ export class AdminService {
   getAuditLogs(
     adminId: string,
     adminEmail: string,
-    filters?: any,
-    limit?: number,
-    offset?: number
+    filters: any,
+    limit: number,
+    offset: number,
+    user: AuthenticatedRequest['user']
   ) {
-    return this.auditLog.getLogs(filters, limit, offset)
+    return this.auditLog.getLogs(
+      {
+        ...filters,
+        actorId: filters?.actorId ?? filters?.adminId,
+        resourceId: filters?.resourceId ?? filters?.targetUserId,
+      },
+      limit,
+      offset
+    )
   }
 
   /**
@@ -248,19 +264,27 @@ export class AdminService {
     adminId: string,
     adminEmail: string,
     startDate: Date,
-    endDate: Date
+    endDate: Date,
+    user: AuthenticatedRequest['user']
   ) {
-    // Log the initiation of the export
-    this.auditLog.logAction(
-      adminId,
-      adminEmail,
-      AuditAction.EXPORT_AUDIT_LOGS,
-      adminId,
-      adminEmail,
-      { startDate: startDate.toISOString(), endDate: endDate.toISOString(), phase: 'initiation' }
-    )
+    const tenantId = user?.tenantId || 'tenant-admin'
 
-    return this.auditLog.exportLogsStream(startDate, endDate)
+    // Log the initiation of the export
+    void this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.EXPORT_AUDIT_LOGS,
+      resourceType: 'admin_user',
+      resourceId: adminId,
+      details: { startDate: startDate.toISOString(), endDate: endDate.toISOString(), phase: 'initiation' },
+    })
+
+    const options: { allowSuperScope?: boolean } = {}
+    if (user?.role === UserRole.SUPER_ADMIN) {
+      options.allowSuperScope = true
+    }
+
+    return this.auditLog.exportLogsStream(startDate, endDate, tenantId, options)
   }
 
   /**
@@ -273,14 +297,19 @@ export class AdminService {
     endDate: Date,
     recordCount: number
   ) {
-    this.auditLog.logAction(
-      adminId,
-      adminEmail,
-      AuditAction.EXPORT_AUDIT_LOGS,
-      adminId,
-      adminEmail,
-      { startDate: startDate.toISOString(), endDate: endDate.toISOString(), phase: 'completion', recordCount }
-    )
+    void this.auditLog.logAction({
+      actorId: adminId,
+      actorEmail: adminEmail,
+      action: AuditAction.EXPORT_AUDIT_LOGS,
+      resourceType: 'admin_user',
+      resourceId: adminId,
+      details: {
+        startDate: startDate.toISOString(),
+        endDate: endDate.toISOString(),
+        phase: 'completion',
+        recordCount,
+      },
+    })
   }
 
   /**
@@ -307,3 +336,4 @@ export class AdminService {
     return `api_${timestamp}_${random}`
   }
 }
+

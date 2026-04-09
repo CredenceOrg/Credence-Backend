@@ -51,7 +51,7 @@ export function createDbProbe(
 }
 
 /**
- * Options for createRedisProbe (for testing: inject a custom check).
+ * Options for generic Redis-based probe (for testing: inject a custom check).
  */
 export interface RedisProbeOptions {
   /** When set (e.g. in tests), used instead of real Redis; throw to simulate down. */
@@ -59,13 +59,14 @@ export interface RedisProbeOptions {
 }
 
 /**
- * Creates a Redis health probe when REDIS_URL is set.
+ * Creates a generic Redis health probe for a given environment variable URL.
  * Uses ioredis PING. Does not expose errors.
  */
-export function createRedisProbe(
+function createGenericRedisProbe(
+  urlEnvVar: string,
   options: RedisProbeOptions = {},
 ): HealthProbe | undefined {
-  const url = process.env.REDIS_URL;
+  const url = process.env[urlEnvVar];
   if (!url && !options.ping) return undefined;
 
   let client: {
@@ -81,7 +82,6 @@ export function createRedisProbe(
       }
       if (!client) {
         const ioredis = await import("ioredis");
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const Redis = ioredis.default as any;
         client = new Redis(url!, { maxRetriesPerRequest: 1 });
       }
@@ -94,12 +94,32 @@ export function createRedisProbe(
 }
 
 /**
- * Optional external (e.g. Horizon/contract) probe.
+ * Creates a Cache health probe when REDIS_URL is set.
+ */
+export function createCacheProbe(
+  options: RedisProbeOptions = {},
+): HealthProbe | undefined {
+  return createGenericRedisProbe("REDIS_URL", options);
+}
+
+/**
+ * Creates a Queue health probe when QUEUE_URL is set.
+ */
+export function createQueueProbe(
+  options: RedisProbeOptions = {},
+): HealthProbe | undefined {
+  return createGenericRedisProbe("QUEUE_URL", options);
+}
+
+/**
+ * Optional gateway (e.g. Horizon/contract) probe.
  * When provided, failure is reported as degraded, not unhealthy.
  */
-export function createExternalProbe(
-  check: () => Promise<boolean>,
-): HealthProbe {
+export function createGatewayProbe(
+  check?: () => Promise<boolean>,
+): HealthProbe | undefined {
+  if (!check) return undefined;
+  
   return async () => {
     try {
       const ok = await withTimeout(check(), CHECK_TIMEOUT_MS);
@@ -111,17 +131,26 @@ export function createExternalProbe(
 }
 
 /**
- * Builds default probes from environment (DATABASE_URL, REDIS_URL).
- * When pg/ioredis are not installed, skips that probe (reported as not_configured).
+ * Builds default probes from environment (DATABASE_URL, REDIS_URL, QUEUE_URL).
+ * When not configured, skips that probe (reported as not_configured).
  */
 export function createDefaultProbes(): {
   db?: HealthProbe;
-  redis?: HealthProbe;
-  external?: HealthProbe;
+  cache?: HealthProbe;
+  queue?: HealthProbe;
+  gateway?: HealthProbe;
 } {
-  const out: { db?: HealthProbe; redis?: HealthProbe; external?: HealthProbe } =
+  const out: { db?: HealthProbe; cache?: HealthProbe; queue?: HealthProbe; gateway?: HealthProbe } =
     {};
   if (process.env.DATABASE_URL) out.db = createDbProbe();
-  if (process.env.REDIS_URL) out.redis = createRedisProbe();
+  if (process.env.REDIS_URL) out.cache = createCacheProbe();
+  if (process.env.QUEUE_URL) out.queue = createQueueProbe();
+  // Gateway could have a default check if GATEWAY_URL is provided, but currently it's externally provided
+  if (process.env.GATEWAY_URL) {
+    out.gateway = createGatewayProbe(async () => {
+      const res = await fetch(process.env.GATEWAY_URL!);
+      return res.ok;
+    });
+  }
   return out;
 }

@@ -1,6 +1,7 @@
 import { Router, Request, Response } from 'express'
 import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import { IdentityService } from '../services/identityService.js'
+import { AppError, ErrorCode, ValidationError } from '../lib/errors.js'
 
 const router = Router()
 const identityService = new IdentityService()
@@ -22,138 +23,41 @@ interface BulkVerifyRequest {
 
 /**
  * POST /api/bulk/verify
- * 
- * Bulk identity verification endpoint for enterprise tier
- * Accepts a list of addresses and returns trust score and bond status for each
- * 
- * @requires Enterprise API key via X-API-Key header
- * 
- * @body {string[]} addresses - Array of Stellar addresses to verify (1-100)
- * 
- * @returns {object} Response containing:
- *   - results: Array of successful verifications
- *   - errors: Array of failed verifications with error details
- *   - metadata: Batch processing statistics
- * 
- * @example
- * ```bash
- * curl -X POST http://localhost:3000/api/bulk/verify \
- *   -H "Content-Type: application/json" \
- *   -H "X-API-Key: test-enterprise-key-12345" \
- *   -d '{"addresses": ["GABC...", "GDEF..."]}'
- * ```
- * 
- * @example Response (200 OK)
- * ```json
- * {
- *   "results": [
- *     {
- *       "address": "GABC...",
- *       "trustScore": 85,
- *       "bondStatus": {
- *         "bondedAmount": "5000.00",
- *         "bondStart": "2024-01-15T10:30:00.000Z",
- *         "bondDuration": 365,
- *         "active": true
- *       },
- *       "attestationCount": 12,
- *       "lastUpdated": "2024-02-24T10:30:00.000Z"
- *     }
- *   ],
- *   "errors": [
- *     {
- *       "address": "INVALID",
- *       "error": "VerificationFailed",
- *       "message": "Invalid Stellar address format"
- *     }
- *   ],
- *   "metadata": {
- *     "totalRequested": 2,
- *     "successful": 1,
- *     "failed": 1,
- *     "batchSize": 2
- *   }
- * }
- * ```
- * 
- * @example Error Response (400 Bad Request)
- * ```json
- * {
- *   "error": "InvalidRequest",
- *   "message": "addresses must be an array"
- * }
- * ```
- * 
- * @example Error Response (401 Unauthorized)
- * ```json
- * {
- *   "error": "Unauthorized",
- *   "message": "API key is required"
- * }
- * ```
- * 
- * @example Error Response (403 Forbidden)
- * ```json
- * {
- *   "error": "Forbidden",
- *   "message": "Enterprise API key required"
- * }
- * ```
- * 
- * @example Error Response (413 Payload Too Large)
- * ```json
- * {
- *   "error": "BatchSizeExceeded",
- *   "message": "Maximum batch size is 100 addresses",
- *   "limit": 100,
- *   "received": 150
- * }
- * ```
  */
 router.post(
   '/verify',
   requireApiKey(ApiScope.ENTERPRISE),
-  async (req: Request, res: Response): Promise<void> => {
+  async (req: Request, res: Response, next): Promise<void> => {
     try {
       const { addresses } = req.body as BulkVerifyRequest
 
       // Validate request body
       if (!addresses || !Array.isArray(addresses)) {
-        res.status(400).json({
-          error: 'InvalidRequest',
-          message: 'addresses must be an array',
-        })
-        return
+        throw new ValidationError('addresses must be an array')
       }
 
       // Validate batch size limits
       if (addresses.length < BULK_LIMITS.MIN_BATCH_SIZE) {
-        res.status(400).json({
-          error: 'BatchSizeTooSmall',
-          message: `Minimum batch size is ${BULK_LIMITS.MIN_BATCH_SIZE} address`,
-          limit: BULK_LIMITS.MIN_BATCH_SIZE,
-          received: addresses.length,
-        })
-        return
+        throw new AppError(
+          `Minimum batch size is ${BULK_LIMITS.MIN_BATCH_SIZE} address`,
+          ErrorCode.BATCH_SIZE_TOO_SMALL,
+          400,
+          { limit: BULK_LIMITS.MIN_BATCH_SIZE, received: addresses.length }
+        )
       }
 
       if (addresses.length > BULK_LIMITS.MAX_BATCH_SIZE) {
-        res.status(413).json({
-          error: 'BatchSizeExceeded',
-          message: `Maximum batch size is ${BULK_LIMITS.MAX_BATCH_SIZE} addresses`,
-          limit: BULK_LIMITS.MAX_BATCH_SIZE,
-          received: addresses.length,
-        })
-        return
+        throw new AppError(
+          `Maximum batch size is ${BULK_LIMITS.MAX_BATCH_SIZE} addresses`,
+          ErrorCode.BATCH_SIZE_EXCEEDED,
+          413,
+          { limit: BULK_LIMITS.MAX_BATCH_SIZE, received: addresses.length }
+        )
       }
 
       // Validate all addresses are strings
       if (!addresses.every((addr) => typeof addr === 'string')) {
-        res.status(400).json({
-          error: 'InvalidRequest',
-          message: 'All addresses must be strings',
-        })
-        return
+        throw new ValidationError('All addresses must be strings')
       }
 
       // Remove duplicates
@@ -174,12 +78,7 @@ router.post(
         },
       })
     } catch (error) {
-      // Handle unexpected errors
-      console.error('Bulk verification error:', error)
-      res.status(500).json({
-        error: 'InternalServerError',
-        message: 'An unexpected error occurred during bulk verification',
-      })
+      next(error)
     }
   }
 )

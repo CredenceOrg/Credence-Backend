@@ -1,6 +1,12 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+
+// Set required environment variables BEFORE any imports
+process.env.DB_URL = 'postgresql://test:test@localhost:5432/test'
+process.env.REDIS_URL = 'redis://localhost:6379'
+process.env.JWT_SECRET = 'test-secret-key-for-testing'
+
 import request from 'supertest'
-import app from '../index.js'
+import app from '../app.js'
 import { auditLogService } from '../services/audit/index.js'
 import { impersonationService } from '../services/impersonation/index.js'
 import { AuditAction } from '../services/audit/types.js'
@@ -225,12 +231,18 @@ describe('Audit trail', () => {
   })
 
   it('logs REVOKE_IMPERSONATION_TOKEN on revocation', async () => {
+    // Clear logs before this test
+    auditLogService.clearLogs()
+    
     const issueRes = await request(app)
       .post('/api/admin/impersonate')
       .set('Authorization', ADMIN_TOKEN)
       .send({ targetUserId: 'verifier-user-1', reason: 'revoke audit test' })
 
     const { tokenId } = issueRes.body.data
+
+    // Clear logs again to only capture revocation
+    auditLogService.clearLogs()
 
     await request(app)
       .post(`/api/admin/impersonate/${tokenId}/revoke`)

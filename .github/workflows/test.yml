@@ -32,7 +32,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: "npm"
 
       - name: Install dependencies
@@ -45,30 +45,21 @@ jobs:
             sleep 2
           done
 
-<<<<<<< HEAD
-=======
       - name: Run integration tests
         env:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm test
 
->>>>>>> upstream/main
       - name: Run tests with coverage
         env:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm run coverage
 
-<<<<<<< HEAD
-      - name: Run integration tests
+      - name: Enforce 95% coverage on audit-sensitive flows
         env:
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
-        run: npm run test:integration
+        run: npm run coverage:audit
 
-      - name: Run Node.js native tests
-        run: npm run test:node
-
-=======
->>>>>>> upstream/main
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:

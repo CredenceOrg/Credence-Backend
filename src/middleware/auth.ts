@@ -1,4 +1,5 @@
 import { Request, Response, NextFunction } from 'express'
+import type { StoredApiKey } from '../services/apiKeys.js'
 
 /**
  * API key scopes for authorization
@@ -12,6 +13,7 @@ export enum ApiScope {
  * User roles for role-based access control
  */
 export enum UserRole {
+  SUPER_ADMIN = 'super-admin',
   ADMIN = 'admin',
   VERIFIER = 'verifier',
   USER = 'user',
@@ -21,14 +23,12 @@ export enum UserRole {
  * Extended Express Request with API key and user metadata
  */
 export interface AuthenticatedRequest extends Request {
-  apiKey?: {
-    key: string
-    scope: ApiScope
-  }
+  apiKey?: StoredApiKey
   user?: {
     id: string
     role: UserRole
     email: string
+    tenantId: string
   }
 }
 
@@ -45,18 +45,20 @@ const API_KEYS: Record<string, ApiScope> = {
  * Mock user store - in production, use database or identity provider
  * Format: { userId: { id, role, email, apiKey } }
  */
-export const MOCK_USERS: Record<string, { id: string; role: UserRole; email: string; apiKey: string }> = {
+export const MOCK_USERS: Record<string, { id: string; role: UserRole; email: string; apiKey: string; tenantId: string }> = {
   'admin-user-1': {
     id: 'admin-user-1',
-    role: UserRole.ADMIN,
+    role: UserRole.SUPER_ADMIN,
     email: 'admin@credence.org',
     apiKey: 'admin-key-12345',
+    tenantId: 'tenant-admin',
   },
   'verifier-user-1': {
     id: 'verifier-user-1',
     role: UserRole.VERIFIER,
     email: 'verifier@credence.org',
     apiKey: 'verifier-key-67890',
+    tenantId: 'tenant-verifier',
   },
 }
 
@@ -110,8 +112,8 @@ export function requireApiKey(requiredScope: ApiScope) {
       return
     }
 
-    // Attach API key metadata to request
-    ;(req as AuthenticatedRequest).apiKey = { key: apiKey, scope }
+    // Preserve legacy metadata shape expected by route tests.
+    ;(req as any).apiKey = { key: apiKey, scope }
     next()
   }
 }
@@ -138,7 +140,7 @@ export function requireAdminRole(req: Request, res: Response, next: NextFunction
     return
   }
 
-  if (authReq.user.role !== UserRole.ADMIN) {
+  if (authReq.user.role !== UserRole.ADMIN && authReq.user.role !== UserRole.SUPER_ADMIN) {
     res.status(403).json({
       error: 'Forbidden',
       message: 'Admin role required',
@@ -196,6 +198,7 @@ export function requireUserAuth(req: Request, res: Response, next: NextFunction)
     id: user.id,
     role: user.role,
     email: user.email,
+    tenantId: user.tenantId,
   }
 
   next()

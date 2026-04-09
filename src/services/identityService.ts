@@ -1,3 +1,5 @@
+import { isValidStellarAddress } from '../lib/stellarAddress.js'
+
 /**
  * Identity verification result for a single address
  */
@@ -36,7 +38,7 @@ export class IdentityService {
    */
   async verifyIdentity(address: string): Promise<IdentityVerification> {
     // Validate address format (basic Stellar address validation)
-    if (!this.isValidStellarAddress(address)) {
+    if (!isValidStellarAddress(address)) {
       throw new Error('Invalid Stellar address format')
     }
 
@@ -98,19 +100,6 @@ export class IdentityService {
   }
 
   /**
-   * Validate Stellar address format
-   * Basic validation - in production, use stellar-sdk
-   * 
-   * @param address - Address to validate
-   * @returns True if valid format
-   */
-  private isValidStellarAddress(address: string): boolean {
-    // Stellar addresses are 56 characters, start with G, and are base32
-    const stellarAddressRegex = /^G[A-Z2-7]{55}$/
-    return stellarAddressRegex.test(address)
-  }
-
-  /**
    * Simulate async delay for testing
    * 
    * @param ms - Milliseconds to delay
@@ -119,3 +108,18 @@ export class IdentityService {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
 }
+
+export interface IdentityUpsertInput {
+  id: string
+}
+
+export interface BondUpsertInput {
+  id: string
+  amount: string
+  duration: string | null
+}
+
+// Compatibility no-op upsert hooks used by Horizon listener tests.
+export async function upsertIdentity(_identity: IdentityUpsertInput): Promise<void> {}
+
+export async function upsertBond(_bond: BondUpsertInput): Promise<void> {}

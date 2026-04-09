@@ -1,5 +1,7 @@
-import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult } from './types.js'
+import { randomBytes } from 'crypto'
+import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig } from './types.js'
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
+import { type AuditLogService, AuditAction } from '../audit/index.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -10,12 +12,70 @@ export class WebhookService {
 
   constructor(
     private readonly store: WebhookStore,
+    private readonly auditLog?: AuditLogService,
     private readonly deliveryOptions?: DeliveryOptions
   ) {}
 
   /**
+   * Rotate a webhook's signing secret.
+   * Moves current secret to previousSecret and generates a new one.
+   */
+  async rotateSecret(id: string, admin?: { id: string, email: string }): Promise<WebhookConfig> {
+    const webhook = await this.store.get(id)
+    if (!webhook) {
+      throw new Error('Webhook not found')
+    }
+
+    // Move current to previous and generate new
+    webhook.previousSecret = webhook.secret
+    webhook.secret = randomBytes(32).toString('hex')
+    webhook.secretUpdatedAt = new Date()
+
+    await this.store.set(webhook)
+
+    if (this.auditLog && admin) {
+      this.auditLog.logAction(
+        admin.id,
+        admin.email,
+        AuditAction.ROTATE_WEBHOOK_SECRET,
+        id,
+        webhook.url,
+        { rotatedAt: webhook.secretUpdatedAt }
+      )
+    }
+
+    return webhook
+  }
+
+  /**
+   * Revoke the previous secret for a webhook.
+   */
+  async revokePreviousSecret(id: string, admin?: { id: string, email: string }): Promise<WebhookConfig> {
+    const webhook = await this.store.get(id)
+    if (!webhook) {
+      throw new Error('Webhook not found')
+    }
+
+    webhook.previousSecret = undefined
+    await this.store.set(webhook)
+
+    if (this.auditLog && admin) {
+      this.auditLog.logAction(
+        admin.id,
+        admin.email,
+        AuditAction.REVOKE_WEBHOOK_SECRET,
+        id,
+        webhook.url
+      )
+    }
+
+    return webhook
+  }
+
+  /**
    * Emit an event to all subscribed webhooks.
    * Deliveries are queued and rate-limited per webhook.
+   * Permanently failed deliveries are routed to the DLQ if one is configured.
    */
   async emit(event: WebhookEventType, data: WebhookPayload['data']): Promise<WebhookDeliveryResult[]> {
     const webhooks = await this.store.getByEvent(event)
@@ -36,6 +96,14 @@ export class WebhookService {
         deliverWebhook(webhook, payload, this.deliveryOptions)
       ))
     )
+
+    if (this.dlq) {
+      await Promise.all(
+        results
+          .filter(r => !r.success)
+          .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
+      )
+    }
 
     return results
   }
@@ -65,7 +133,8 @@ export class WebhookService {
  */
 export function createWebhookService(
   store: WebhookStore,
+  auditLog?: AuditLogService,
   deliveryOptions?: DeliveryOptions
 ): WebhookService {
-  return new WebhookService(store, deliveryOptions)
+  return new WebhookService(store, auditLog, deliveryOptions)
 }
