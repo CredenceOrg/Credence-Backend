@@ -18,6 +18,11 @@ export interface CreateAttestationInput {
   note?: string | null
 }
 
+export interface ListBySubjectOptions {
+  offset?: number
+  limit?: number
+}
+
 type AttestationRow = {
   id: string | number
   bond_id: string | number
@@ -44,8 +49,8 @@ const mapAttestation = (row: AttestationRow): Attestation => ({
 export class AttestationsRepository {
   constructor(private readonly db: Queryable) {}
 
-  async create(input: CreateAttestationInput): Promise<Attestation> {
-    const result = await this.db.query<AttestationRow>(
+  async create(input: CreateAttestationInput, db: Queryable = this.db): Promise<Attestation> {
+    const result = await db.query<AttestationRow>(
       `
       INSERT INTO attestations (bond_id, attester_address, subject_address, score, note)
       VALUES ($1, $2, $3, $4, $5)
@@ -88,6 +93,58 @@ export class AttestationsRepository {
     )
 
     return result.rows.map(mapAttestation)
+  }
+
+  /**
+   * Count attestations for a subject address.
+   */
+  async countBySubject(subjectAddress: string): Promise<number> {
+    const result = await this.db.query<{ count: string }>(
+      `
+      SELECT COUNT(*)::text AS count
+      FROM attestations
+      WHERE subject_address = $1
+      `,
+      [subjectAddress]
+    )
+    return Number(result.rows[0]?.count ?? 0)
+  }
+
+  /**
+   * List attestations for a subject with offset/limit pagination and total count.
+   */
+  async listBySubjectPaginated(
+    subjectAddress: string,
+    options: ListBySubjectOptions = {},
+  ): Promise<{ rows: Attestation[]; total: number }> {
+    const offset = Math.max(0, options.offset ?? 0)
+    const limit = Math.max(1, Math.min(100, options.limit ?? 20))
+
+    const countResult = await this.db.query<{ count: string }>(
+      `
+      SELECT COUNT(*)::text AS count
+      FROM attestations
+      WHERE subject_address = $1
+      `,
+      [subjectAddress]
+    )
+    const total = Number(countResult.rows[0]?.count ?? 0)
+
+    const result = await this.db.query<AttestationRow>(
+      `
+      SELECT id, bond_id, attester_address, subject_address, score, note, created_at
+      FROM attestations
+      WHERE subject_address = $1
+      ORDER BY created_at DESC, id DESC
+      LIMIT $2 OFFSET $3
+      `,
+      [subjectAddress, limit, offset]
+    )
+
+    return {
+      rows: result.rows.map(mapAttestation),
+      total,
+    }
   }
 
   async listByBond(bondId: number): Promise<Attestation[]> {

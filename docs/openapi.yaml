@@ -119,6 +119,169 @@ components:
             minLength: 1
             maxLength: null
       type: object
+    attestationIdentityParamsSchema:
+      def:
+        type: object
+        shape:
+          identity:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: null
+      type: object
+    attestationListQuerySchema:
+      def:
+        type: object
+        shape:
+          page:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          offset:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          cursor:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          includeRevoked:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: enum
+                      entries:
+                        "true": "true"
+                        "false": "false"
+                    type: enum
+                    enum:
+                      "true": "true"
+                      "false": "false"
+                    options:
+                      - "true"
+                      - "false"
+                type: optional
+              out:
+                def:
+                  type: transform
+                type: transform
+            type: pipe
+            in:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: enum
+                    entries:
+                      "true": "true"
+                      "false": "false"
+                  type: enum
+                  enum:
+                    "true": "true"
+                    "false": "false"
+                  options:
+                    - "true"
+                    - "false"
+              type: optional
+            out:
+              def:
+                type: transform
+              type: transform
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     attestationsPathParamsSchema:
       def:
         type: object
@@ -365,27 +528,75 @@ components:
             format: regex
             minLength: 1
             maxLength: null
-          value:
+          verifier:
             def:
               type: string
               checks:
                 - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: null
+          weight:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+          claim:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
             type: string
             format: null
             minLength: 1
-            maxLength: null
-          key:
+            maxLength: 4096
+          bondId:
             def:
               type: optional
               innerType:
                 def:
-                  type: string
+                  type: number
+                  coerce: true
                   checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
                     - {}
-                type: string
-                format: null
-                minLength: 1
-                maxLength: null
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
             type: optional
         catchall:
           def:

@@ -14,19 +14,12 @@ import { AnalyticsService } from './services/analytics/service.js'
 import { BondService, BondStore } from './services/bond/index.js'
 import { createBondRouter } from './routes/bond.js'
 import { pool } from './db/pool.js'
-import { validate } from './middleware/validate.js'
 import { requestIdMiddleware } from './middleware/requestId.js'
 import { errorHandler } from './middleware/errorHandler.js'
 import { createRateLimitMiddleware } from './middleware/rateLimit.js'
 import { validateConfig } from './config/index.js'
-import {
-  buildPaginationMeta,
-  parsePaginationParams,
-} from './lib/pagination.js'
-import {
-  attestationsPathParamsSchema,
-  createAttestationBodySchema,
-} from './schemas/index.js'
+import { createAttestationRouter } from './routes/attestations.js'
+import { createAttestationsApiService } from './services/attestationsApiService.js'
 import { compressionMiddleware, compressionMetricsMiddleware } from './middleware/compression.js'
 import { metricsMiddleware, register } from './middleware/metrics.js'
 
@@ -72,37 +65,7 @@ app.use('/api/trust', trustRouter)
 const bondService = new BondService(new BondStore())
 app.use('/api/bond', createBondRouter(bondService))
 
-app.get(
-  '/api/attestations/:address',
-  validate({ params: attestationsPathParamsSchema }),
-  (req, res, next) => {
-    const { address } = req.validated!.params! as { address: string }
-    try {
-      const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
-      res.json({
-        address,
-        attestations: [],
-        offset,
-        ...buildPaginationMeta(0, page, limit),
-      })
-    } catch (error) {
-      next(error)
-    }
-  },
-)
-
-app.post(
-  '/api/attestations',
-  validate({ body: createAttestationBodySchema }),
-  (req, res) => {
-    const body = req.validated!.body! as { subject: string; value: string; key?: string }
-    res.status(201).json({
-      subject: body.subject,
-      value: body.value,
-      key: body.key ?? null,
-    })
-  },
-)
+app.use('/api/attestations', createAttestationRouter(createAttestationsApiService(pool)))
 
 app.use('/api/bulk', bulkRouter)
 

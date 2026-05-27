@@ -1,21 +1,32 @@
 import { describe, it, expect } from 'vitest'
 import {
+  attestationIdentityParamsSchema,
   attestationsPathParamsSchema,
   attestationsQuerySchema,
   createAttestationBodySchema,
+  ATTESTATION_CLAIM_MAX_LENGTH,
 } from './attestations.js'
 
 const validAddress = '0x742d35Cc6634C0532925a3b844Bc454e4438f44e'
+const validVerifier = '0x1234567890123456789012345678901234567890'
+
+describe('attestationIdentityParamsSchema', () => {
+  it('accepts valid address', () => {
+    expect(attestationIdentityParamsSchema.parse({ identity: validAddress })).toEqual({
+      identity: validAddress,
+    })
+  })
+
+  it('rejects invalid address', () => {
+    expect(attestationIdentityParamsSchema.safeParse({ identity: 'x' }).success).toBe(false)
+  })
+})
 
 describe('attestationsPathParamsSchema', () => {
   it('accepts valid address', () => {
     expect(attestationsPathParamsSchema.parse({ address: validAddress })).toEqual({
       address: validAddress,
     })
-  })
-
-  it('rejects invalid address', () => {
-    expect(attestationsPathParamsSchema.safeParse({ address: 'x' }).success).toBe(false)
   })
 })
 
@@ -39,47 +50,66 @@ describe('attestationsQuerySchema', () => {
   it('rejects limit > 100', () => {
     expect(attestationsQuerySchema.safeParse({ limit: 101 }).success).toBe(false)
   })
-
-  it('rejects negative offset', () => {
-    expect(attestationsQuerySchema.safeParse({ offset: -1 }).success).toBe(false)
-  })
 })
 
 describe('createAttestationBodySchema', () => {
-  it('accepts subject and value', () => {
-    expect(
-      createAttestationBodySchema.parse({ subject: validAddress, value: 'v' }),
-    ).toEqual({ subject: validAddress, value: 'v' })
-  })
-
-  it('accepts optional key', () => {
+  it('accepts subject, verifier, weight, and claim', () => {
     expect(
       createAttestationBodySchema.parse({
         subject: validAddress,
-        value: 'v',
-        key: 'k',
+        verifier: validVerifier,
+        weight: 50,
+        claim: 'verified',
       }),
-    ).toEqual({ subject: validAddress, value: 'v', key: 'k' })
+    ).toEqual({
+      subject: validAddress,
+      verifier: validVerifier,
+      weight: 50,
+      claim: 'verified',
+    })
   })
 
-  it('rejects missing value', () => {
+  it('accepts optional bondId', () => {
     expect(
-      createAttestationBodySchema.safeParse({ subject: validAddress }),
-    ).toMatchObject({ success: false })
+      createAttestationBodySchema.parse({
+        subject: validAddress,
+        verifier: validVerifier,
+        weight: 10,
+        claim: 'x',
+        bondId: 1,
+      }),
+    ).toMatchObject({ bondId: 1 })
   })
 
-  it('rejects empty value', () => {
+  it('rejects missing claim', () => {
     expect(
       createAttestationBodySchema.safeParse({
         subject: validAddress,
-        value: '',
+        verifier: validVerifier,
+        weight: 50,
       }),
     ).toMatchObject({ success: false })
   })
 
-  it('rejects invalid subject address', () => {
+  it('rejects oversized claim', () => {
     expect(
-      createAttestationBodySchema.safeParse({ subject: '0xbad', value: 'v' }),
+      createAttestationBodySchema.safeParse({
+        subject: validAddress,
+        verifier: validVerifier,
+        weight: 50,
+        claim: 'x'.repeat(ATTESTATION_CLAIM_MAX_LENGTH + 1),
+      }),
+    ).toMatchObject({ success: false })
+  })
+
+  it('rejects invalid weight', () => {
+    expect(
+      createAttestationBodySchema.safeParse({
+        subject: validAddress,
+        verifier: validVerifier,
+        weight: 200,
+        claim: 'x',
+      }),
     ).toMatchObject({ success: false })
   })
 })

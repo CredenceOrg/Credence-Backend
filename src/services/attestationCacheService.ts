@@ -5,7 +5,7 @@
 
 import { AttestationsRepository, Attestation } from '../db/repositories/attestationsRepository.js'
 import { cache } from '../cache/redis.js'
-import { invalidateCache, createCacheKey } from '../cache/invalidation.js'
+import { invalidateCache, invalidatePattern, createCacheKey } from '../cache/invalidation.js'
 
 const ATTESTATION_CACHE_TTL = 300 // 5 minutes
 
@@ -59,6 +59,39 @@ export class AttestationCacheService {
   }
 
   /**
+   * Get paginated attestations by subject with read-through caching.
+   */
+  async getAttestationsBySubjectPaginated(
+    subjectAddress: string,
+    options: { offset: number; limit: number },
+  ): Promise<{ rows: Attestation[]; total: number }> {
+    const cacheKey = createCacheKey(
+      'subject',
+      subjectAddress,
+      'offset',
+      options.offset,
+      'limit',
+      options.limit,
+    )
+    const cached = await cache.get<{ rows: Attestation[]; total: number }>('attestation', cacheKey)
+
+    if (cached) {
+      return {
+        rows: cached.rows.map((a) => ({
+          ...a,
+          createdAt: new Date(a.createdAt),
+        })),
+        total: cached.total,
+      }
+    }
+
+    const result = await this.repository.listBySubjectPaginated(subjectAddress, options)
+    await cache.set('attestation', cacheKey, result, ATTESTATION_CACHE_TTL)
+
+    return result
+  }
+
+  /**
    * Get attestations by bond ID with caching.
    */
   async getAttestationsByBond(bondId: number): Promise<Attestation[]> {
@@ -103,17 +136,21 @@ export class AttestationCacheService {
   }
 
   /**
+   * Invalidate list caches after an attestation is persisted elsewhere.
+   */
+  async invalidateAfterCreate(attestation: Attestation): Promise<void> {
+    await Promise.all([
+      invalidatePattern('attestation', `subject:${attestation.subjectAddress}`),
+      invalidateCache('attestation', createCacheKey('bond', attestation.bondId)),
+    ])
+  }
+
+  /**
    * Create attestation with cache invalidation for related queries.
    */
   async createAttestation(input: Parameters<AttestationsRepository['create']>[0]): Promise<Attestation> {
     const attestation = await this.repository.create(input)
-    
-    // Invalidate subject and bond-based caches since lists changed
-    await Promise.all([
-      invalidateCache('attestation', createCacheKey('subject', attestation.subjectAddress)),
-      invalidateCache('attestation', createCacheKey('bond', attestation.bondId))
-    ])
-    
+    await this.invalidateAfterCreate(attestation)
     return attestation
   }
 }

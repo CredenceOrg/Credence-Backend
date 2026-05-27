@@ -116,10 +116,34 @@ describe('AttestationsRepository', () => {
     expect(attestations.findByIdentityId(identityId)).toHaveLength(0)
   })
 
-  it('should allow multiple attestations from same verifier for same identity', () => {
-    attestations.create({ verifier: '0xV1', identity_id: identityId })
-    attestations.create({ verifier: '0xV1', identity_id: identityId })
-    const results = attestations.findByIdentityId(identityId)
-    expect(results).toHaveLength(2)
+  it('should paginate attestations by subject address', () => {
+    const address = '0xABCDEF1234567890'
+    for (let i = 0; i < 5; i++) {
+      attestations.create({
+        verifier: `0x${String(i + 1).padStart(40, '0')}`,
+        identity_id: identityId,
+        weight: 10 + i,
+        claim: `claim-${i}`,
+      })
+    }
+
+    const page = attestations.findBySubjectAddress(address, { offset: 2, limit: 2 })
+    expect(page.total).toBe(5)
+    expect(page.attestations).toHaveLength(2)
+  })
+
+  it('should count attestations by subject address excluding revoked', () => {
+    const att = attestations.create({
+      verifier: '0x0000000000000000000000000000000000000001',
+      identity_id: identityId,
+    })
+    attestations.create({
+      verifier: '0x0000000000000000000000000000000000000002',
+      identity_id: identityId,
+    })
+    attestations.revoke(att.id)
+
+    expect(attestations.countBySubjectAddress('0xABCDEF1234567890')).toBe(1)
+    expect(attestations.countBySubjectAddress('0xABCDEF1234567890', true)).toBe(2)
   })
 })

@@ -21,6 +21,7 @@ export enum ErrorCode {
   VALUE_TOO_LARGE = 'value_too_large',
   UNEXPECTED_FIELD = 'unexpected_field',
   INVALID_TYPE = 'invalid_type',
+  CONFLICT = 'conflict',
 }
 
 /**
@@ -94,5 +95,14 @@ export class ForbiddenError extends AppError {
 export class ServiceUnavailableError extends AppError {
   constructor(message: string = 'Service temporarily unavailable') {
     super(message, ErrorCode.SERVICE_UNAVAILABLE, 503)
+  }
+}
+
+/**
+ * Specific error for resource conflicts (e.g. duplicate or already revoked).
+ */
+export class ConflictError extends AppError {
+  constructor(message: string, details?: unknown) {
+    super(message, ErrorCode.CONFLICT, 409, details)
   }
 }

@@ -11,6 +11,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { decodeCursor, encodeCursor } from '../lib/pagination.js';
+import { normalizeAddress } from '../lib/address.js';
 
 import type {
   Attestation,
@@ -54,8 +55,8 @@ export class AttestationRepository {
 
     const attestation: Attestation = {
       id: randomUUID(),
-      subject: params.subject,
-      verifier: params.verifier,
+      subject: normalizeAddress(params.subject),
+      verifier: normalizeAddress(params.verifier),
       weight: params.weight,
       claim: params.claim,
       createdAt: new Date().toISOString(),
@@ -94,7 +95,8 @@ export class AttestationRepository {
   ): { attestations: Attestation[]; total: number; hasNextPage: boolean; nextCursor?: string } {
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
 
-    let results = this.store.filter((a) => a.subject === subject);
+    const normalizedSubject = normalizeAddress(subject);
+    let results = this.store.filter((a) => a.subject === normalizedSubject);
 
     if (!includeRevoked) {
       results = results.filter((a) => a.revokedAt === null);
@@ -142,9 +144,10 @@ export class AttestationRepository {
    * @param includeRevoked - Whether to include revoked attestations (default `false`).
    */
   countBySubject(subject: string, includeRevoked = false): number {
+    const normalizedSubject = normalizeAddress(subject);
     return this.store.filter(
       (a) =>
-        a.subject === subject &&
+        a.subject === normalizedSubject &&
         (includeRevoked || a.revokedAt === null),
     ).length;
   }

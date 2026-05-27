@@ -16,9 +16,13 @@ export {
   type BondQuery,
 } from './bond.js'
 export {
+  attestationIdentityParamsSchema,
+  attestationListQuerySchema,
   attestationsPathParamsSchema,
   attestationsQuerySchema,
   createAttestationBodySchema,
+  ATTESTATION_CLAIM_MAX_LENGTH,
+  type AttestationIdentityParams,
   type AttestationsPathParams,
   type AttestationsQuery,
   type CreateAttestationBody,

@@ -21,6 +21,7 @@ export function runMigrations(db: Database.Database): void {
       id          INTEGER PRIMARY KEY AUTOINCREMENT,
       verifier    TEXT    NOT NULL,
       identity_id INTEGER NOT NULL,
+      claim       TEXT,
       timestamp   TEXT    NOT NULL DEFAULT (datetime('now')),
       weight      REAL    NOT NULL DEFAULT 1.0,
       revoked     INTEGER NOT NULL DEFAULT 0,

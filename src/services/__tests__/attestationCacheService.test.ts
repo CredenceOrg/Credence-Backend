@@ -20,7 +20,8 @@ vi.mock('../../cache/invalidation.js', async () => {
   const actual = await vi.importActual('../../cache/invalidation.js')
   return {
     ...actual,
-    invalidateCache: vi.fn()
+    invalidateCache: vi.fn(),
+    invalidatePattern: vi.fn(),
   }
 })
 
@@ -154,18 +155,13 @@ describe('AttestationCacheService', () => {
       const result = await service.createAttestation(input)
 
       expect(mockRepository.create).toHaveBeenCalledWith(input)
-      expect(invalidation.invalidateCache).toHaveBeenCalledTimes(2)
-      
-      // Verify subject list cache invalidation
-      expect(invalidation.invalidateCache).toHaveBeenCalledWith(
+      expect(invalidation.invalidatePattern).toHaveBeenCalledWith(
         'attestation',
-        'subject:0x123'
+        `subject:${mockAttestation.subjectAddress}`,
       )
-      
-      // Verify bond list cache invalidation
       expect(invalidation.invalidateCache).toHaveBeenCalledWith(
         'attestation',
-        'bond:10'
+        'bond:10',
       )
       
       expect(result).toEqual(mockAttestation)

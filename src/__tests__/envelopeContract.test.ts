@@ -192,7 +192,7 @@ describe('Response envelope contract — /api/attestations', () => {
   })
 
   it('count 200: { identity: string, count: number, includeRevoked: boolean }', async () => {
-    const { status, body } = await req(app, 'GET', `${BASE}/0xAlice/count`)
+    const { status, body } = await req(app, 'GET', `${BASE}/0x742d35Cc6634C0532925a3b844Bc454e4438f44e/count`)
     expect(status).toBe(200)
     expect(typeof body.identity).toBe('string')
     expect(typeof body.count).toBe('number')
@@ -200,7 +200,7 @@ describe('Response envelope contract — /api/attestations', () => {
   })
 
   it('list 200: { identity: string, attestations: array, page, limit, total, hasNext }', async () => {
-    const { status, body } = await req(app, 'GET', `${BASE}/0xAlice`)
+    const { status, body } = await req(app, 'GET', `${BASE}/0x742d35Cc6634C0532925a3b844Bc454e4438f44e`)
     expect(status).toBe(200)
     expect(typeof body.identity).toBe('string')
     expect(Array.isArray(body.attestations)).toBe(true)
@@ -212,7 +212,7 @@ describe('Response envelope contract — /api/attestations', () => {
   })
 
   it('list pagination fields: page >= 1, limit >= 1, total >= 0', async () => {
-    const { body } = await req(app, 'GET', `${BASE}/0xAlice`)
+    const { body } = await req(app, 'GET', `${BASE}/0x742d35Cc6634C0532925a3b844Bc454e4438f44e`)
     expect(body.page as number).toBeGreaterThanOrEqual(1)
     expect(body.limit as number).toBeGreaterThanOrEqual(1)
     expect(body.total as number).toBeGreaterThanOrEqual(0)
@@ -220,8 +220,8 @@ describe('Response envelope contract — /api/attestations', () => {
 
   it('create 201: returns created attestation with id, subject, verifier, weight', async () => {
     const { status, body } = await req(app, 'POST', BASE, {
-      subject: '0xAlice',
-      verifier: '0xBob',
+      subject: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+      verifier: '0x1234567890123456789012345678901234567890',
       weight: 75,
       claim: 'trusted',
     })
@@ -232,22 +232,24 @@ describe('Response envelope contract — /api/attestations', () => {
     expect(typeof body.weight).toBe('number')
   })
 
-  it('create missing subject: still returns { error: string } error envelope', async () => {
-    // The repo throws a plain Error (not ValidationError), so the error handler
-    // returns 500; the envelope shape { error, code } is still contractually stable.
-    const { body } = await req(app, 'POST', BASE, {
-      verifier: '0xBob',
+  it('create missing subject: returns { error: string } validation envelope', async () => {
+    const { status, body } = await req(app, 'POST', BASE, {
+      verifier: '0x1234567890123456789012345678901234567890',
       weight: 50,
+      claim: 'trusted',
     })
+    expect(status).toBe(400)
     expectErrorEnvelope(body)
   })
 
-  it('create invalid weight (>100): still returns { error: string } error envelope', async () => {
-    const { body } = await req(app, 'POST', BASE, {
-      subject: '0xAlice',
-      verifier: '0xBob',
+  it('create invalid weight (>100): returns { error: string } validation envelope', async () => {
+    const { status, body } = await req(app, 'POST', BASE, {
+      subject: '0x742d35Cc6634C0532925a3b844Bc454e4438f44e',
+      verifier: '0x1234567890123456789012345678901234567890',
       weight: 999,
+      claim: 'trusted',
     })
+    expect(status).toBe(400)
     expectErrorEnvelope(body)
   })
 

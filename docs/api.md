@@ -274,6 +274,87 @@ curl http://localhost:3000/api/bond/not-an-address
 
 ---
 
+### `GET /api/attestations/:identity`
+
+Returns paginated attestations for an identity address.
+
+```
+GET /api/attestations/:identity?page=1&limit=20
+```
+
+**Query parameters**
+
+| Parameter        | Type    | Default | Description                              |
+| ---------------- | ------- | ------- | ---------------------------------------- |
+| `page`           | integer | `1`     | 1-based page number                      |
+| `limit`          | integer | `20`    | Page size (max `100`)                    |
+| `includeRevoked` | boolean | `false` | Include revoked attestations when `true` |
+
+**Response `200`**
+
+```json
+{
+  "identity": "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+  "attestations": [
+    {
+      "id": "1",
+      "subject": "0x742d35cc6634c0532925a3b844bc454e4438f44e",
+      "verifier": "0x0000000000000000000000000000000000000001",
+      "weight": 75,
+      "claim": "Identity verified",
+      "createdAt": "2024-01-15T10:30:00.000Z",
+      "revokedAt": null
+    }
+  ],
+  "page": 1,
+  "limit": 20,
+  "total": 1,
+  "hasNext": false
+}
+```
+
+---
+
+### `POST /api/attestations`
+
+Creates a new attestation and emits an `attestation.created` outbox event.
+
+**Request body**
+
+| Field      | Type    | Required | Description                                      |
+| ---------- | ------- | -------- | ------------------------------------------------ |
+| `subject`  | string  | yes      | Ethereum or Stellar address being attested       |
+| `verifier` | string  | yes      | Address of the attesting party                   |
+| `weight`   | integer | yes      | Confidence score `0–100`                         |
+| `claim`    | string  | yes      | Attestation content (max 4096 characters)        |
+| `bondId`   | integer | no       | Bond to attach to; resolved automatically if omitted |
+
+**Response `201`**
+
+Returns the created attestation record.
+
+**Errors**
+
+| Status | Condition                                      |
+| ------ | ---------------------------------------------- |
+| `400`  | Validation failed (invalid address, oversized claim) |
+| `409`  | Duplicate attestation for bond/verifier/subject |
+
+**Example**
+
+```bash
+curl -X POST http://localhost:3000/api/attestations \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "subject": "0x742d35Cc6634C0532925a3b844Bc454e4438f44e",
+    "verifier": "0x8ba1f109551bD432803012645Ac136c22C177e9",
+    "weight": 75,
+    "claim": "Identity verified"
+  }'
+```
+
+---
+
 ## Error format
 
 All errors follow this shape:
