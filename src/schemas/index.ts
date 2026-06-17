@@ -19,8 +19,13 @@ export {
 export {
   bondPathParamsSchema,
   bondQuerySchema,
+  createBondBodySchema,
+  bondResponseSchema,
+  bondErrorSchema,
   type BondPathParams,
   type BondQuery,
+  type CreateBondBody,
+  type BondResponse,
 } from "./bond.js";
 export {
   attestationsPathParamsSchema,

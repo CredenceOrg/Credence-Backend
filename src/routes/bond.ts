@@ -50,5 +50,14 @@ export function createBondRouter(bondService: BondService): Router {
     })
   })
 
+  /**
+   * POST /api/bond
+   *
+   * Creates or tops up a bond. Stub — full implementation pending on-chain write layer.
+   */
+  router.post('/', (_req: Request, res: Response) => {
+    res.status(501).json({ error: 'Not implemented' })
+  })
+
   return router
 }

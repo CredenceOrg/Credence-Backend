@@ -328,29 +328,90 @@ components:
             type: optional
       type: object
     bondPathParamsSchema:
-      def:
-        type: object
-        shape:
-          address:
-            def:
-              type: string
-              checks:
-                - {}
-                - {}
-            type: string
-            format: null
-            minLength: 1
-            maxLength: null
       type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Ethereum (0x…) or Stellar (G…) wallet address
+          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+      required:
+        - address
     bondQuerySchema:
-      def:
-        type: object
-        shape: {}
-        catchall:
-          def:
-            type: never
-          type: never
       type: object
+      additionalProperties: false
+    BondResponse:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Normalised (lower-case) wallet address
+          example: "0x742d35cc6634c0532925a3b844bc454e4438f44e"
+        bondedAmount:
+          type: string
+          description: Current bonded amount as a string
+          example: "1000000000000000000"
+        bondStart:
+          type: string
+          nullable: true
+          description: ISO 8601 timestamp when the bond was first posted, or null
+          example: "2024-01-15T10:00:00.000Z"
+        bondDuration:
+          type: number
+          nullable: true
+          description: Bond lock duration in seconds, or null if unbonded
+          example: 2592000
+        active:
+          type: boolean
+          description: "Deprecated: use status instead"
+          example: true
+        slashedAmount:
+          type: string
+          description: Cumulative slashed amount as a string
+          example: "0"
+        status:
+          type: string
+          enum: [active, slashed, inactive, unbonded]
+          description: Canonical bond lifecycle status
+          example: active
+      required:
+        - address
+        - bondedAmount
+        - bondStart
+        - bondDuration
+        - active
+        - slashedAmount
+        - status
+    CreateBondBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Wallet address to associate the bond with
+          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+        bondedAmount:
+          type: string
+          minLength: 1
+          description: Amount to bond, expressed as a string to preserve precision (e.g. wei)
+          example: "1000000000000000000"
+        bondDuration:
+          type: integer
+          minimum: 1
+          description: Bond lock duration in seconds
+          example: 2592000
+      required:
+        - address
+        - bondedAmount
+        - bondDuration
+    BondError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: "No bond record found for address 0x…"
+      required:
+        - error
     createAttestationBodySchema:
       def:
         type: object
@@ -864,4 +925,63 @@ components:
             format: safeint
       type: object
   parameters: {}
-paths: {}
+paths:
+  /api/bond/{address}:
+    get:
+      tags:
+        - Bond
+      summary: Get bond status
+      description: Returns the current bond status and lifecycle state for a wallet address.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+            minLength: 1
+          description: Ethereum (0x…) or Stellar (G…) wallet address
+          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+      responses:
+        "200":
+          description: Bond record found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondResponse"
+        "400":
+          description: Invalid address format
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondError"
+        "404":
+          description: No bond record for this address
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondError"
+  /api/bond:
+    post:
+      tags:
+        - Bond
+      summary: Create or top-up a bond
+      description: Creates a new bond or tops up an existing one for the given wallet address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBondBody"
+      responses:
+        "201":
+          description: Bond created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondError"

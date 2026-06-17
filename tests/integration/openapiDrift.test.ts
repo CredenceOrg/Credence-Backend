@@ -12,9 +12,10 @@ describe('OpenAPI Contract Drift', () => {
     scriptPath = path.resolve(__dirname, '../../scripts/openapi-drift.js');
   });
 
-  it.skip('should pass when routes and spec are in sync', () => {
-    // Skipped until OpenAPI spec is created
-    expect(true).toBe(true);
+  it('should pass when routes and spec are in sync', () => {
+    expect(fs.existsSync(path.resolve(__dirname, '../../docs/openapi.yaml'))).toBe(true);
+    const result = execSync(`node ${scriptPath}`, { encoding: 'utf-8', stdio: 'pipe' });
+    expect(result).toContain('No OpenAPI contract drift');
   });
 
   it('should fail on route additions/removals or schema drift', () => {
