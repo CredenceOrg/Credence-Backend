@@ -2,7 +2,7 @@
 
 ## Overview
 
-The evidence upload endpoint (`POST /api/evidence/upload`) has been security-hardened to prevent denial-of-service attacks and storage abuse. All validation occurs at the edge before bytes are persisted to storage.
+The evidence upload endpoint (`POST /api/evidence/upload`) has been security-hardened to prevent denial-of-service attacks and storage abuse. All validation occurs at the edge before bytes are persisted to storage. This includes explicit upload limits, MIME and extension allow-listing, and content sniffing.
 
 ## Security Measures
 

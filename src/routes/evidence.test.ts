@@ -19,6 +19,7 @@ import request from 'supertest'
 import express from 'express'
 import evidenceRouter from './evidence.js'
 import { evidenceUploadRejectedTotal, evidenceUploadAcceptedTotal } from './evidence.js'
+import { EvidenceStorageService } from '../services/evidence/storage.js'
 
 // Mock auth middleware to bypass authentication
 vi.mock('../middleware/auth.js', () => ({
@@ -47,25 +48,27 @@ vi.mock('../services/audit/index.js', () => ({
 
 // Mock storage service
 vi.mock('../services/evidence/storage.js', () => ({
-  EvidenceStorageService: vi.fn().mockImplementation(() => ({
-    uploadEvidence: vi.fn().mockResolvedValue({
-      evidence_id: 'test-id',
-      encryptedBlob: 'encrypted',
-      iv: 'iv',
-      authTag: 'tag',
-      wrappedDek: 'wrapped',
-      wrappedDekIv: 'wrapped-iv',
-      wrappedDekAuthTag: 'wrapped-tag',
-      uploaderId: 'test-user-id',
-      tenantId: 'test-tenant-id',
-      createdAt: new Date(),
-      kek_version: 1,
-      deletedAt: null,
-      legalHold: false,
-      shreddedAt: null,
-    }),
-    retrieveEvidence: vi.fn().mockResolvedValue('decrypted'),
-  })),
+  EvidenceStorageService: vi.fn(function () {
+    return {
+      uploadEvidence: vi.fn().mockResolvedValue({
+        evidence_id: 'test-id',
+        encryptedBlob: 'encrypted',
+        iv: 'iv',
+        authTag: 'tag',
+        wrappedDek: 'wrapped',
+        wrappedDekIv: 'wrapped-iv',
+        wrappedDekAuthTag: 'wrapped-tag',
+        uploaderId: 'test-user-id',
+        tenantId: 'test-tenant-id',
+        createdAt: new Date(),
+        kek_version: 1,
+        deletedAt: null,
+        legalHold: false,
+        shreddedAt: null,
+      }),
+      retrieveEvidence: vi.fn().mockResolvedValue('decrypted'),
+    }
+  }),
   evidenceDB: new Map(),
 }))
 
@@ -134,8 +137,10 @@ function textBuffer(content: string = 'test'): Buffer {
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+  process.env.EVIDENCE_ENCRYPTION_KEY = 'a'.repeat(32)
   evidenceUploadRejectedTotal.reset()
   evidenceUploadAcceptedTotal.reset()
+  vi.clearAllMocks()
 })
 
 // ===========================================================================
@@ -336,11 +341,22 @@ describe('POST /api/evidence/upload — extension validation', () => {
 // ===========================================================================
 
 describe('POST /api/evidence/upload — magic number validation', () => {
-  it('skips magic number validation tests (not available in fileFilter with memory storage)', async () => {
-    // Magic number validation requires file buffer which may not be available
-    // in the fileFilter stage with memory storage. This is a known limitation.
-    // In production, consider using disk storage or post-processing validation.
-    expect(true).toBe(true)
+  it('rejects files whose content does not match declared MIME type', async () => {
+    const app = createApp()
+    const res = await request(app)
+      .post('/api/evidence/upload')
+      .attach('files', spoofedJpegBuffer(), { filename: 'spoofed.jpg', contentType: 'image/jpeg' })
+
+    expect(res.status).toBe(400)
+    expect(res.body).toMatchObject({
+      error: 'BadRequest',
+      code: 'ContentMismatch',
+    })
+    expect(res.body.message).toContain('declared MIME type image/jpeg')
+    expect(EvidenceStorageService).not.toHaveBeenCalled()
+
+    const metric = await evidenceUploadRejectedTotal.get()
+    expect(metric.values.find((v: any) => v.labels.reason === 'magic_number_mismatch')?.value).toBe(1)
   })
 })
 
@@ -373,10 +389,14 @@ describe('POST /api/evidence/upload — no files', () => {
 
 describe('POST /api/evidence/upload — metrics', () => {
   it('increments accepted metric on successful upload', async () => {
-    // This test would require proper auth setup to actually succeed
-    // For now, we just verify the metric exists and can be incremented
-    evidenceUploadAcceptedTotal.inc()
-    
+    const app = createApp()
+    const res = await request(app)
+      .post('/api/evidence/upload')
+      .attach('files', jpegBuffer(), { filename: 'test.jpg', contentType: 'image/jpeg' })
+
+    expect(res.status).toBe(201)
+    expect(res.body).toMatchObject({ evidence_id: 'test-id' })
+
     const metric = await evidenceUploadAcceptedTotal.get()
     expect(metric.values[0]?.value).toBe(1)
   })

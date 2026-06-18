@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import multer from 'multer'
 import client from 'prom-client'
@@ -98,8 +99,17 @@ function evidenceFileFilter(
   file: Express.Multer.File,
   cb: multer.FileFilterCallback
 ): void {
-  const ext = file.originalname.slice(file.originalname.lastIndexOf('.')).toLowerCase()
+  const ext = path.extname(file.originalname).toLowerCase()
   
+  if (!ext) {
+    evidenceUploadRejectedTotal.inc({ reason: 'invalid_extension' })
+    const err = Object.assign(new Error('File extension is required.'), {
+      code: 'INVALID_EXTENSION',
+    }) as Error & { code: string }
+    cb(err)
+    return
+  }
+
   // Check extension
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     evidenceUploadRejectedTotal.inc({ reason: 'invalid_extension' })
@@ -119,23 +129,54 @@ function evidenceFileFilter(
     cb(err)
     return
   }
-  
-  // Perform magic-number validation if we have a signature for this MIME type
-  if (file.buffer && MAGIC_NUMBERS[file.mimetype]) {
-    const signature = MAGIC_NUMBERS[file.mimetype]
-    const fileHeader = file.buffer.slice(0, signature.length)
-    
-    if (!fileHeader.equals(signature)) {
-      evidenceUploadRejectedTotal.inc({ reason: 'magic_number_mismatch' })
-      const err = Object.assign(new Error(`File content does not match declared MIME type ${file.mimetype}`), {
-        code: 'MAGIC_NUMBER_MISMATCH',
-      }) as Error & { code: string }
-      cb(err)
+
+  cb(null, true)
+}
+
+function validateEvidenceFiles(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const files = req.files as Express.Multer.File[] | undefined
+
+  if (!files || files.length === 0) {
+    evidenceUploadRejectedTotal.inc({ reason: 'no_files' })
+    res.status(400).json({
+      error: 'BadRequest',
+      code: 'NoFiles',
+      message: 'At least one file is required in the "files" field.',
+    })
+    return
+  }
+
+  for (const file of files) {
+    if (!file.buffer || file.buffer.length === 0) {
+      evidenceUploadRejectedTotal.inc({ reason: 'empty_file' })
+      res.status(400).json({
+        error: 'BadRequest',
+        code: 'EmptyFile',
+        message: `File ${file.originalname} is empty and must contain evidence content.`,
+      })
       return
     }
+
+    const signature = MAGIC_NUMBERS[file.mimetype]
+    if (signature) {
+      const fileHeader = file.buffer.slice(0, signature.length)
+      if (!fileHeader.equals(signature)) {
+        evidenceUploadRejectedTotal.inc({ reason: 'magic_number_mismatch' })
+        res.status(400).json({
+          error: 'BadRequest',
+          code: 'ContentMismatch',
+          message: `File content does not match declared MIME type ${file.mimetype}`,
+        })
+        return
+      }
+    }
   }
-  
-  cb(null, true)
+
+  next()
 }
 
 /**
@@ -242,6 +283,7 @@ router.post(
       next()
     })
   },
+  validateEvidenceFiles,
   async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest
     const actor = authReq.user!
