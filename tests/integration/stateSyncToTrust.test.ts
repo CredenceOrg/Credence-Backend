@@ -17,6 +17,11 @@ vi.mock('../../src/db/pool.js', () => ({
   workerPool: {
     query: (text: string, params?: any[]) => db.pool.query(text, params),
     on: vi.fn(),
+  },
+  withReplica: async (operation: any) => {
+    return await operation({
+      query: (text: string, params?: any[]) => db.pool.query(text, params),
+    })
   }
 }))
 
@@ -235,7 +240,7 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache -> API', (
 
     // 3. Verify score via API
      const response = await request(app)
-    .get(`/api/trust/${address}`)
+    .get(`/api/trust/${subject}`)
     .set('x-api-key', 'test-api-key')
     .set('x-tenant-id', 'test-tenant')
   

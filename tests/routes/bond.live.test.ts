@@ -9,6 +9,14 @@ function createApp() {
   const service = new BondService(store)
   const app = express()
   app.use('/api/bond', createBondRouter(service))
+  app.use((err: any, req: any, res: any, next: any) => {
+    res.status(err.status || 500).json({
+      error: err.message,
+      code: err.code,
+      error_code: err.code,
+      details: err.details,
+    })
+  })
   return { app, store }
 }
 
@@ -21,7 +29,7 @@ describe('Bond route integration', () => {
     )
 
     expect(res.status).toBe(404)
-    expect(res.body.error).toMatch(/No bond record found/)
+    expect(res.body.error).toMatch(/not found/i)
   })
 
   it('returns 400 for an invalid bond address', async () => {
@@ -30,6 +38,7 @@ describe('Bond route integration', () => {
     const res = await request(app).get('/api/bond/not-an-address')
 
     expect(res.status).toBe(400)
-    expect(res.body.error).toContain('Invalid address format')
+    expect(res.body.error).toContain('Validation failed')
+    expect(res.body.error_code).toBe('validation_failed')
   })
 })

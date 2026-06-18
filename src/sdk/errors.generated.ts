@@ -30,13 +30,17 @@ const DEFAULT_MESSAGES = {
   'value_too_large': "The request contains a value above the allowed maximum",
   'unexpected_field': "The request contains an unexpected field",
   'invalid_type': "The request contains a field with an invalid type",
+  'invalid_stellar_address': "The request contains an invalid Stellar address",
   'batch_size_too_small': "The batch size is below the allowed minimum",
   'batch_size_exceeded': "The batch size exceeds the allowed maximum",
   'unauthorized': "Authentication is required",
   'forbidden': "The authenticated caller is not allowed to perform this action",
   'not_found': "The requested resource was not found",
   'conflict': "The request conflicts with the current resource state",
+  'idempotency_key_mismatch': "Idempotency key is already bound to a different actor or payload",
+  'insufficient_credits': "Monthly credit budget exhausted",
   'insufficient_funds': "The account has insufficient funds for this operation",
+  'invalid_dispute_transition': "Invalid dispute state transition",
   'rate_limit_exceeded': "Rate limit exceeded",
   'internal_server_error': "An unexpected internal server error occurred",
   'service_unavailable': "Service temporarily unavailable",
@@ -234,6 +238,20 @@ export class InvalidTypeCredenceError extends CredenceError {
   }
 }
 
+export class InvalidStellarAddressCredenceError extends CredenceError {
+  static readonly errorCode = 'invalid_stellar_address' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['invalid_stellar_address'],
+    status: number = 400,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'invalid_stellar_address', status, details, options)
+    this.name = 'InvalidStellarAddressCredenceError'
+  }
+}
+
 export class BatchSizeTooSmallCredenceError extends CredenceError {
   static readonly errorCode = 'batch_size_too_small' as const
 
@@ -318,6 +336,34 @@ export class ConflictCredenceError extends CredenceError {
   }
 }
 
+export class IdempotencyKeyMismatchCredenceError extends CredenceError {
+  static readonly errorCode = 'idempotency_key_mismatch' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['idempotency_key_mismatch'],
+    status: number = 409,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'idempotency_key_mismatch', status, details, options)
+    this.name = 'IdempotencyKeyMismatchCredenceError'
+  }
+}
+
+export class InsufficientCreditsCredenceError extends CredenceError {
+  static readonly errorCode = 'insufficient_credits' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['insufficient_credits'],
+    status: number = 402,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'insufficient_credits', status, details, options)
+    this.name = 'InsufficientCreditsCredenceError'
+  }
+}
+
 export class InsufficientFundsCredenceError extends CredenceError {
   static readonly errorCode = 'insufficient_funds' as const
 
@@ -329,6 +375,20 @@ export class InsufficientFundsCredenceError extends CredenceError {
   ) {
     super(message, 'insufficient_funds', status, details, options)
     this.name = 'InsufficientFundsCredenceError'
+  }
+}
+
+export class InvalidDisputeTransitionCredenceError extends CredenceError {
+  static readonly errorCode = 'invalid_dispute_transition' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['invalid_dispute_transition'],
+    status: number = 422,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'invalid_dispute_transition', status, details, options)
+    this.name = 'InvalidDisputeTransitionCredenceError'
   }
 }
 
@@ -456,13 +516,17 @@ export const CREDENCE_ERROR_REGISTRY = {
   'value_too_large': ValueTooLargeCredenceError,
   'unexpected_field': UnexpectedFieldCredenceError,
   'invalid_type': InvalidTypeCredenceError,
+  'invalid_stellar_address': InvalidStellarAddressCredenceError,
   'batch_size_too_small': BatchSizeTooSmallCredenceError,
   'batch_size_exceeded': BatchSizeExceededCredenceError,
   'unauthorized': UnauthorizedCredenceError,
   'forbidden': ForbiddenCredenceError,
   'not_found': NotFoundCredenceError,
   'conflict': ConflictCredenceError,
+  'idempotency_key_mismatch': IdempotencyKeyMismatchCredenceError,
+  'insufficient_credits': InsufficientCreditsCredenceError,
   'insufficient_funds': InsufficientFundsCredenceError,
+  'invalid_dispute_transition': InvalidDisputeTransitionCredenceError,
   'rate_limit_exceeded': RateLimitExceededCredenceError,
   'internal_server_error': InternalServerErrorCredenceError,
   'service_unavailable': ServiceUnavailableCredenceError,

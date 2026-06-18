@@ -20,6 +20,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `unauthorized` | 401 | authentication | Authentication is required |
 | `forbidden` | 403 | authorization | The authenticated caller is not allowed to perform this action |
 | `insufficient_credits` | 402 | business | Monthly credit budget exhausted |
+| `idempotency_key_mismatch` | 409 | business | Idempotency key is already bound to a different actor or payload |
 | `insufficient_funds` | 422 | business | The account has insufficient funds for this operation |
 | `invalid_dispute_transition` | 422 | business | Invalid dispute state transition |
 | `rate_limit_exceeded` | 429 | rate_limit | Rate limit exceeded |
@@ -31,6 +32,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `field_required` | 400 | validation | A required field is missing |
 | `invalid_address` | 400 | validation | The request contains an invalid address |
 | `invalid_format` | 400 | validation | The request contains a field with an invalid format |
+| `invalid_stellar_address` | 400 | validation | The request contains an invalid Stellar address |
 | `invalid_type` | 400 | validation | The request contains a field with an invalid type |
 | `unexpected_field` | 400 | validation | The request contains an unexpected field |
 | `validation_failed` | 400 | validation | Validation failed |
@@ -44,7 +46,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 
 | Locale | Coverage | Notes |
 | --- | ---: | --- |
-| `en` | 25 messages | Catalog default messages for active codes. |
+| `en` | 27 messages | Catalog default messages for active codes. |
 
 ## Deprecated codes
 

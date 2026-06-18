@@ -3,8 +3,8 @@ import { getTrustScore } from '../services/reputationService.js'
 import { PgTrustIdentityRepository } from '../db/repositories/trustIdentityRepository.js'
 import { pool, withReplica } from '../db/pool.js'
 import { apiKeyMiddleware } from '../middleware/apiKey.js'
-import { validate } from '../middleware/validate.js'
-import { trustPathParamsSchema } from '../schemas/index.js'
+import { validate, type ValidatedRequest } from '../middleware/validate.js'
+import { trustPathParamsSchema, type TrustPathParams } from '../schemas/index.js'
 import { NotFoundError } from '../lib/errors.js'
 import { createHash } from 'crypto'
 
@@ -20,7 +20,8 @@ router.get(
   apiKeyMiddleware,
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { address } = req.validated!.params! as { address: string }
+      const validatedReq = req as ValidatedRequest<TrustPathParams>
+      const { address } = validatedReq.validated.params
 
       const trustScore = await withReplica(async (client) => {
         const trustRepo = new PgTrustIdentityRepository(client)

@@ -115,6 +115,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The request contains a field with an invalid type',
     category: 'validation',
   },
+  INVALID_STELLAR_ADDRESS: {
+    code: 'invalid_stellar_address',
+    sdkClassName: 'InvalidStellarAddressCredenceError',
+    kind: 'api',
+    httpStatus: 400,
+    defaultMessage: 'The request contains an invalid Stellar address',
+    category: 'validation',
+  },
   BATCH_SIZE_TOO_SMALL: {
     code: 'batch_size_too_small',
     sdkClassName: 'BatchSizeTooSmallCredenceError',

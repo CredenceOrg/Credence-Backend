@@ -3,23 +3,30 @@ import type { ZodSchema, ZodError } from 'zod'
 import { ValidationError, ErrorCode } from '../lib/errors.js'
 
 /**
- * Validated request payload.
- * Attached to `req.validated` when validation passes.
+ * Validated request type that extends Express Request.
+ * Downstream handlers can use this type to get full type safety
+ * on req.validated, req.body, req.query, and req.params.
  */
 export interface ValidatedRequest<
-  TParams = unknown,
-  TQuery = unknown,
-  TBody = unknown,
-> {
-  params?: TParams
-  query?: TQuery
-  body?: TBody
+  TParams = any,
+  TQuery = any,
+  TBody = any,
+> extends Request<TParams, any, TBody, TQuery> {
+  validated: {
+    params: TParams
+    query: TQuery
+    body: TBody
+  }
 }
 
 declare global {
   namespace Express {
     interface Request {
-      validated?: ValidatedRequest
+      validated?: {
+        params?: any
+        query?: any
+        body?: any
+      }
     }
   }
 }
@@ -39,28 +46,42 @@ export interface ValidateOptions {
  * @param error - ZodError from schema.safeParse()
  * @returns Array of { path, message, code } for client consumption
  */
-function formatZodErrors(error: ZodError): Array<{ path: string; message: string; code: string }> {
+export function formatZodErrors(error: ZodError): Array<{ path: string; message: string; code: string }> {
   return error.issues.map((e) => {
     let code: ErrorCode = ErrorCode.VALIDATION_FAILED
+    const pathStr = e.path?.length ? e.path.join('.') : '(root)'
+    const lowerPath = pathStr.toLowerCase()
+    const lowerMessage = e.message.toLowerCase()
 
     switch (e.code) {
       case 'custom':
-        // Refinement errors from stellarAddressSchema carry this message
         if (e.message === 'INVALID_STELLAR_ADDRESS') {
           code = ErrorCode.INVALID_STELLAR_ADDRESS
+        } else if (lowerMessage.includes('stellar') && lowerMessage.includes('address')) {
+          code = ErrorCode.INVALID_STELLAR_ADDRESS
+        } else if (lowerPath.includes('address') || lowerMessage.includes('address')) {
+          code = ErrorCode.INVALID_ADDRESS
         }
         break
       case 'invalid_type':
-        // In Zod 4, the 'received' property is often missing from the issue object,
-        // so we check the message as a fallback to identify missing fields.
-        code = e.message.includes('received undefined')
-          ? ErrorCode.FIELD_REQUIRED
-          : ErrorCode.INVALID_TYPE
+        // If a required field is missing (value is undefined)
+        if ((e as any).received === 'undefined' || lowerMessage.includes('received undefined') || lowerMessage.includes('required')) {
+          code = ErrorCode.FIELD_REQUIRED
+        } else {
+          code = ErrorCode.INVALID_TYPE
+        }
         break
       case 'invalid_format':
-        code = (e.path.join('.').toLowerCase().includes('address') || e.message.toLowerCase().includes('address'))
-          ? ErrorCode.INVALID_ADDRESS
-          : ErrorCode.INVALID_FORMAT
+        // String format validations (email, uuid, etc.) in Zod 4
+        if (lowerPath.includes('address') || (lowerMessage.includes('address') && !lowerMessage.includes('email'))) {
+          code = ErrorCode.INVALID_ADDRESS
+        } else {
+          code = ErrorCode.INVALID_FORMAT
+        }
+        break
+      case 'invalid_value':
+        // Enum validation in Zod 4
+        code = ErrorCode.INVALID_TYPE
         break
       case 'too_small':
         code = ErrorCode.VALUE_TOO_SMALL
@@ -74,7 +95,7 @@ function formatZodErrors(error: ZodError): Array<{ path: string; message: string
     }
 
     return {
-      path: e.path?.length ? e.path.join('.') : '(root)',
+      path: pathStr,
       message: e.message,
       code,
     }
@@ -84,25 +105,27 @@ function formatZodErrors(error: ZodError): Array<{ path: string; message: string
 /**
  * Request validation middleware using Zod schemas.
  * Validates path params, query params, and/or body per route.
- * On success, assigns validated data to req.validated and calls next().
+ * On success, assigns validated data to req.validated and replaces
+ * req.params, req.query, and req.body with the parsed/coerced/stripped versions.
  * On failure, calls next(ValidationError).
  *
  * @param options - Optional schemas for params, query, and body. Omit a key to skip that source.
  * @returns Express middleware
  */
-export function validate<TParams = unknown, TQuery = unknown, TBody = unknown>(
+export function validate<TParams = any, TQuery = any, TBody = any>(
   options: ValidateOptions,
 ): (req: Request, res: Response, next: NextFunction) => void {
   const { params: paramsSchema, query: querySchema, body: bodySchema } = options
 
   return (req: Request, res: Response, next: NextFunction) => {
-    const validated: ValidatedRequest<TParams, TQuery, TBody> = {}
+    const validated: { params?: any; query?: any; body?: any } = {}
     const errors: Array<{ path: string; message: string; code: string }> = []
 
     if (paramsSchema) {
       const result = paramsSchema.safeParse(req.params)
       if (result.success) {
-        validated.params = result.data as TParams
+        validated.params = result.data
+        req.params = result.data as any
       } else {
         errors.push(...formatZodErrors(result.error))
       }
@@ -111,7 +134,8 @@ export function validate<TParams = unknown, TQuery = unknown, TBody = unknown>(
     if (querySchema) {
       const result = querySchema.safeParse(req.query)
       if (result.success) {
-        validated.query = result.data as TQuery
+        validated.query = result.data
+        req.query = result.data as any
       } else {
         errors.push(...formatZodErrors(result.error))
       }
@@ -120,19 +144,19 @@ export function validate<TParams = unknown, TQuery = unknown, TBody = unknown>(
     if (bodySchema) {
       const result = bodySchema.safeParse(req.body)
       if (result.success) {
-        validated.body = result.data as TBody
+        validated.body = result.data
+        req.body = result.data as any
       } else {
         errors.push(...formatZodErrors(result.error))
       }
     }
 
     if (errors.length > 0) {
-      // Throw ValidationError to be caught by global errorHandler
       next(new ValidationError('Validation failed', errors))
       return
     }
 
-    req.validated = validated
+    req.validated = validated as any
     next()
   }
 }
