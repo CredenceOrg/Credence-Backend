@@ -5,7 +5,13 @@ import {
   previewImportFile,
   IMPORT_PREVIEW_MAX_FILE_BYTES,
 } from '../services/importPreviewService.js'
-import { MappingPresetRepository, applyPresetToPreview } from '../services/imports/mapping.js'
+import { MappingPresetRepository, dryRunImportFile, type ImportDryRunResult } from '../services/imports/mapping.js'
+import {
+  commitImportFile,
+  isDryRunQuery,
+  type ImportCommitter,
+  PoolImportCommitter,
+} from '../services/imports/commit.js'
 import { pool } from '../db/pool.js'
 import { getTenantId } from '../utils/tenantContext.js'
 
@@ -91,9 +97,64 @@ function handleUploadError(
   next(err)
 }
 
-export function createImportsRouter(repo?: MappingPresetRepository): Router {
+function csvUploadMiddleware(req: Request, res: Response, next: NextFunction): void {
+  upload.single('file')(req, res, (err: unknown) => {
+    if (err !== undefined) {
+      handleUploadError(err, req, res, next)
+      return
+    }
+    next()
+  })
+}
+
+function requireUploadedFile(req: Request, res: Response): Buffer | null {
+  const file = req.file
+  if (!file?.buffer) {
+    res.status(400).json({
+      error: 'InvalidRequest',
+      code: 'MissingFile',
+      message: 'Multipart field "file" is required.',
+    })
+    return null
+  }
+  return file.buffer
+}
+
+function sendDryRunError(res: Response, result: Extract<ImportDryRunResult, { success: false }>): void {
+  res.status(result.status).json({
+    error: result.error,
+    code: result.code,
+    message: result.message,
+    ...(result.row !== undefined ? { row: result.row } : {}),
+  })
+}
+
+function sendDryRunSuccess(
+  res: Response,
+  result: Extract<ImportDryRunResult, { success: true }>,
+  preset?: {
+    id: string
+    name: string
+    version: number
+    columnMappings: Record<string, string>
+  },
+): void {
+  res.status(200).json({
+    valid: result.valid,
+    totalRows: result.totalRows,
+    errors: result.errors,
+    errorsTruncated: result.errorsTruncated,
+    ...(preset ? { preset } : {}),
+  })
+}
+
+export function createImportsRouter(
+  repo?: MappingPresetRepository,
+  committer?: ImportCommitter,
+): Router {
   const router = Router()
   const presetRepo = repo ?? new MappingPresetRepository(pool)
+  const importCommitter = committer ?? new PoolImportCommitter(pool)
 
   // -----------------------------------------------------------------------
   // POST /api/imports/preview — existing preview endpoint
@@ -191,6 +252,184 @@ export function createImportsRouter(repo?: MappingPresetRepository): Router {
         summary: result.summary,
         preview: result.preview,
         rowErrors: result.rowErrors,
+        preset: {
+          id: preset.id,
+          name: preset.name,
+          version: preset.version,
+          columnMappings: preset.columnMappings,
+        },
+      })
+    }
+  )
+
+  // -----------------------------------------------------------------------
+  // POST /api/imports/dry-run — validate CSV without persisting
+  // -----------------------------------------------------------------------
+  router.post(
+    '/dry-run',
+    requireApiKey(ApiScope.ENTERPRISE),
+    csvUploadMiddleware,
+    async (req: Request, res: Response) => {
+      const buffer = requireUploadedFile(req, res)
+      if (!buffer) return
+
+      const result = await dryRunImportFile(buffer)
+      if (!result.success) {
+        sendDryRunError(res, result)
+        return
+      }
+
+      sendDryRunSuccess(res, result)
+    }
+  )
+
+  // -----------------------------------------------------------------------
+  // POST /api/imports/dry-run/:presetId — dry-run with column mapping preset
+  // -----------------------------------------------------------------------
+  router.post(
+    '/dry-run/:presetId',
+    requireApiKey(ApiScope.ENTERPRISE),
+    csvUploadMiddleware,
+    async (req: Request, res: Response) => {
+      const buffer = requireUploadedFile(req, res)
+      if (!buffer) return
+
+      const preset = await presetRepo.findById(req.params.presetId)
+      if (!preset) {
+        res.status(404).json({
+          error: 'NotFound',
+          code: 'PresetNotFound',
+          message: 'Mapping preset not found.',
+        })
+        return
+      }
+
+      const result = await dryRunImportFile(buffer, preset.columnMappings)
+      if (!result.success) {
+        sendDryRunError(res, result)
+        return
+      }
+
+      sendDryRunSuccess(res, result, {
+        id: preset.id,
+        name: preset.name,
+        version: preset.version,
+        columnMappings: preset.columnMappings,
+      })
+    }
+  )
+
+  // -----------------------------------------------------------------------
+  // POST /api/imports/commit — commit import (?dryRun=true validates only)
+  // -----------------------------------------------------------------------
+  router.post(
+    '/commit',
+    requireApiKey(ApiScope.ENTERPRISE),
+    csvUploadMiddleware,
+    async (req: Request, res: Response) => {
+      const buffer = requireUploadedFile(req, res)
+      if (!buffer) return
+
+      if (isDryRunQuery(req.query.dryRun)) {
+        const result = await dryRunImportFile(buffer)
+        if (!result.success) {
+          sendDryRunError(res, result)
+          return
+        }
+        sendDryRunSuccess(res, result)
+        return
+      }
+
+      const result = await commitImportFile(buffer, importCommitter)
+      if (result.success && 'valid' in result && result.valid === false) {
+        res.status(422).json({
+          error: 'UnprocessableEntity',
+          code: 'ImportValidationFailed',
+          message: 'Import file contains validation errors.',
+          valid: result.valid,
+          totalRows: result.totalRows,
+          errors: result.errors,
+          errorsTruncated: result.errorsTruncated,
+        })
+        return
+      }
+      if (!result.success) {
+        sendDryRunError(res, result)
+        return
+      }
+
+      res.status(201).json({
+        committed: true,
+        totalRows: result.totalRows,
+        imported: result.imported,
+      })
+    }
+  )
+
+  // -----------------------------------------------------------------------
+  // POST /api/imports/commit/:presetId — commit with mapping preset
+  // -----------------------------------------------------------------------
+  router.post(
+    '/commit/:presetId',
+    requireApiKey(ApiScope.ENTERPRISE),
+    csvUploadMiddleware,
+    async (req: Request, res: Response) => {
+      const buffer = requireUploadedFile(req, res)
+      if (!buffer) return
+
+      const preset = await presetRepo.findById(req.params.presetId)
+      if (!preset) {
+        res.status(404).json({
+          error: 'NotFound',
+          code: 'PresetNotFound',
+          message: 'Mapping preset not found.',
+        })
+        return
+      }
+
+      if (isDryRunQuery(req.query.dryRun)) {
+        const result = await dryRunImportFile(buffer, preset.columnMappings)
+        if (!result.success) {
+          sendDryRunError(res, result)
+          return
+        }
+        sendDryRunSuccess(res, result, {
+          id: preset.id,
+          name: preset.name,
+          version: preset.version,
+          columnMappings: preset.columnMappings,
+        })
+        return
+      }
+
+      const result = await commitImportFile(buffer, importCommitter, preset.columnMappings)
+      if (result.success && 'valid' in result && result.valid === false) {
+        res.status(422).json({
+          error: 'UnprocessableEntity',
+          code: 'ImportValidationFailed',
+          message: 'Import file contains validation errors.',
+          valid: result.valid,
+          totalRows: result.totalRows,
+          errors: result.errors,
+          errorsTruncated: result.errorsTruncated,
+          preset: {
+            id: preset.id,
+            name: preset.name,
+            version: preset.version,
+            columnMappings: preset.columnMappings,
+          },
+        })
+        return
+      }
+      if (!result.success) {
+        sendDryRunError(res, result)
+        return
+      }
+
+      res.status(201).json({
+        committed: true,
+        totalRows: result.totalRows,
+        imported: result.imported,
         preset: {
           id: preset.id,
           name: preset.name,
