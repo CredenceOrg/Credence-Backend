@@ -6,8 +6,13 @@ import { apiKeyMiddleware } from '../middleware/apiKey.js'
 import { validate } from '../middleware/validate.js'
 import { trustPathParamsSchema } from '../schemas/index.js'
 import { NotFoundError } from '../lib/errors.js'
+import { createHash } from 'crypto'
 
 const router = Router()
+
+function generateEtag(data: any): string {
+  return createHash('sha256').update(JSON.stringify(data)).digest('hex')
+}
 
 router.get(
   '/:address',
@@ -24,6 +29,15 @@ router.get(
 
       if (!trustScore) {
         throw new NotFoundError('Identity record', address)
+      }
+
+      const etag = generateEtag(trustScore)
+      res.set('ETag', etag)
+      res.set('Cache-Control', 'public, max-age=60')
+
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).send()
+        return
       }
 
       res.json(trustScore)
