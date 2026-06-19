@@ -138,6 +138,41 @@ describe('Dispute routes + state machine integration', () => {
       const logs = await auditLogService.getAllLogs()
       expect(logs).toHaveLength(0)
     })
+
+    it('rejects invalid dispute payloads and records a failure audit log', async () => {
+      const res = await request(app)
+        .post(BASE)
+        .set('Authorization', filerBearer)
+        .send({ ...validDisputeBody(), filedBy: '' })
+        .expect(400)
+
+      expect(res.body).toMatchObject({
+        error: 'BadRequest',
+      })
+      expect(res.body.message).toContain('Invalid dispute')
+
+      const logs = await auditLogService.getAllLogs()
+      expect(logs).toHaveLength(1)
+      expect(logs[0]).toMatchObject({
+        action: AuditAction.DISPUTE_SUBMITTED,
+        status: 'failure',
+        resourceId: 'unknown',
+      })
+    })
+  })
+
+  describe('GET /api/disputes/:id', () => {
+    it('returns 404 for unknown disputes', async () => {
+      const res = await request(app)
+        .get(`${BASE}/missing-dispute-id`)
+        .set('Authorization', filerBearer)
+        .expect(404)
+
+      expect(res.body).toMatchObject({
+        error: 'NotFound',
+        message: 'Dispute not found',
+      })
+    })
   })
 
   describe('state transitions', () => {
@@ -264,6 +299,24 @@ describe('Dispute routes + state machine integration', () => {
       expect(actions).toContain(AuditAction.DISPUTE_MARKED_UNDER_REVIEW)
       expect(actions).toContain(AuditAction.DISPUTE_RESOLVED)
       expect(logs.every((log) => log.status === 'success' || log.status === undefined)).toBe(true)
+    })
+
+    it('dismisses a pending dispute and writes a success audit log', async () => {
+      const { id } = await openDispute(app, filerBearer)
+
+      const res = await request(app)
+        .post(`${BASE}/${id}/dismiss`)
+        .set('Authorization', verifierBearer)
+        .send({ reason: 'Insufficient evidence provided' })
+        .expect(200)
+
+      expect(res.body.status).toBe('dismissed')
+      expect(res.body.resolution).toBe('Insufficient evidence provided')
+
+      const logs = await auditLogService.getAllLogs()
+      expect(logs.some((log) => log.action === AuditAction.DISPUTE_DISMISSED && log.status === 'success')).toBe(
+        true,
+      )
     })
   })
 
