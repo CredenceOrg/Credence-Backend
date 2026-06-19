@@ -48,6 +48,22 @@ export interface WhitelistMutationResult {
 
 /** Roles that are permitted to mutate the whitelist. */
 const ADMIN_ROLES = new Set(['admin', 'super-admin'])
+const ISO_4217_CODE = /^[A-Z]{3}$/
+
+/**
+ * Normalises a caller-supplied ISO 4217 currency code.
+ *
+ * Canonical form is exactly three ASCII uppercase letters. Rejecting anything
+ * else keeps look-alike Unicode, blank strings, and concatenated symbols out
+ * of the allow-list security boundary.
+ */
+export function normalize_currency_code(currency: string): string {
+  const normalised = currency.trim().toUpperCase()
+  if (!ISO_4217_CODE.test(normalised)) {
+    throw new TypeError(`Invalid ISO 4217 currency code: ${currency}`)
+  }
+  return normalised
+}
 
 /**
  * Throws {@link UnauthorizedError} when `ctx` is absent and
@@ -96,7 +112,7 @@ export class CurrencyWhitelist {
    */
   constructor(initial: Iterable<string> = []) {
     this._set = new Set(
-      [...initial].map((c) => c.trim().toUpperCase()),
+      [...initial].map((c) => normalize_currency_code(c)),
     )
   }
 
@@ -112,7 +128,7 @@ export class CurrencyWhitelist {
    * @param currency - ISO 4217 code to test (e.g. `"usd"` or `"USD"`).
    */
   is_allowed_currency(currency: string): boolean {
-    return this._set.has(currency.trim().toUpperCase())
+    return this._set.has(normalize_currency_code(currency))
   }
 
   /**
@@ -146,7 +162,7 @@ export class CurrencyWhitelist {
    */
   add_currency(currency: string, ctx: AdminContext): WhitelistMutationResult {
     assertAdmin(ctx)
-    const normalised = currency.trim().toUpperCase()
+    const normalised = normalize_currency_code(currency)
     const wasPresent = this._set.has(normalised)
     this._set.add(normalised)
     return {
@@ -171,7 +187,7 @@ export class CurrencyWhitelist {
    */
   remove_currency(currency: string, ctx: AdminContext): WhitelistMutationResult {
     assertAdmin(ctx)
-    const normalised = currency.trim().toUpperCase()
+    const normalised = normalize_currency_code(currency)
     const wasPresent = this._set.has(normalised)
     this._set.delete(normalised)
     return {
@@ -197,13 +213,14 @@ export class CurrencyWhitelist {
    */
   set_currencies(currencies: string[], ctx: AdminContext): WhitelistMutationResult {
     assertAdmin(ctx)
+    const normalisedCurrencies = currencies.map((c) => normalize_currency_code(c))
     this._set.clear()
-    for (const c of currencies) {
-      this._set.add(c.trim().toUpperCase())
+    for (const c of normalisedCurrencies) {
+      this._set.add(c)
     }
     return {
       currencies: this.snapshot(),
-      description: `set_currencies([${currencies.map((c) => c.trim().toUpperCase()).join(', ')}]): whitelist replaced`,
+      description: `set_currencies([${[...this._set].join(', ')}]): whitelist replaced`,
     }
   }
 
