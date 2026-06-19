@@ -3,13 +3,13 @@ import { idempotencyMiddleware } from '../middleware/idempotency.js'
 import { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
 import { SettlementService } from '../services/settlementService.js'
 import { validate } from '../middleware/validate.js'
-import { createPayoutSchema } from '../schemas/index.js'
+import { createPayoutSchema } from '../schemas/payout.js'
 /**
  * Issue #325: Import the inferred type from the Zod schema
  * instead of using `as any` cast. This ensures type safety
  * between the validated request body and the settlement service input.
  */
-import type { CreatePayoutInput } from '../schemas/index.js'
+import type { CreatePayoutInput } from '../schemas/payout.js'
 import { pool } from '../db/pool.js'
 import { SettlementsRepository } from '../db/repositories/settlementsRepository.js'
 import { requireApiKey, ApiScope } from '../middleware/auth.js'
