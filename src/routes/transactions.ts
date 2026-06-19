@@ -2,6 +2,7 @@ import { Router, type Request, type Response } from 'express'
 import { SettlementsRepository } from '../db/repositories/settlementsRepository.js'
 import { encodeCursor } from '../lib/pagination.js'
 import { pool } from '../db/pool.js'
+import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import { validate, type ValidatedRequest } from '../middleware/validate.js'
 import { transactionsHistoryQuerySchema, type TransactionsHistoryQuery } from '../schemas/transactions.js'
 
@@ -24,6 +25,7 @@ export function createTransactionsRouter(): Router {
    */
   router.get(
     '/history',
+    requireApiKey(ApiScope.TRUST_READ),
     validate({ query: transactionsHistoryQuerySchema }),
     async (req: Request, res: Response, next) => {
       try {
