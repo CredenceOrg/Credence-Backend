@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { type AuthenticatedRequest, requireUserAuth } from '../middleware/auth.js'
+import { ErrorCode, getErrorCatalogEntry } from '../lib/errorCatalog.js'
 import {
   dismissDispute,
   getDispute,
@@ -10,6 +11,16 @@ import {
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 
 const router = Router()
+
+function invalidTransitionResponse(message: string) {
+  const catalog = getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION)
+  return {
+    error: catalog.defaultMessage,
+    code: catalog.code,
+    error_code: catalog.code,
+    message,
+  }
+}
 
 router.post('/', requireUserAuth, async (req: Request, res: Response) => {
   const authReq = req as AuthenticatedRequest
@@ -92,7 +103,9 @@ router.post('/:id/review', requireUserAuth, async (req: Request, res: Response) 
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -129,7 +142,9 @@ router.post('/:id/resolve', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -166,7 +181,9 @@ router.post('/:id/dismiss', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
