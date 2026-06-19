@@ -500,11 +500,15 @@ Extend with additional Horizon event ingestion when implementing the full archit
 - Integration notes: `docs/stellar-integration.md`
 - Tests: `src/clients/soroban.test.ts`
 
-## Integration tests
+## Testing
 
-Repository integration tests are under `tests/integration/` and execute against real PostgreSQL.
+For a full walkthrough — prerequisites, pg-mem vs testcontainers, running migrations, all test commands, the chaos suite, and troubleshooting — see **[docs/CONTRIBUTING-TESTING.md](docs/CONTRIBUTING-TESTING.md)**.
 
-- Use Docker/Testcontainers automatically: `npm run test:integration`
-- Use an existing DB in CI: `TEST_DATABASE_URL=postgresql://... npm run test:integration`
-- Coverage report: `npm run coverage`
-dummy
+Quick reference:
+
+```bash
+pnpm test                  # all tests (testcontainers auto-provisions Postgres)
+pnpm run test:coverage     # with coverage (40% global threshold)
+pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evidence)
+pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
+```
