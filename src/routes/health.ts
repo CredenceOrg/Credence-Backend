@@ -19,6 +19,11 @@ export interface HealthRouterOptions {
   horizonListener?: HealthProbe
   /** Backward-compatible outbox publisher probe alias. */
   outboxPublisher?: HealthProbe
+  /**
+   * Horizon/Soroban client reachability probe (circuit breaker state).
+   * When OPEN the pod is marked unready (503).
+   */
+  horizon?: HealthProbe
   /** Optional readiness check to mark the service unhealthy during shutdown. */
   isReady?: () => boolean
 }
@@ -32,6 +37,7 @@ export interface HealthRouterOptions {
  * - GET /api/health/live  -> 200 always when process is running (liveness)
  *
  * Response body does not expose internal details (no error messages or connection info).
+ * Each dependency result includes latencyMs indicating how long the probe took.
  */
 export function createHealthRouter(options: HealthRouterOptions = {}): Router {
   const router = Router()
@@ -42,6 +48,7 @@ export function createHealthRouter(options: HealthRouterOptions = {}): Router {
       redis: options.redis ?? options.cache,
       horizonListener: options.horizonListener ?? options.gateway,
       outboxPublisher: options.outboxPublisher ?? options.queue,
+      horizon: options.horizon,
     })
 
   /**
