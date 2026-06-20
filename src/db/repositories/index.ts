@@ -1,3 +1,4 @@
+export * from "./baseRepository.js";
 export * from "./attestationsRepository.js";
 export * from "./auditLogsRepository.js";
 export * from "./bondsRepository.js";

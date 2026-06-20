@@ -1,5 +1,5 @@
 import type { Queryable } from "./queryable.js";
-import { getTenantId } from "../../utils/tenantContext.js";
+import { BaseRepository } from "./baseRepository.js";
 
 export interface Identity {
   address: string;
@@ -42,14 +42,7 @@ const mapIdentity = (row: IdentityRow): Identity => ({
   version: row.version,
 });
 
-export class IdentitiesRepository {
-  constructor(private readonly db: Queryable) {}
-
-  private assertTenant(): string {
-    const t = getTenantId();
-    if (!t) throw new Error("Missing tenant context");
-    return t;
-  }
+export class IdentitiesRepository extends BaseRepository {
 
   async create(input: CreateIdentityInput): Promise<Identity> {
     this.assertTenant();

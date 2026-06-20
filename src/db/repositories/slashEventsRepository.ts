@@ -1,5 +1,5 @@
 import type { Queryable } from "./queryable.js";
-import { getTenantId } from "../../utils/tenantContext.js";
+import { BaseRepository } from "./baseRepository.js";
 
 export interface SlashEvent {
   id: number;
@@ -34,14 +34,7 @@ const mapSlashEvent = (row: SlashEventRow): SlashEvent => ({
   createdAt: toDate(row.created_at),
 });
 
-export class SlashEventsRepository {
-  constructor(private readonly db: Queryable) {}
-
-  private assertTenant(): string {
-    const t = getTenantId();
-    if (!t) throw new Error("Missing tenant context");
-    return t;
-  }
+export class SlashEventsRepository extends BaseRepository {
 
   async create(input: CreateSlashEventInput): Promise<SlashEvent> {
     this.assertTenant();
