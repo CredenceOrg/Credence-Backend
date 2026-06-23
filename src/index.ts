@@ -149,6 +149,7 @@ if (process.env.NODE_ENV !== "test") {
         stop() {
           refreshScheduler.stop()
           reconcilerScheduler.stop()
+          impersonationCleanupScheduler.stop()
           failedInboundSweeper?.stop()
         },
         isJobRunning() {
