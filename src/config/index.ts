@@ -155,6 +155,23 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+
+  // Request snapshots retention
+  REQUEST_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .default('14')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS: z
+    .string()
+    .default('86400000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)),
+  REQUEST_SNAPSHOT_CLEANUP_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val === 'true'),
+
   SHUTDOWN_GRACE_PERIOD_MS: z
     .string()
     .default('30000')
@@ -369,6 +386,11 @@ export interface Config {
     failedRetentionDays: number
     cleanupIntervalMs: number
   }
+  requestSnapshots: {
+    retentionDays: number
+    cleanupIntervalMs: number
+    cleanupEnabled: boolean
+  }
   shutdown: {
     gracePeriodMs: number
   }
@@ -532,6 +554,11 @@ function mapEnvToConfig(env: Env): Config {
       publishedRetentionDays: env.OUTBOX_PUBLISHED_RETENTION_DAYS,
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
+    },
+    requestSnapshots: {
+      retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,
+      cleanupIntervalMs: env.REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS,
+      cleanupEnabled: env.REQUEST_SNAPSHOT_CLEANUP_ENABLED,
     },
     shutdown: {
       gracePeriodMs: env.SHUTDOWN_GRACE_PERIOD_MS,

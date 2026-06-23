@@ -21,6 +21,7 @@ import { createWsSubscriptionServer } from './routes/ws.js'
 
 // Outbox imports
 import { OutboxJob } from "./jobs/outbox.js";
+import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
 
 app.use("/api/admin", createAdminRouter());
 app.use("/api/governance", governanceRouter);
@@ -35,6 +36,7 @@ let outboxJob: OutboxJob | null = null;
 let shutdownManager: GracefulShutdownManager | null = null;
 let wss: ReturnType<typeof createWsSubscriptionServer> | null = null;
 let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
+let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -138,6 +140,27 @@ if (process.env.NODE_ENV !== "test") {
       }
     }
 
+    // Start Request Snapshots cleanup sweeper if enabled
+    if (config.requestSnapshots.cleanupEnabled) {
+      try {
+        requestSnapshotsSweeper = new RequestSnapshotsSweeper(pool, {
+          retentionDays: config.requestSnapshots.retentionDays,
+          intervalMs: config.requestSnapshots.cleanupIntervalMs,
+          logger: console.log,
+          onMetric: (metric) => {
+            // TODO: integrate with metrics system (Prometheus, etc.)
+            console.log(`[Metrics] ${metric.name}=${metric.value}`);
+          },
+        });
+        requestSnapshotsSweeper.start();
+        console.log("[Main] Request Snapshots Sweeper started");
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+        console.error(`Failed to start Request Snapshots Sweeper: ${message}`);
+      }
+    }
+
     // Start cache invalidation bus
     try {
       invalidationBus = getInvalidationBus();
@@ -153,6 +176,18 @@ if (process.env.NODE_ENV !== "test") {
     shutdownManager?.setOutboxJob(outboxJob);
     shutdownManager?.setWss(wss);
     shutdownManager?.setInvalidationBus(invalidationBus);
+
+    // Stop sweepers on shutdown
+    const originalShutdown = shutdownManager?.shutdown.bind(shutdownManager);
+    if (shutdownManager && originalShutdown) {
+      shutdownManager.shutdown = async (signal?: string) => {
+        if (requestSnapshotsSweeper) {
+          console.log("[Main] Stopping Request Snapshots Sweeper");
+          requestSnapshotsSweeper.stop();
+        }
+        return originalShutdown(signal ?? "SIGTERM");
+      };
+    }
   } catch (error) {
     console.error("Failed to start Credence API:", error);
     process.exit(1);
