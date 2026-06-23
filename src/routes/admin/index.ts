@@ -150,7 +150,7 @@ export function createAdminRouter(): Router {
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -165,7 +165,7 @@ export function createAdminRouter(): Router {
         return
       }
 
-      const issued = impersonationService.issueToken(
+      const issued = await impersonationService.issueToken(
         user.id,
         user.email,
         user.tenantId,
@@ -194,7 +194,7 @@ export function createAdminRouter(): Router {
    *
    * Revoke an active impersonation token.
    */
-  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     const authReq = req as AuthenticatedRequest
     const user = authReq.user!
     const { tokenId } = req.params
@@ -205,7 +205,7 @@ export function createAdminRouter(): Router {
     }
 
     try {
-      impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
+      await impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
       res.status(200).json({ success: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'

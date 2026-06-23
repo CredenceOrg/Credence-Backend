@@ -243,6 +243,56 @@ This action is logged with:
 
 ---
 
+### Issue Impersonation Token
+
+**POST** `/api/admin/impersonate`
+
+Issue a short-lived impersonation token for support/debug purposes. The token is persisted in the database and survives application restarts.
+
+#### Request Body
+
+```json
+{
+  "targetUserId": "user-uuid",
+  "reason": "Debugging customer issue #123",
+  "ttlSeconds": 900
+}
+```
+
+#### Request Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `targetUserId` | string | Yes | ID of the target user to impersonate |
+| `reason` | string | Yes | Mandatory justification for the audit trail |
+| `ttlSeconds` | number | No | Token lifetime in seconds (default: 900, max: 3600) |
+
+#### Example Response (201 Created)
+
+```json
+{
+  "success": true,
+  "data": {
+    "tokenId": "random-hex-string",
+    "targetUserId": "user-uuid",
+    "targetUserEmail": "user@example.com",
+    "expiresAt": "2026-02-25T12:45:00.000Z",
+    "ttlSeconds": 900
+  }
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Missing reason or user ID, or target user not found.
+- **403 Forbidden** - User does not have admin role.
+
+#### Lifecycle & Revocation
+
+Tokens automatically expire after their TTL. A background job permanently sweeps expired tokens from the database. Active tokens can be revoked early via **POST** `/api/admin/impersonate/:tokenId/revoke` (persisted as `revoked=true`).
+
+---
+
 ### Get Audit Logs
 
 **GET** `/api/admin/audit-logs`

@@ -37,14 +37,29 @@ router.post(
       const { type } = req.validated!.body! as CreateReportBody;
 
       const tenantId = (req as any).apiKey?.tenantId ?? "default";
-      const job = await reportService.startReportGeneration(type, tenantId);
+      // Extract additional params from body for deduplication
+      const params = { ...req.validated!.body };
+      delete (params as any).type;
 
-      res.status(202).json({
-        jobId: job.id,
-        status: job.status,
-        type: job.type,
-        createdAt: job.createdAt,
-      });
+      try {
+        const job = await reportService.startReportGeneration(type, tenantId, Object.keys(params).length > 0 ? params : undefined);
+
+        res.status(202).json({
+          jobId: job.id,
+          status: job.status,
+          type: job.type,
+          createdAt: job.createdAt,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('maximum concurrent')) {
+          res.status(429).json({
+            error: "TooManyRequests",
+            message: error.message,
+          });
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       console.error("Report generation error:", error);
       res.status(500).json({

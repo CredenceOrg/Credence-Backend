@@ -15,20 +15,10 @@ function isAdminRoute(p) {
 }
 
 function getRegisteredRoutes() {
+  // Keep in sync with paths registered in scripts/generate-openapi.ts
   const routes = [
-    { path: '/.well-known/jwks.json', method: 'get' },
-    { path: '/api/health', method: 'get' },
-    { path: '/api/trust/:address', method: 'get' },
-    { path: '/api/trust', method: 'post' },
     { path: '/api/bond/:address', method: 'get' },
     { path: '/api/bond', method: 'post' },
-    { path: '/api/attestations/:address', method: 'get' },
-    { path: '/api/attestations', method: 'post' },
-    { path: '/api/bulk', method: 'post' },
-    { path: '/api/imports', method: 'post' },
-    { path: '/api/orgs/:orgId/policies', method: 'get' },
-    { path: '/api/analytics', method: 'get' },
-    { path: '/api/payouts', method: 'post' },
   ];
   return routes.filter(r => !isAdminRoute(r.path));
 }

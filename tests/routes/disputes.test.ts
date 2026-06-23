@@ -175,6 +175,90 @@ describe('Dispute routes + state machine integration', () => {
     })
   })
 
+  describe('GET /api/disputes', () => {
+    it('returns disputes for the caller scoped by tenant', async () => {
+      await openDispute(app, filerBearer)
+      await openDispute(app, filerBearer)
+
+      const res = await request(app)
+        .get(BASE)
+        .set('Authorization', filerBearer)
+        .expect(200)
+
+      expect(res.body.data).toHaveLength(2)
+
+      const verifierRes = await request(app)
+        .get(BASE)
+        .set('Authorization', verifierBearer)
+        .expect(200)
+      
+      expect(verifierRes.body.data).toHaveLength(0)
+    })
+
+    it('filters disputes by status', async () => {
+      const d1 = await openDispute(app, filerBearer)
+      const d2 = await openDispute(app, filerBearer)
+      
+      await request(app)
+        .post(`${BASE}/${d1.id}/review`)
+        .set('Authorization', verifierBearer)
+        .expect(200)
+
+      const underReviewRes = await request(app)
+        .get(`${BASE}?status=under_review`)
+        .set('Authorization', filerBearer)
+        .expect(200)
+      
+      expect(underReviewRes.body.data).toHaveLength(1)
+      expect(underReviewRes.body.data[0].id).toBe(d1.id)
+
+      const pendingRes = await request(app)
+        .get(`${BASE}?status=pending`)
+        .set('Authorization', filerBearer)
+        .expect(200)
+
+      expect(pendingRes.body.data).toHaveLength(1)
+      expect(pendingRes.body.data[0].id).toBe(d2.id)
+    })
+
+    it('rejects invalid statuses with 400', async () => {
+      await request(app)
+        .get(`${BASE}?status=invalid_status`)
+        .set('Authorization', filerBearer)
+        .expect(400)
+    })
+
+    it('handles cursor pagination and stable ordering roundtrip', async () => {
+      const d1 = await openDispute(app, filerBearer)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      const d2 = await openDispute(app, filerBearer)
+      await new Promise(resolve => setTimeout(resolve, 5))
+      const d3 = await openDispute(app, filerBearer)
+
+      const firstPage = await request(app)
+        .get(`${BASE}?limit=2`)
+        .set('Authorization', filerBearer)
+        .expect(200)
+
+      expect(firstPage.body.data).toHaveLength(2)
+      // Newest first
+      expect(firstPage.body.data[0].id).toBe(d3.id)
+      expect(firstPage.body.data[1].id).toBe(d2.id)
+      expect(firstPage.body.page.hasMore).toBe(true)
+      expect(firstPage.body.page.nextCursor).toBeTruthy()
+
+      const secondPage = await request(app)
+        .get(`${BASE}?limit=2&cursor=${firstPage.body.page.nextCursor}`)
+        .set('Authorization', filerBearer)
+        .expect(200)
+
+      expect(secondPage.body.data).toHaveLength(1)
+      expect(secondPage.body.data[0].id).toBe(d1.id)
+      expect(secondPage.body.page.hasMore).toBe(false)
+      expect(secondPage.body.page.nextCursor).toBeNull()
+    })
+  })
+
   describe('state transitions', () => {
     it('applies a valid pending → under_review → resolved transition chain', async () => {
       const { id } = await openDispute(app, filerBearer)

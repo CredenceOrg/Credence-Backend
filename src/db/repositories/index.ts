@@ -11,6 +11,7 @@ export * from "./settlementsRepository.js";
 export * from "./idempotencyRepository.js";
 export * from "./webhookRepository.js";
 export * from "./walletsRepository.js";
+export * from "./walletTransactionsRepository.js";
 
 export interface Identity {
   /** Surrogate UUID primary key. */

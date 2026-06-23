@@ -1,7 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import request from 'supertest'
 import { createTestDatabase, createTestCache, type TestDatabase, type TestCache } from './testDatabase.js'
-import { runMigration } from '../../src/migrations/runner.js'
 import { setTenantId } from '../../src/utils/tenantContext.js'
 
 // We need to define these variables here so they are available in the test scope
@@ -145,29 +144,35 @@ describe('E2E State Sync Integration: Horizon -> DB -> Trust -> Cache -> API', (
     process.env.API_KEY = 'test-api-key'
     process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long'
 
-    // 3. Run migrations on the test database
-    if (db.connectionString.startsWith('pg-mem://')) {
-      await db.pool.query('CREATE TABLE IF NOT EXISTS identities (id SERIAL PRIMARY KEY, address VARCHAR(64) UNIQUE, tenant_id VARCHAR(64), bonded_amount VARCHAR(78) DEFAULT \'0\', bond_start TIMESTAMP, bond_duration INTEGER, active BOOLEAN DEFAULT FALSE, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)')
-      await db.pool.query('CREATE TABLE IF NOT EXISTS attestations (id SERIAL PRIMARY KEY, bond_id INTEGER, attester_address VARCHAR(64), subject_address VARCHAR(64), score INTEGER, note TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, tenant_id VARCHAR(64))')
-    } else {
-      const migrationResult = await runMigration({
-        direction: 'up',
-        config: {
-          databaseUrl: db.connectionString,
-          migrationsDir: 'src/migrations',
-          migrationsTable: 'pgmigrations',
-          migrationsSchema: 'public',
-          createSchema: true,
-          transactional: true,
-        },
-        skipPreflight: true,
-      })
-
-      if (!migrationResult.success) {
-        throw new Error(`Migrations failed: ${migrationResult.error}`)
-      }
-    }
+    // 3. Ensure minimal schema for integration test (avoid node-pg-migrate on raw TS sources)
+    await db.pool.query(`CREATE TABLE IF NOT EXISTS identities (
+      id SERIAL PRIMARY KEY,
+      address VARCHAR(64) UNIQUE,
+      tenant_id VARCHAR(64),
+      bonded_amount VARCHAR(78) DEFAULT '0',
+      bond_start TIMESTAMP,
+      bond_duration INTEGER,
+      active BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )`)
+    await db.pool.query(`CREATE TABLE IF NOT EXISTS attestations (
+      id SERIAL PRIMARY KEY,
+      bond_id INTEGER,
+      attester_address VARCHAR(64),
+      subject_address VARCHAR(64),
+      score INTEGER,
+      note TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      tenant_id VARCHAR(64)
+    )`)
   }, 60000)
+
+  beforeEach(async () => {
+    await db.pool.query('DELETE FROM attestations')
+    await db.pool.query('DELETE FROM identities')
+    sharedStorage.clear()
+  })
 
   afterAll(async () => {
     // Clean up tenant context

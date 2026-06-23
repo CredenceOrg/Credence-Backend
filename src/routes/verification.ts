@@ -67,15 +67,21 @@ export function setupVerificationRoutes(app: any): void {
         errors.push('Hash verification failed')
       }
 
-      // Check expiry
-      if (verificationService.isExpired(proof)) {
-        errors.push('Proof has expired')
-      }
-
-      // Verify signature if present
+      // Verify signature with expiry enforcement if present
       if ('signature' in proof && publicKey) {
-        if (!verificationService.verifySignedProof(proof, publicKey)) {
-          errors.push('Signature verification failed')
+        const result = verificationService.verifySignedProofStrict(proof, publicKey)
+        if (!result.valid) {
+          switch (result.reason) {
+            case 'expired':
+              errors.push('Proof has expired')
+              break
+            case 'bad_signature':
+              errors.push('Signature verification failed')
+              break
+            case 'hash_mismatch':
+              errors.push('Hash verification failed')
+              break
+          }
         }
       }
 

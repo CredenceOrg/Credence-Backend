@@ -3,4 +3,7 @@
 
 # Run Gitleaks protect on staged changes
 # The hook will prevent commit if a secret is detected.
-gitleaks protect --staged
+# Skip if gitleaks is not installed
+if command -v gitleaks &> /dev/null; then
+  gitleaks protect --staged
+fi

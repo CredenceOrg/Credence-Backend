@@ -59,25 +59,26 @@ export class SettlementsRepository {
     const settledAt = input.settledAt ?? new Date()
     const status = input.status ?? 'pending'
 
+    const existing = await this.db.query<{ id: string }>(
+      `SELECT id FROM settlements WHERE transaction_hash = $1`,
+      [input.transactionHash],
+    )
+    const isDuplicate = existing.rows.length > 0
+
     const result = await this.db.query<SettlementRow>(
-      `
-      INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (transaction_hash)
-      DO UPDATE SET
-        amount     = EXCLUDED.amount,
-        status     = EXCLUDED.status,
-        settled_at = EXCLUDED.settled_at,
-        updated_at = NOW()
-      RETURNING id, bond_id, amount, transaction_hash, settled_at, status,
-                created_at, updated_at,
-                (updated_at > created_at) AS is_duplicate
-      `,
+      `INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (transaction_hash)
+       DO UPDATE SET
+         amount     = EXCLUDED.amount,
+         status     = EXCLUDED.status,
+         settled_at = EXCLUDED.settled_at,
+         updated_at = NOW()
+       RETURNING id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at`,
       [input.bondId, input.amount, input.transactionHash, settledAt, status],
     )
 
-    const row = result.rows[0]
-    return { settlement: mapSettlement(row), isDuplicate: Boolean(row.is_duplicate) }
+    return { settlement: mapSettlement(result.rows[0]), isDuplicate }
   }
 
   async findById(id: string | number): Promise<Settlement | null> {

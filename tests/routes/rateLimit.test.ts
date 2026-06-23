@@ -12,9 +12,16 @@
  * ─ Fail-closed when Redis is unavailable
  * ─ rate_limit_rejected_total Prometheus counter
  * ─ getTenantId / getKeyId / resolveTierLimit helpers
+ * ─ Fixed-window boundary burst (cross-window 2x throughput), pinned with a
+ *   controllable clock
+ * ─ Dual-bucket precedence (tenant bucket is evaluated before the per-key
+ *   bucket)
+ * ─ Branch coverage for internal fallbacks: TTL race in checkWindow, default
+ *   namespace/options, req.ip fallback chain, and the legacy `rateLimit()`
+ *   helper
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import express, { type Express } from 'express'
 import request from 'supertest'
 import {
@@ -23,6 +30,7 @@ import {
   getKeyId,
   resolveTierLimit,
   rateLimitRejectedTotal,
+  rateLimit,
 } from '../../src/middleware/rateLimit.js'
 import type { Config } from '../../src/config/index.js'
 import type { SubscriptionTier } from '../../src/services/apiKeys.js'
@@ -513,6 +521,333 @@ describe('Rate Limit Middleware', () => {
 
     it('returns undefined when no apiKeyRecord', () => {
       expect(getKeyId({ headers: {} } as any)).toBeUndefined()
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Window-boundary burst (fixed-window 2x weakness)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Fixed windows reset the counter the instant `windowStart` ticks over, with
+   * no memory of the previous window. A client that exhausts its budget in the
+   * last instant of window N and immediately exhausts a fresh budget at the
+   * first instant of window N+1 can therefore push `2 * max` requests through
+   * in a span far shorter than `windowSec`. These tests pin that exact
+   * behaviour with a controllable clock so it can never silently regress (or
+   * silently improve) without a test failing.
+   */
+  describe('window-boundary burst (fixed-window 2x weakness)', () => {
+    const windowSec = 60
+    // Arbitrary epoch-aligned window start, far from any DST/leap edge.
+    const windowStartSec = 1_700_000_000 - (1_700_000_000 % windowSec)
+    const lastMsOfWindowN = (windowStartSec + windowSec - 1) * 1000
+    const firstMsOfWindowNPlus1 = (windowStartSec + windowSec) * 1000
+
+    beforeEach(() => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+    })
+
+    afterEach(() => {
+      vi.useRealTimers()
+    })
+
+    it('documents that 2x the configured max can pass within ~1 second across a window boundary', async () => {
+      const max = 3
+      const app = buildApp({ config: { windowSec, maxFree: max, maxPro: max, maxEnterprise: max } })
+
+      // Burst 1: park the clock in the last second of window N and consume
+      // the full budget for that window.
+      vi.setSystemTime(lastMsOfWindowN)
+      for (let i = 0; i < max; i++) {
+        const res = await request(app).get('/api/ping')
+        expect(res.status).toBe(200)
+      }
+      // Window N's budget is now exhausted.
+      expect((await request(app).get('/api/ping')).status).toBe(429)
+
+      // Cross the boundary: advance the clock by exactly one second into
+      // window N+1.
+      vi.setSystemTime(firstMsOfWindowNPlus1)
+
+      // Burst 2: a brand-new counter exists for window N+1, so the full
+      // budget is available again — one second after burst 1 began.
+      for (let i = 0; i < max; i++) {
+        const res = await request(app).get('/api/ping')
+        expect(res.status).toBe(200)
+      }
+      expect((await request(app).get('/api/ping')).status).toBe(429)
+
+      // Across the ~1-second boundary, 2 * max requests succeeded — exactly
+      // double the intended per-window rate. This is the known fixed-window
+      // weakness described in the issue; it is pinned here, not fixed, so a
+      // future move to a sliding window is a deliberate and verified change.
+    })
+
+    it('starts a fresh window exactly at the rollover instant (windowStart recomputed on the boundary)', async () => {
+      const max = 2
+      const app = buildApp({ config: { windowSec, maxFree: max, maxPro: max, maxEnterprise: max } })
+
+      // One millisecond before the boundary: still window N.
+      vi.setSystemTime(lastMsOfWindowN + 999)
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      expect((await request(app).get('/api/ping')).status).toBe(429)
+
+      // Exactly at the boundary (first millisecond of window N+1): the
+      // `now % windowSec === 0` case, windowStart recomputed to the new
+      // window rather than reusing the previous one.
+      vi.setSystemTime(firstMsOfWindowNPlus1)
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      expect((await request(app).get('/api/ping')).status).toBe(429)
+    })
+
+    it('does not allow a 3rd burst beyond the two adjacent windows', async () => {
+      const max = 2
+      const app = buildApp({ config: { windowSec, maxFree: max, maxPro: max, maxEnterprise: max } })
+
+      vi.setSystemTime(lastMsOfWindowN)
+      for (let i = 0; i < max; i++) {
+        expect((await request(app).get('/api/ping')).status).toBe(200)
+      }
+
+      vi.setSystemTime(firstMsOfWindowNPlus1)
+      for (let i = 0; i < max; i++) {
+        expect((await request(app).get('/api/ping')).status).toBe(200)
+      }
+
+      // Still inside window N+1 (not yet at the next boundary) — budget for
+      // this window is exhausted, so the 3rd window's worth of traffic is
+      // correctly rejected. The weakness is bounded to a single 2x burst per
+      // boundary, not unbounded.
+      vi.setSystemTime(firstMsOfWindowNPlus1 + 1000)
+      expect((await request(app).get('/api/ping')).status).toBe(429)
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Dual-bucket precedence
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * The tenant bucket is checked before the per-key bucket (see
+   * `createRateLimitMiddleware`). When a single request would exceed *both*
+   * budgets, the response must reflect the tenant rejection — the per-key
+   * counter is never even incremented for that request.
+   */
+  describe('dual-bucket precedence (tenant checked before key)', () => {
+    it('reports tenant_limit when both buckets would be exceeded by the same request', async () => {
+      const config: Config['rateLimit'] = {
+        enabled: true,
+        windowSec: 60,
+        maxFree: 1, // tight tenant ceiling
+        maxPro: 1,
+        maxEnterprise: 1,
+        failOpen: true,
+      }
+
+      const app = express()
+      app.use(express.json())
+      app.use((req, _res, next) => {
+        ;(req as any).apiKeyRecord = { id: 'key-precedence', ownerId: 'owner-precedence', tier: 'free' as SubscriptionTier }
+        next()
+      })
+      app.use(
+        '/api',
+        createRateLimitMiddleware(config, { namespace: 'ratelimit:precedence-tenant', max: 5 }), // generous key ceiling
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, code: _err.code, details: _err.details })
+      })
+
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+
+      const before = (await rateLimitRejectedTotal.get()).values
+        .filter((v) => v.labels.reason === 'key_limit' && v.labels.key_id === 'key-precedence')
+        .reduce((sum, v) => sum + v.value, 0)
+
+      // Second request: tenant bucket goes to 2 > 1 (tenant limit), while
+      // the key bucket would only be at 2 <= 5 (well within budget). The
+      // rejection must be attributed to the tenant, and the key bucket must
+      // not have been incremented.
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(429)
+      expect(res.body.details).toMatchObject({ limit: 1 }) // tenant ceiling, not the key ceiling of 5
+
+      const after = (await rateLimitRejectedTotal.get()).values
+        .filter((v) => v.labels.reason === 'key_limit' && v.labels.key_id === 'key-precedence')
+        .reduce((sum, v) => sum + v.value, 0)
+      expect(after).toBe(before) // key_limit was never recorded for this request
+    })
+
+    it('reports key_limit when the tenant budget is generous but the key budget is tight', async () => {
+      const config: Config['rateLimit'] = {
+        enabled: true,
+        windowSec: 60,
+        maxFree: 100, // generous tenant ceiling
+        maxPro: 100,
+        maxEnterprise: 100,
+        failOpen: true,
+      }
+
+      const app = express()
+      app.use(express.json())
+      app.use((req, _res, next) => {
+        ;(req as any).apiKeyRecord = { id: 'key-tight-precedence', ownerId: 'owner-tight-precedence', tier: 'free' as SubscriptionTier }
+        next()
+      })
+      app.use(
+        '/api',
+        createRateLimitMiddleware(config, { namespace: 'ratelimit:precedence-key', max: 1 }), // tight key ceiling
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, code: _err.code, details: _err.details })
+      })
+
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(429)
+      expect(res.body.details).toMatchObject({ limit: 1 }) // key ceiling, not the tenant ceiling of 100
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // 429 envelope
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('429 envelope', () => {
+    it('returns the full error envelope alongside headers when blocked', async () => {
+      const app = buildApp({ max: 1 })
+
+      await request(app).get('/api/ping')
+      const res = await request(app).get('/api/ping')
+
+      expect(res.status).toBe(429)
+      expect(res.body).toMatchObject({
+        error: expect.stringMatching(/rate limit exceeded/i),
+        details: { limit: 1, windowSec: 60 },
+      })
+      expect(typeof res.body.details.retryAfter).toBe('number')
+      expect(res.headers['x-ratelimit-limit']).toBe('1')
+      expect(res.headers['x-ratelimit-remaining']).toBe('0')
+      expect(Number(res.headers['retry-after'])).toBeGreaterThan(0)
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Internal branch coverage: TTL race, defaults, IP fallback, legacy helper
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe('checkWindow TTL fallback', () => {
+    it('falls back to windowSec for retryAfter when redis.ttl returns a non-positive value', async () => {
+      // Simulates a TTL race: the key exists (incr succeeded) but ttl()
+      // reports no expiry yet (e.g. -1), which must not propagate as a
+      // negative Retry-After.
+      const flakyRedis = {
+        store: new Map<string, number>(),
+        async incr(key: string) {
+          const next = (this.store.get(key) ?? 0) + 1
+          this.store.set(key, next)
+          return next
+        },
+        async expire(_key: string, _seconds: number) {},
+        async ttl(_key: string) {
+          return -1
+        },
+      }
+
+      const app = express()
+      app.use(express.json())
+      app.use(
+        '/api',
+        createRateLimitMiddleware(baseConfig({ maxFree: 1 }), {
+          namespace: 'ratelimit:ttlrace',
+          getRedis: () => flakyRedis,
+        }),
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, details: _err.details })
+      })
+
+      await request(app).get('/api/ping') // allowed, count = 1
+      const res = await request(app).get('/api/ping') // blocked, count = 2
+
+      expect(res.status).toBe(429)
+      expect(res.headers['retry-after']).toBe('60') // windowSec fallback, not -1
+      expect(res.body.details.retryAfter).toBe(60)
+    })
+  })
+
+  describe('default namespace and options', () => {
+    it('works with no options argument at all (namespace, options, and getRedis defaults)', async () => {
+      const app = express()
+      app.use(express.json())
+      app.use('/api', createRateLimitMiddleware(baseConfig({ maxFree: 5 })))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe('5')
+    })
+  })
+
+  describe('req.ip fallback chain', () => {
+    it('falls back to socket.remoteAddress when req.ip is undefined', async () => {
+      const mw = createRateLimitMiddleware(baseConfig({ maxFree: 5 }), { namespace: 'ratelimit:ipfallback1' })
+      const req: any = { ip: undefined, socket: { remoteAddress: '10.0.0.5' }, headers: {} }
+      const res: any = { setHeader: vi.fn() }
+      const next = vi.fn()
+
+      await mw(req, res, next)
+
+      expect(next).toHaveBeenCalledWith()
+      expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '5')
+    })
+
+    it('falls back to "unknown" when neither req.ip nor socket.remoteAddress are set', async () => {
+      const mw = createRateLimitMiddleware(baseConfig({ maxFree: 5 }), { namespace: 'ratelimit:ipfallback2' })
+      const req: any = { ip: undefined, socket: {}, headers: {} }
+      const res: any = { setHeader: vi.fn() }
+      const next = vi.fn()
+
+      await mw(req, res, next)
+
+      expect(next).toHaveBeenCalledWith()
+      expect(res.setHeader).toHaveBeenCalledWith('X-RateLimit-Limit', '5')
+    })
+  })
+
+  describe('rateLimit() backward-compatible helper', () => {
+    it('defaults every tier ceiling to 100 when no max is specified', async () => {
+      const app = express()
+      app.use(express.json())
+      app.use('/api', rateLimit({ namespace: 'ratelimit:legacy-default', windowSec: 60 }))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe('100')
+    })
+
+    it('applies an explicit max to every tier ceiling', async () => {
+      const app = express()
+      app.use(express.json())
+      app.use('/api', rateLimit({ namespace: 'ratelimit:legacy-max', windowSec: 60, max: 2 }))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message })
+      })
+
+      await request(app).get('/api/ping')
+      await request(app).get('/api/ping')
+      const res = await request(app).get('/api/ping')
+
+      expect(res.status).toBe(429)
     })
   })
 })

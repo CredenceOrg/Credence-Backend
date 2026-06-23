@@ -83,5 +83,10 @@
     "typescript": "~5.2.2",
     "vitest": "^4.1.2",
     "yaml": "^2.9.0"
+  },
+  "overrides": {
+    "@emnapi/core": "1.11.1",
+    "@emnapi/runtime": "1.11.1",
+    "@emnapi/wasi-threads": "1.2.2"
   }
 }

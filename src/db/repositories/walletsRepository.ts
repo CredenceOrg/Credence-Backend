@@ -6,6 +6,7 @@ import {
   LockTimeoutPolicy,
   LockTimeoutError,
 } from "../transaction.js";
+import { WalletTransactionsRepository } from "./walletTransactionsRepository.js";
 
 /**
  * Thrown when a debit would reduce a wallet's balance below zero.
@@ -93,6 +94,7 @@ const mapWallet = (row: WalletRow): Wallet => ({
  */
 export class WalletsRepository {
   private readonly txManager?: TransactionManager;
+  private readonly transactionsRepo: WalletTransactionsRepository;
 
   /**
    * @param db   - A `Queryable` (Pool or PoolClient) for read/write queries.
@@ -108,6 +110,7 @@ export class WalletsRepository {
     if (pool) {
       this.txManager = new TransactionManager(pool, lockTimeouts);
     }
+    this.transactionsRepo = new WalletTransactionsRepository(db);
   }
 
   /**
@@ -198,7 +201,8 @@ export class WalletsRepository {
   /**
    * Atomically credit (add) an amount to a wallet's balance.
    *
-   * This operation uses row-level locking to ensure consistency under concurrency.
+   * This operation uses row-level locking to ensure consistency under concurrency
+   * and records the transaction in the immutable ledger.
    *
    * @param id     - Wallet ID.
    * @param amount - Positive numeric string to add.
@@ -230,6 +234,8 @@ export class WalletsRepository {
           throw new Error(`Wallet ${id} not found`);
         }
 
+        const previousBalance = lockResult.rows[0].balance;
+
         // Update balance
         const updateResult = await client.query<WalletRow>(
           `
@@ -242,7 +248,19 @@ export class WalletsRepository {
           [id, amount],
         );
 
-        return mapWallet(updateResult.rows[0]);
+        const updatedWallet = mapWallet(updateResult.rows[0]);
+
+        // Record transaction in immutable ledger (within same transaction)
+        const txRepo = new WalletTransactionsRepository(client);
+        await txRepo.record({
+          walletId: id,
+          type: "credit",
+          amount,
+          previousBalance,
+          newBalance: updatedWallet.balance,
+        });
+
+        return updatedWallet;
       },
       {
         policy: LockTimeoutPolicy.DEFAULT,
@@ -258,7 +276,8 @@ export class WalletsRepository {
    *
    * The operation runs inside a `REPEATABLE READ` transaction with
    * `SELECT … FOR UPDATE` and configurable lock timeout. Concurrent debits
-   * on the same wallet are serialized at the DB level.
+   * on the same wallet are serialized at the DB level. Transactions are recorded
+   * in the immutable ledger.
    *
    * Uses DEFAULT lock timeout policy (2s default) with automatic retry
    * on lock timeout to balance throughput and contention fairness.
@@ -267,6 +286,7 @@ export class WalletsRepository {
    * 1. Balance never goes negative (enforced by CHECK constraint + pre-check)
    * 2. No lost updates (row-level lock serializes concurrent operations)
    * 3. Exactly-once semantics (transaction atomicity)
+   * 4. Immutable ledger recording (every debit is permanently recorded)
    *
    * @param id     - Wallet ID.
    * @param amount - Positive numeric string to subtract.
@@ -324,6 +344,16 @@ export class WalletsRepository {
         );
 
         const updatedWallet = mapWallet(updateResult.rows[0]);
+
+        // Record transaction in immutable ledger (within same transaction)
+        const txRepo = new WalletTransactionsRepository(client);
+        await txRepo.record({
+          walletId: id,
+          type: "debit",
+          amount,
+          previousBalance,
+          newBalance: updatedWallet.balance,
+        });
 
         return {
           wallet: updatedWallet,

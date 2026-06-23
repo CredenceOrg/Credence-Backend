@@ -2,8 +2,6 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import crypto from 'crypto'
 import { KekManager, kekManager, generateKekMaterial } from './index.js'
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
 function freshManager(): KekManager {
   return new KekManager()
 }
@@ -20,13 +18,12 @@ function decrypt(
   enc: { blob: string; iv: string; authTag: string },
   keyMaterial: Buffer,
 ): string {
-  const de'hex'))
+  const decipher = crypto.createDecipheriv('aes-256-gcm', keyMaterial, Buffer.from(enc.iv, 'hex'))
+  decipher.setAuthTag(Buffer.from(enc.authTag, 'hex'))
   let plaintext = decipher.update(enc.blob, 'hex', 'utf8')
   plaintext += decipher.final('utf8')
   return plaintext
 }
-
-// ── registerVersion() ────────────────────────────────────────────────────────
 
 describe('KekManager.registerVersion()', () => {
   it('auto-activates the very first registered version', () => {
@@ -44,7 +41,7 @@ describe('KekManager.registerVersion()', () => {
     const result = km.registerVersion(crypto.randomBytes(32))
     expect(result.version).toBe(2)
     expect(result.autoActivated).toBe(false)
-  ).version).toBe(1)
+    expect(km.getCurrentKek().version).toBe(1)
   })
 
   it('increments version numbers monotonically', () => {
@@ -68,15 +65,15 @@ describe('KekManager.registerVersion()', () => {
     const snapshot = Buffer.from(original)
     km.registerVersion(original)
 
-    original.fill(0xff) // simulate caller reusing/mutating the source buffer
+    original.fill(0xff)
 
     expect(km.getCurrentKek().keyMaterial.equals(snapshot)).toBe(true)
   })
 
   it('emits KEK_REGISTERED, and KEK_ACTIVATED only when auto-activated', () => {
     const km = freshManager()
-    km.registerVersion(crypto.randomBytes(32)) // v1, auto-activates
-    km.registerVersion(crypto.randomBytes(32)) // v2, stays pending
+    km.registerVersion(crypto.randomBytes(32))
+    km.registerVersion(crypto.randomBytes(32))
 
     const events = km.getAuditLog().map((e) => `${e.event}:${e.version}`)
     expect(events).toContain('KEK_REGISTERED:1')
@@ -86,15 +83,15 @@ describe('KekManager.registerVersion()', () => {
   })
 })
 
-// ── approveActivation() ──────────────────────────────────────────────────────
-
 describe('KekManager.approveActivation()', () => {
   it('throws for an unregistered version', () => {
     const km = freshManager()
     expect(() => km.approveActivation(99, 'alice')).toThrow(/not found/)
   })
 
-  it('throws if the version is alctive
+  it('throws if the version is already active', () => {
+    const km = freshManager()
+    km.registerVersion(crypto.randomBytes(32))
     expect(() => km.approveActivation(1, 'alice')).toThrow(/already active/)
   })
 
@@ -116,8 +113,6 @@ describe('KekManager.approveActivation()', () => {
   })
 })
 
-// ── activateVersion() — dual-control rotation ────────────────────────────────
-
 describe('KekManager.activateVersion()', () => {
   it('throws for an unregistered version', () => {
     const km = freshManager()
@@ -126,20 +121,20 @@ describe('KekManager.activateVersion()', () => {
 
   it('throws if already active', () => {
     const km = freshManager()
-    km.register).toThrow(/already active/)
+    km.registerVersion(crypto.randomBytes(32))
+    expect(() => km.activateVersion(1)).toThrow(/already active/)
   })
 
   it('throws when approvals are below the required threshold (interrupted/incomplete rotation)', () => {
     const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
     km.registerVersion(crypto.randomBytes(32))
-    km.approveActivation(2, 'alice') // only 1 of 2 required
+    km.approveActivation(2, 'alice')
 
     expect(() => km.activateVersion(2)).toThrow(
       new RegExp(`requires ${KekManager.REQUIRED_APPROVALS} approvals`),
     )
 
-    // System must remain consistent: v1 still active, v2 still pending — no half-rotated state.
     expect(km.getCurrentKek().version).toBe(1)
     expect(km.getVersion(2).state).toBe('retired')
   })
@@ -152,7 +147,7 @@ describe('KekManager.activateVersion()', () => {
     km.approveActivation(2, 'bob')
 
     expect(() => km.activateVersion(2)).not.toThrow()
-    expect(km.getCurrentKek().version).to(2)
+    expect(km.getCurrentKek().version).toBe(2)
   })
 
   it('retires the previously active version with retiredAt set', () => {
@@ -178,12 +173,11 @@ describe('KekManager.activateVersion()', () => {
 
     expect(km.getCurrentKek().version).toBe(2)
     expect(km.getCurrentKek().state).toBe('active')
-    // Old version is retired, not deleted/zeroized — still usable for decryption.
     expect(km.getVersion(1).keyMaterial.length).toBe(32)
     expect(km.getVersion(1).keyMaterial.every((b) => b === 0)).toBe(false)
   })
 
-  it('emits KEK_RETIR for the old version and KEK_ACTIVATED with previousVersion for the new one', () => {
+  it('emits KEK_RETIRED for the old version and KEK_ACTIVATED with previousVersion for the new one', () => {
     const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
     km.registerVersion(crypto.randomBytes(32))
@@ -198,21 +192,18 @@ describe('KekManager.activateVersion()', () => {
   })
 })
 
-// ── Overlap-window decryptability (the core safety property) ────────────────
-
 describe('KekManager — overlap-window decryptability', () => {
   it('data encrypted under key N decrypts after rotating to N+1', () => {
     const km = freshManager()
-    km.registerVersion(crypto.randomBytes(32)) // v1 active
+    km.registerVersion(crypto.randomBytes(32))
 
     const enc = encrypt('sensitive evidence payload', km.getCurrentKek().keyMaterial)
 
-    km.registerVersing
+    km.registerVersion(crypto.randomBytes(32))
     km.approveActivation(2, 'alice')
     km.approveActivation(2, 'bob')
     km.activateVersion(2)
 
-    // v1 is retired but its material must still decrypt old data during the overlap window.
     const plaintext = decrypt(enc, km.getVersion(1).keyMaterial)
     expect(plaintext).toBe('sensitive evidence payload')
   })
@@ -231,15 +222,15 @@ describe('KekManager — overlap-window decryptability', () => {
 
   it('multiple rotations: data from v1 still decryptable with v1 material after rotating to v3', () => {
     const km = freshManager()
-    km.registerVersion(crypto.randomBytes(32)) // v1 active
+    km.registerVersion(crypto.randomBytes(32))
     const enc = encrypt('v1 data', km.getCurrentKek().keyMaterial)
 
-    km.registerVersion(crypto.randomBytes(32)) // v2
+    km.registerVersion(crypto.randomBytes(32))
     km.approveActivation(2, 'alice')
     km.approveActivation(2, 'bob')
     km.activateVersion(2)
 
-    km.registerVersion(crypto.randomBytes(32)) // v3
+    km.registerVersion(crypto.randomBytes(32))
     km.approveActivation(3, 'alice')
     km.approveActivation(3, 'bob')
     km.activateVersion(3)
@@ -248,8 +239,6 @@ describe('KekManager — overlap-window decryptability', () => {
     expect(decrypt(enc, km.getVersion(1).keyMaterial)).toBe('v1 data')
   })
 })
-
-// ── zeroizeRetired() — secret-material lifecycle ─────────────────────────────
 
 describe('KekManager.zeroizeRetired()', () => {
   it('zeroizes all bytes of retired key material (not just a prefix)', () => {
@@ -263,7 +252,7 @@ describe('KekManager.zeroizeRetired()', () => {
     km.zeroizeRetired()
 
     const v1 = km.getVersion(1)
-    expect(v1) => b === 0)).toBe(true)
+    expect(v1.keyMaterial.every((b) => b === 0)).toBe(true)
   })
 
   it('does not touch the active key material', () => {
@@ -308,12 +297,10 @@ describe('KekManager.zeroizeRetired()', () => {
 
   it('returns an empty array when there is nothing retired to zeroize', () => {
     const km = freshManager()
-    km.registerVersion(crypto.randomBytes(32)) // only an active version exists
+    km.registerVersion(crypto.randomBytes(32))
     expect(km.zeroizeRetired()).toEqual([])
   })
 })
-
-// ── getVersion() / getCurrentKek() / getAllVersions() ────────────────────────
 
 describe('KekManager — lookups', () => {
   it('getCurrentKek() throws when nothing has been registered', () => {
@@ -321,7 +308,8 @@ describe('KekManager — lookups', () => {
     expect(() => km.getCurrentKek()).toThrow(/No active KEK/)
   })
 
-  it('getVersion() throws for a version that was neveeshManager()
+  it('getVersion() throws for a version that was never registered', () => {
+    const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
     expect(() => km.getVersion(404)).toThrow(/not found/)
   })
@@ -341,13 +329,14 @@ describe('KekManager — lookups', () => {
   })
 })
 
-// ── Defensive copies ──────────────────────────────────────────────────────────
-
 describe('KekManager — defensive copies', () => {
   it('getPendingApprovals() returns a copy; mutating it does not affect internal state', () => {
     const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
-    km.registerVersion(crypto.randomBon: 2, approvedBy: 'fake-injected', approvedAt: new Date() })
+    km.registerVersion(crypto.randomBytes(32))
+    km.approveActivation(2, 'alice')
+    const approvals = km.getPendingApprovals(2)
+    approvals.push({ version: 2, approvedBy: 'fake-injected', approvedAt: new Date() })
 
     expect(km.getPendingApprovals(2)).toHaveLength(1)
   })
@@ -364,8 +353,6 @@ describe('KekManager — defensive copies', () => {
   })
 })
 
-// ── No plaintext secret logging ───────────────────────────────────────────────
-
 describe('KekManager — secret material never logged', () => {
   let logSpy: ReturnType<typeof vi.spyOn> | undefined
   let errorSpy: ReturnType<typeof vi.spyOn> | undefined
@@ -376,7 +363,8 @@ describe('KekManager — secret material never logged', () => {
   })
 
   it('does not call console.log or console.error during a full rotation + zeroize lifecycle', () => {
-    logSpy = vi.spyOntation(() => {})
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
 
     const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
@@ -401,15 +389,16 @@ describe('KekManager — secret material never logged', () => {
 
     for (const event of km.getAuditLog()) {
       expect(event).not.toHaveProperty('keyMaterial')
-      expect(JSON.stringify(event)).not.toMatch(/[0-9a-f]{64}/i) // no 32-byte hex dump leaked
+      expect(JSON.stringify(event)).not.toMatch(/[0-9a-f]{64}/i)
     }
   })
 })
 
-// ── _resetStore() ────────────────────────────────────────key material (including the active key) before clearing', () => {
+describe('KekManager._resetStore()', () => {
+  it('zeroizes all key material (including the active key) before clearing', () => {
     const km = freshManager()
     km.registerVersion(crypto.randomBytes(32))
-    const materialRef = km.getCurrentKek().keyMaterial // keep a reference before reset
+    const materialRef = km.getCurrentKek().keyMaterial
 
     km._resetStore()
 
@@ -431,9 +420,8 @@ describe('KekManager — secret material never logged', () => {
   })
 })
 
-// ── generateKekMaterial() ─────────────────────────────────────────────────────
-
-describe('generateKekMaterial()', () =>rns different material on each call', () => {
+describe('generateKekMaterial()', () => {
+  it('returns different material on each call', () => {
     const a = generateKekMaterial()
     const b = generateKekMaterial()
     expect(a.equals(b)).toBe(false)
@@ -444,8 +432,6 @@ describe('generateKekMaterial()', () =>rns different material on each call', () 
     expect(() => km.registerVersion(generateKekMaterial())).not.toThrow()
   })
 })
-
-// ── Singleton wiring sanity check ─────────────────────────────────────────────
 
 describe('kekManager (singleton)', () => {
   it('is an instance of KekManager', () => {

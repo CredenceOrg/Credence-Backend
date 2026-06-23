@@ -173,16 +173,56 @@ Failed webhook deliveries (e.g. max retries exceeded or 4xx responses) are perma
 
 ## Integration
 
-Integrate with identity state sync:
+### Identity state changes (authoritative path)
+
+Bond lifecycle webhooks for identity state changes must be emitted through the
+**transactional outbox** so delivery survives process crashes and rolls back with
+failed state updates. Use `webhookIntegrationOutbox.ts`:
 
 ```typescript
-import { emitWebhookForStateChange } from "./listeners/webhookIntegration.js";
+import { emitWebhookForStateChange } from "./listeners/webhookIntegrationOutbox.js";
 
-// After updating state
-const oldState = await store.get(address);
+// Within the same database transaction as the state update
+await db.transaction(async (tx) => {
+  const oldState = await store.get(address, tx);
+  await store.set(newState, tx);
+  await emitWebhookForStateChange(tx, oldState, newState);
+});
+```
+
+Event type detection is shared in `webhookEventDetection.ts` (`detectEventType`).
+Both integration modules import it so detection logic cannot drift.
+
+### Deprecated direct path
+
+`webhookIntegration.ts` emitted webhooks by calling `webhookService.emit()` directly
+after the state write, outside the outbox. **This path is deprecated** — it is not
+crash-safe and can double-emit if both paths are used. No internal callers depend on
+it; migrate to `webhookIntegrationOutbox.ts`.
+
+| Module | Status | When to use |
+| --- | --- | --- |
+| `webhookEventDetection.ts` | Shared | Import `detectEventType` only if you need detection without emission |
+| `webhookIntegrationOutbox.ts` | **Authoritative** | All new identity-state webhook integration |
+| `webhookIntegration.ts` | Deprecated | Do not use in new code; will be removed in a future release |
+
+### Migration from direct to outbox
+
+```typescript
+// Before (deprecated)
 await store.set(newState);
 await emitWebhookForStateChange(webhookService, oldState, newState);
+
+// After (authoritative)
+await db.transaction(async (tx) => {
+  await store.set(newState, tx);
+  await emitWebhookForStateChange(tx, oldState, newState);
+});
 ```
+
+The outbox publisher (`src/db/outbox/webhookPublisher.ts`) delivers events to
+registered webhook endpoints asynchronously. See `src/db/outbox/README.md` for
+outbox architecture details.
 
 ## Monitoring
 

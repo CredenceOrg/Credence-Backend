@@ -7,7 +7,9 @@ import governanceRouter from './routes/governance.js'
 import disputesRouter from './routes/disputes.js'
 import evidenceRouter from './routes/evidence.js'
 import { loadConfig } from './config/index.js'
-import { pool } from './db/pool.js'
+import { pool, workerPool, replicaPool } from './db/pool.js'
+import { redisConnection } from './cache/redis.js'
+import { createShutdownMetrics } from './observability/shutdownMetrics.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
 import { AnalyticsRefreshScheduler } from './jobs/analyticsRefreshScheduler.js'
@@ -20,9 +22,11 @@ import { FailedInboundEventsSweeper } from './jobs/failedInboundEventsSweeper.js
 import { loadFailedInboundSweeperConfig } from './config/retention.js'
 import { getInvalidationBus } from './cache/index.js'
 import { createWsSubscriptionServer } from './routes/ws.js'
+import { impersonationService } from './services/impersonation/index.js'
 
 // Outbox imports
 import { OutboxJob } from "./jobs/outbox.js";
+import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
 
 app.use("/api/admin", createAdminRouter());
 app.use("/api/governance", governanceRouter);
@@ -38,6 +42,7 @@ let failedInboundSweeper: FailedInboundEventsSweeper | null = null;
 let shutdownManager: GracefulShutdownManager | null = null;
 let wss: ReturnType<typeof createWsSubscriptionServer> | null = null;
 let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
+let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -81,6 +86,9 @@ if (process.env.NODE_ENV !== "test") {
       gracePeriodMs: config.shutdown.gracePeriodMs,
       logger: console.log,
       forceExit: (code) => process.exit(code),
+      dbPools: [pool, workerPool, replicaPool],
+      redis: redisConnection,
+      metrics: createShutdownMetrics(),
     });
 
     server.on("connection", (socket) => {
@@ -117,8 +125,21 @@ if (process.env.NODE_ENV !== "test") {
         lockKey: 'cron:settlement-reconciliation'
       })
 
+      const impersonationCleanupScheduler = createScheduler({
+        run: async () => {
+          const removed = await impersonationService.cleanupExpiredTokens()
+          return { removed }
+        }
+      }, {
+        cronExpression: '0 * * * *', // hourly
+        runOnStart: false,
+        logger: console.log,
+        lockKey: 'cron:impersonation-cleanup'
+      })
+
       refreshScheduler.start()
       reconcilerScheduler.start()
+      impersonationCleanupScheduler.start()
 
       const failedInboundSweeperConfig = loadFailedInboundSweeperConfig()
       failedInboundSweeper = new FailedInboundEventsSweeper(pool, failedInboundSweeperConfig)
@@ -129,7 +150,10 @@ if (process.env.NODE_ENV !== "test") {
           refreshScheduler.stop()
           reconcilerScheduler.stop()
           failedInboundSweeper?.stop()
-        }
+        },
+        isJobRunning() {
+          return refreshScheduler.isJobRunning() || reconcilerScheduler.isJobRunning()
+        },
       } as any
     }
 
@@ -143,6 +167,27 @@ if (process.env.NODE_ENV !== "test") {
         const message =
           error instanceof Error ? error.message : "Unknown error";
         console.error(`Failed to start Outbox Publisher: ${message}`);
+      }
+    }
+
+    // Start Request Snapshots cleanup sweeper if enabled
+    if (config.requestSnapshots.cleanupEnabled) {
+      try {
+        requestSnapshotsSweeper = new RequestSnapshotsSweeper(pool, {
+          retentionDays: config.requestSnapshots.retentionDays,
+          intervalMs: config.requestSnapshots.cleanupIntervalMs,
+          logger: console.log,
+          onMetric: (metric) => {
+            // TODO: integrate with metrics system (Prometheus, etc.)
+            console.log(`[Metrics] ${metric.name}=${metric.value}`);
+          },
+        });
+        requestSnapshotsSweeper.start();
+        console.log("[Main] Request Snapshots Sweeper started");
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error";
+        console.error(`Failed to start Request Snapshots Sweeper: ${message}`);
       }
     }
 
@@ -161,6 +206,18 @@ if (process.env.NODE_ENV !== "test") {
     shutdownManager?.setOutboxJob(outboxJob);
     shutdownManager?.setWss(wss);
     shutdownManager?.setInvalidationBus(invalidationBus);
+
+    // Stop sweepers on shutdown
+    const originalShutdown = shutdownManager?.shutdown.bind(shutdownManager);
+    if (shutdownManager && originalShutdown) {
+      shutdownManager.shutdown = async (signal?: string) => {
+        if (requestSnapshotsSweeper) {
+          console.log("[Main] Stopping Request Snapshots Sweeper");
+          requestSnapshotsSweeper.stop();
+        }
+        return originalShutdown(signal ?? "SIGTERM");
+      };
+    }
   } catch (error) {
     console.error("Failed to start Credence API:", error);
     process.exit(1);

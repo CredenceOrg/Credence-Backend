@@ -327,91 +327,116 @@ components:
                 maxLength: null
             type: optional
       type: object
+    bondErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
     bondPathParamsSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
       type: object
-      properties:
-        address:
-          type: string
-          minLength: 1
-          description: Ethereum (0x…) or Stellar (G…) wallet address
-          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-      required:
-        - address
     bondQuerySchema:
+      def:
+        type: object
+        shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
       type: object
-      additionalProperties: false
-    BondResponse:
+    bondResponseSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          bondedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          bondStart:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: nullable
+          bondDuration:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: number
+                  checks: []
+                type: number
+                minValue: null
+                maxValue: null
+                isInt: false
+                isFinite: true
+                format: null
+            type: nullable
+          active:
+            def:
+              type: boolean
+            type: boolean
+          slashedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          status:
+            def:
+              type: enum
+              entries:
+                active: active
+                slashed: slashed
+                inactive: inactive
+                unbonded: unbonded
+            type: enum
+            enum:
+              active: active
+              slashed: slashed
+              inactive: inactive
+              unbonded: unbonded
+            options:
+              - active
+              - slashed
+              - inactive
+              - unbonded
       type: object
-      properties:
-        address:
-          type: string
-          description: Normalised (lower-case) wallet address
-          example: "0x742d35cc6634c0532925a3b844bc454e4438f44e"
-        bondedAmount:
-          type: string
-          description: Current bonded amount as a string
-          example: "1000000000000000000"
-        bondStart:
-          type: string
-          nullable: true
-          description: ISO 8601 timestamp when the bond was first posted, or null
-          example: "2024-01-15T10:00:00.000Z"
-        bondDuration:
-          type: number
-          nullable: true
-          description: Bond lock duration in seconds, or null if unbonded
-          example: 2592000
-        active:
-          type: boolean
-          description: "Deprecated: use status instead"
-          example: true
-        slashedAmount:
-          type: string
-          description: Cumulative slashed amount as a string
-          example: "0"
-        status:
-          type: string
-          enum: [active, slashed, inactive, unbonded]
-          description: Canonical bond lifecycle status
-          example: active
-      required:
-        - address
-        - bondedAmount
-        - bondStart
-        - bondDuration
-        - active
-        - slashedAmount
-        - status
-    CreateBondBody:
-      type: object
-      properties:
-        address:
-          type: string
-          minLength: 1
-          description: Wallet address to associate the bond with
-          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
-        bondedAmount:
-          type: string
-          minLength: 1
-          description: Amount to bond, expressed as a string to preserve precision (e.g. wei)
-          example: "1000000000000000000"
-        bondDuration:
-          type: integer
-          minimum: 1
-          description: Bond lock duration in seconds
-          example: 2592000
-      required:
-        - address
-        - bondedAmount
-        - bondDuration
-    BondError:
-      type: object
-      properties:
-        error:
-          type: string
-          example: "No bond record found for address 0x…"
-      required:
-        - error
     createAttestationBodySchema:
       def:
         type: object
@@ -524,6 +549,52 @@ components:
             type: never
           type: never
       type: object
+    createBondBodySchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          bondedAmount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          bondDuration:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
     createPayoutSchema:
       def:
         type: object
@@ -632,6 +703,201 @@ components:
                   - failed
             type: optional
       type: object
+    createPolicyBodySchema:
+      def:
+        type: object
+        shape:
+          subject:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          action:
+            def:
+              type: enum
+              entries:
+                org:read: org:read
+                org:update: org:update
+                org:delete: org:delete
+                org:member:invite: org:member:invite
+                org:member:remove: org:member:remove
+                org:member:list: org:member:list
+                org:role:assign: org:role:assign
+                org:apikey:create: org:apikey:create
+                org:apikey:revoke: org:apikey:revoke
+                org:apikey:list: org:apikey:list
+                org:audit:read: org:audit:read
+                org:policy:read: org:policy:read
+                org:policy:write: org:policy:write
+                "*": "*"
+            type: enum
+            enum:
+              org:read: org:read
+              org:update: org:update
+              org:delete: org:delete
+              org:member:invite: org:member:invite
+              org:member:remove: org:member:remove
+              org:member:list: org:member:list
+              org:role:assign: org:role:assign
+              org:apikey:create: org:apikey:create
+              org:apikey:revoke: org:apikey:revoke
+              org:apikey:list: org:apikey:list
+              org:audit:read: org:audit:read
+              org:policy:read: org:policy:read
+              org:policy:write: org:policy:write
+              "*": "*"
+            options:
+              - org:read
+              - org:update
+              - org:delete
+              - org:member:invite
+              - org:member:remove
+              - org:member:list
+              - org:role:assign
+              - org:apikey:create
+              - org:apikey:revoke
+              - org:apikey:list
+              - org:audit:read
+              - org:policy:read
+              - org:policy:write
+              - "*"
+          resource:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          effect:
+            def:
+              type: enum
+              entries:
+                allow: allow
+                deny: deny
+            type: enum
+            enum:
+              allow: allow
+              deny: deny
+            options:
+              - allow
+              - deny
+          conditions:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: record
+                  keyType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  valueType:
+                    def:
+                      type: union
+                      options:
+                        - def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        - def:
+                            type: boolean
+                          type: boolean
+                        - def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                type: record
+                keyType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                valueType:
+                  def:
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                  type: union
+                  options:
+                    - def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    - def:
+                        type: boolean
+                      type: boolean
+                    - def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     createReportBodySchema:
       def:
         type: object
@@ -657,6 +923,192 @@ components:
             type: never
           type: never
       type: object
+    policyListQuerySchema:
+      def:
+        type: object
+        shape:
+          page:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+          limit:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+      type: object
+    policyOrgPathParamsSchema:
+      def:
+        type: object
+        shape:
+          orgId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    policyRulePathParamsSchema:
+      def:
+        type: object
+        shape:
+          orgId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          ruleId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    reportJobParamsSchema:
+      def:
+        type: object
+        shape:
+          jobId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
     reportTypeSchema:
       def:
         type: enum
@@ -673,6 +1125,853 @@ components:
         - trust_score_summary
         - bond_audit
         - attestation_export
+    resolveDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          resolution:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    slashRequestPathParamsSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    slashRequestSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          targetAddress:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          requestedBy:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          votes:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    voterId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    choice:
+                      def:
+                        type: enum
+                        entries:
+                          approve: approve
+                          reject: reject
+                      type: enum
+                      enum:
+                        approve: approve
+                        reject: reject
+                      options:
+                        - approve
+                        - reject
+                    timestamp:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  voterId:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  choice:
+                    def:
+                      type: enum
+                      entries:
+                        approve: approve
+                        reject: reject
+                    type: enum
+                    enum:
+                      approve: approve
+                      reject: reject
+                    options:
+                      - approve
+                      - reject
+                  timestamp:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+              type: object
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                approved: approved
+                rejected: rejected
+            type: enum
+            enum:
+              pending: pending
+              approved: approved
+              rejected: rejected
+            options:
+              - pending
+              - approved
+              - rejected
+          threshold:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          totalSigners:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    slashRequestStatusSchema:
+      def:
+        type: enum
+        entries:
+          pending: pending
+          approved: approved
+          rejected: rejected
+      type: enum
+      enum:
+        pending: pending
+        approved: approved
+        rejected: rejected
+      options:
+        - pending
+        - approved
+        - rejected
+    slashRequestsListResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    targetAddress:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    reason:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    requestedBy:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    createdAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    votes:
+                      def:
+                        type: array
+                        element:
+                          def:
+                            type: object
+                            shape:
+                              voterId:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                              choice:
+                                def:
+                                  type: enum
+                                  entries:
+                                    approve: approve
+                                    reject: reject
+                                type: enum
+                                enum:
+                                  approve: approve
+                                  reject: reject
+                                options:
+                                  - approve
+                                  - reject
+                              timestamp:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                          type: object
+                      type: array
+                      element:
+                        def:
+                          type: object
+                          shape:
+                            voterId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            choice:
+                              def:
+                                type: enum
+                                entries:
+                                  approve: approve
+                                  reject: reject
+                              type: enum
+                              enum:
+                                approve: approve
+                                reject: reject
+                              options:
+                                - approve
+                                - reject
+                            timestamp:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    status:
+                      def:
+                        type: enum
+                        entries:
+                          pending: pending
+                          approved: approved
+                          rejected: rejected
+                      type: enum
+                      enum:
+                        pending: pending
+                        approved: approved
+                        rejected: rejected
+                      options:
+                        - pending
+                        - approved
+                        - rejected
+                    threshold:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    totalSigners:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  id:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  targetAddress:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  reason:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  requestedBy:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  createdAt:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+                  votes:
+                    def:
+                      type: array
+                      element:
+                        def:
+                          type: object
+                          shape:
+                            voterId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            choice:
+                              def:
+                                type: enum
+                                entries:
+                                  approve: approve
+                                  reject: reject
+                              type: enum
+                              enum:
+                                approve: approve
+                                reject: reject
+                              options:
+                                - approve
+                                - reject
+                            timestamp:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    type: array
+                    element:
+                      def:
+                        type: object
+                        shape:
+                          voterId:
+                            def:
+                              type: string
+                            type: string
+                            format: null
+                            minLength: null
+                            maxLength: null
+                          choice:
+                            def:
+                              type: enum
+                              entries:
+                                approve: approve
+                                reject: reject
+                            type: enum
+                            enum:
+                              approve: approve
+                              reject: reject
+                            options:
+                              - approve
+                              - reject
+                          timestamp:
+                            def:
+                              type: string
+                              checks:
+                                - def:
+                                    type: string
+                                    format: datetime
+                                    check: string_format
+                                    offset: false
+                                    local: false
+                                    precision: null
+                                    pattern: {}
+                                  type: string
+                                  format: datetime
+                                  minLength: null
+                                  maxLength: null
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: object
+                  status:
+                    def:
+                      type: enum
+                      entries:
+                        pending: pending
+                        approved: approved
+                        rejected: rejected
+                    type: enum
+                    enum:
+                      pending: pending
+                      approved: approved
+                      rejected: rejected
+                    options:
+                      - pending
+                      - approved
+                      - rejected
+                  threshold:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                    type: number
+                    minValue: -9007199254740991
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                  totalSigners:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                    type: number
+                    minValue: -9007199254740991
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+              type: object
+          page:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          limit:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          total:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          hasNext:
+            def:
+              type: boolean
+            type: boolean
+      type: object
+    slashRequestsQuerySchema:
+      def:
+        type: object
+        shape:
+          status:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    pending: pending
+                    approved: approved
+                    rejected: rejected
+                type: enum
+                enum:
+                  pending: pending
+                  approved: approved
+                  rejected: rejected
+                options:
+                  - pending
+                  - approved
+                  - rejected
+            type: optional
+          page:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          offset:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
     stellarAddressSchema:
       def:
         type: string
@@ -686,6 +1985,126 @@ components:
       format: null
       minLength: 1
       maxLength: null
+    transactionsHistoryQuerySchema:
+      def:
+        type: object
+        shape:
+          limit:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 1
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 1
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+          cursor:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                type: optional
+              out:
+                def:
+                  type: transform
+                type: transform
+            type: pipe
+            in:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+              type: optional
+            out:
+              def:
+                type: transform
+              type: transform
+          bondId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     trustExplainQuerySchema:
       def:
         type: object
@@ -766,6 +2185,217 @@ components:
       def:
         type: object
         shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    updatePolicyBodySchema:
+      def:
+        type: object
+        shape:
+          subject:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+          action:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    org:read: org:read
+                    org:update: org:update
+                    org:delete: org:delete
+                    org:member:invite: org:member:invite
+                    org:member:remove: org:member:remove
+                    org:member:list: org:member:list
+                    org:role:assign: org:role:assign
+                    org:apikey:create: org:apikey:create
+                    org:apikey:revoke: org:apikey:revoke
+                    org:apikey:list: org:apikey:list
+                    org:audit:read: org:audit:read
+                    org:policy:read: org:policy:read
+                    org:policy:write: org:policy:write
+                    "*": "*"
+                type: enum
+                enum:
+                  org:read: org:read
+                  org:update: org:update
+                  org:delete: org:delete
+                  org:member:invite: org:member:invite
+                  org:member:remove: org:member:remove
+                  org:member:list: org:member:list
+                  org:role:assign: org:role:assign
+                  org:apikey:create: org:apikey:create
+                  org:apikey:revoke: org:apikey:revoke
+                  org:apikey:list: org:apikey:list
+                  org:audit:read: org:audit:read
+                  org:policy:read: org:policy:read
+                  org:policy:write: org:policy:write
+                  "*": "*"
+                options:
+                  - org:read
+                  - org:update
+                  - org:delete
+                  - org:member:invite
+                  - org:member:remove
+                  - org:member:list
+                  - org:role:assign
+                  - org:apikey:create
+                  - org:apikey:revoke
+                  - org:apikey:list
+                  - org:audit:read
+                  - org:policy:read
+                  - org:policy:write
+                  - "*"
+            type: optional
+          resource:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+          effect:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    allow: allow
+                    deny: deny
+                type: enum
+                enum:
+                  allow: allow
+                  deny: deny
+                options:
+                  - allow
+                  - deny
+            type: optional
+          conditions:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: record
+                  keyType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  valueType:
+                    def:
+                      type: union
+                      options:
+                        - def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        - def:
+                            type: boolean
+                          type: boolean
+                        - def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                type: record
+                keyType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                valueType:
+                  def:
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                  type: union
+                  options:
+                    - def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    - def:
+                        type: boolean
+                      type: boolean
+                    - def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+            type: optional
         catchall:
           def:
             type: never
@@ -924,23 +2554,102 @@ components:
             isFinite: true
             format: safeint
       type: object
+    BondResponse:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Normalised (lower-case) wallet address
+          example: "0x742d35cc6634c0532925a3b844bc454e4438f44e"
+        bondedAmount:
+          type: string
+          description: Current bonded amount as a string
+          example: "1000000000000000000"
+        bondStart:
+          type: string
+          nullable: true
+          description: ISO 8601 timestamp when the bond was first posted, or null
+          example: 2024-01-15T10:00:00.000Z
+        bondDuration:
+          type: number
+          nullable: true
+          description: Bond lock duration in seconds, or null if unbonded
+          example: 2592000
+        active:
+          type: boolean
+          description: "Deprecated: use `status` instead"
+          example: true
+        slashedAmount:
+          type: string
+          description: Cumulative slashed amount as a string
+          example: "0"
+        status:
+          type: string
+          enum:
+            - active
+            - slashed
+            - inactive
+            - unbonded
+          description: Canonical bond lifecycle status
+          example: active
+      required:
+        - address
+        - bondedAmount
+        - bondStart
+        - bondDuration
+        - active
+        - slashedAmount
+        - status
+    BondError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: No bond record found for address 0x…
+      required:
+        - error
+    CreateBondBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Wallet address to associate the bond with
+          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+        bondedAmount:
+          type: string
+          minLength: 1
+          description: Amount to bond, expressed as a string to preserve precision (e.g.
+            wei)
+          example: "1000000000000000000"
+        bondDuration:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          description: Bond lock duration in seconds
+          example: 2592000
+      required:
+        - address
+        - bondedAmount
+        - bondDuration
   parameters: {}
 paths:
-  /api/bond/{address}:
+  /api/health:
     get:
-      tags:
-        - Bond
       summary: Get bond status
       description: Returns the current bond status and lifecycle state for a wallet address.
+      tags:
+        - Bond
       parameters:
-        - name: address
-          in: path
-          required: true
-          schema:
+        - schema:
             type: string
             minLength: 1
+            description: Ethereum (0x…) or Stellar (G…) wallet address
+            example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+          required: true
           description: Ethereum (0x…) or Stellar (G…) wallet address
-          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+          name: address
+          in: path
       responses:
         "200":
           description: Bond record found
@@ -962,10 +2671,11 @@ paths:
                 $ref: "#/components/schemas/BondError"
   /api/bond:
     post:
+      summary: Create or top-up a bond
+      description: Creates a new bond or tops up an existing one for the given wallet
+        address.
       tags:
         - Bond
-      summary: Create or top-up a bond
-      description: Creates a new bond or tops up an existing one for the given wallet address.
       requestBody:
         required: true
         content:
@@ -985,3 +2695,242 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BondError"
+  /.well-known/jwks.json:
+    get:
+      tags:
+        - Auth
+      summary: JWKS endpoint
+      description: Returns the JSON Web Key Set used to verify JWT tokens.
+      responses:
+        "200":
+          description: JWKS payload
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Returns service health status.
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/trust/{address}:
+    get:
+      tags:
+        - Trust
+      summary: Get trust record
+      description: Returns the trust record for a wallet address.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trust record found
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/trust:
+    post:
+      tags:
+        - Trust
+      summary: Create trust record
+      description: Creates a trust record for a wallet address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Trust record created
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/attestations/{address}:
+    get:
+      tags:
+        - Attestations
+      summary: Get attestations for address
+      description: Returns attestations for a given subject address.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attestation list
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/attestations:
+    post:
+      tags:
+        - Attestations
+      summary: Create attestation
+      description: Creates a new attestation record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Attestation created
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/bulk:
+    post:
+      tags:
+        - Bulk
+      summary: Bulk operation
+      description: Performs a bulk data operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Bulk operation result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/imports:
+    post:
+      tags:
+        - Imports
+      summary: Import data
+      description: Imports external data records.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/orgs/{orgId}/policies:
+    get:
+      tags:
+        - Organizations
+      summary: Get org policies
+      description: Returns policies for the given organization.
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy list
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/analytics:
+    get:
+      tags:
+        - Analytics
+      summary: Get analytics
+      description: Returns aggregated analytics data.
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/payouts:
+    post:
+      tags:
+        - Payouts
+      summary: Initiate payout
+      description: Initiates a payout for a bond settlement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Payout initiated
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object

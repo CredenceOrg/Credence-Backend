@@ -155,6 +155,23 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+
+  // Request snapshots retention
+  REQUEST_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .default('14')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS: z
+    .string()
+    .default('86400000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)),
+  REQUEST_SNAPSHOT_CLEANUP_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val === 'true'),
+
   SHUTDOWN_GRACE_PERIOD_MS: z
     .string()
     .default('30000')
@@ -311,6 +328,20 @@ export const envSchema = z.object({
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+
+  // Audit log export
+  AUDIT_EXPORT_MAX_WINDOW_DAYS: z
+    .string()
+    .default('90')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(3650)),
+
+  // Report generation
+  REPORT_MAX_CONCURRENT_JOBS_PER_ORG: z
+    .string()
+    .default('10')
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(1000)),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -369,6 +400,11 @@ export interface Config {
     failedRetentionDays: number
     cleanupIntervalMs: number
   }
+  requestSnapshots: {
+    retentionDays: number
+    cleanupIntervalMs: number
+    cleanupEnabled: boolean
+  }
   shutdown: {
     gracePeriodMs: number
   }
@@ -412,6 +448,12 @@ export interface Config {
   sorobanCircuitBreaker: {
     failureThreshold: number
     cooldownPeriodMs: number
+  }
+  auditLog: {
+    exportMaxWindowDays: number
+  }
+  reports: {
+    maxConcurrentJobsPerOrg: number
   }
   endpointCostWeights: Record<string, number>
   credits: {
@@ -533,6 +575,11 @@ function mapEnvToConfig(env: Env): Config {
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
     },
+    requestSnapshots: {
+      retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,
+      cleanupIntervalMs: env.REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS,
+      cleanupEnabled: env.REQUEST_SNAPSHOT_CLEANUP_ENABLED,
+    },
     shutdown: {
       gracePeriodMs: env.SHUTDOWN_GRACE_PERIOD_MS,
     },
@@ -576,6 +623,12 @@ function mapEnvToConfig(env: Env): Config {
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
       cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+    },
+    auditLog: {
+      exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
+    },
+    reports: {
+      maxConcurrentJobsPerOrg: env.REPORT_MAX_CONCURRENT_JOBS_PER_ORG,
     },
     endpointCostWeights: parseCostWeights(env.ENDPOINT_COST_WEIGHTS),
     credits: {

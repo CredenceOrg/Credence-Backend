@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { Dispute, DisputeInput } from './types.js'
+import type { Dispute, DisputeInput, DisputeStatus } from './types.js'
 import { tryTransition } from './disputeStateMachine.js'
 
 const store = new Map<string, Dispute>()
@@ -50,7 +50,7 @@ export function validateDisputeInput(input: DisputeInput): string[] {
   return errors
 }
 
-export function submitDispute(input: DisputeInput): Dispute {
+export function submitDispute(input: DisputeInput, tenantId: string): Dispute {
   const errors = validateDisputeInput(input)
   if (errors.length > 0) {
     throw new Error(`Invalid dispute: ${errors.join('; ')}`)
@@ -59,6 +59,7 @@ export function submitDispute(input: DisputeInput): Dispute {
   const now = new Date()
   const dispute: Dispute = {
     id: randomUUID(),
+    tenantId,
     filedBy: input.filedBy,
     respondent: input.respondent,
     reason: input.reason,
@@ -130,4 +131,58 @@ export function markUnderReview(id: string): Dispute {
 
   dispute.status = 'under_review'
   return dispute
+}
+
+export interface ListDisputesFilter {
+  tenantId: string
+  status?: DisputeStatus
+}
+
+export interface ListDisputesPagination {
+  limit: number
+  cursor?: { t: string; i: string }
+}
+
+export interface ListDisputesResult {
+  data: Dispute[]
+  hasMore: boolean
+}
+
+export function listDisputes(filter: ListDisputesFilter, pagination: ListDisputesPagination): ListDisputesResult {
+  let results = Array.from(store.values()).filter(d => d.tenantId === filter.tenantId)
+  
+  if (filter.status) {
+    results = results.filter(d => d.status === filter.status)
+  }
+
+  // Stable ordering by createdAt (descending), then by id (descending)
+  results.sort((a, b) => {
+    const timeDiff = b.createdAt.getTime() - a.createdAt.getTime()
+    if (timeDiff !== 0) return timeDiff
+    return b.id.localeCompare(a.id)
+  })
+
+  if (pagination.cursor) {
+    const cursorTimeMs = new Date(pagination.cursor.t).getTime()
+    const cursorId = pagination.cursor.i
+
+    results = results.filter(d => {
+      const timeMs = d.createdAt.getTime()
+      if (timeMs < cursorTimeMs) return true
+      if (timeMs === cursorTimeMs && d.id < cursorId) return true
+      return false
+    })
+  }
+
+  // take limit + 1
+  const limited = results.slice(0, pagination.limit + 1)
+  const hasMore = limited.length > pagination.limit
+  if (hasMore) {
+    limited.pop()
+  }
+
+  return {
+    data: limited,
+    hasMore
+  }
 }
