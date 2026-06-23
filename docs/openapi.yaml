@@ -985,3 +985,242 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BondError"
+  /.well-known/jwks.json:
+    get:
+      tags:
+        - Auth
+      summary: JWKS endpoint
+      description: Returns the JSON Web Key Set used to verify JWT tokens.
+      responses:
+        "200":
+          description: JWKS payload
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/health:
+    get:
+      tags:
+        - System
+      summary: Health check
+      description: Returns service health status.
+      responses:
+        "200":
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/trust/{address}:
+    get:
+      tags:
+        - Trust
+      summary: Get trust record
+      description: Returns the trust record for a wallet address.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Trust record found
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/trust:
+    post:
+      tags:
+        - Trust
+      summary: Create trust record
+      description: Creates a trust record for a wallet address.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Trust record created
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/attestations/{address}:
+    get:
+      tags:
+        - Attestations
+      summary: Get attestations for address
+      description: Returns attestations for a given subject address.
+      parameters:
+        - name: address
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attestation list
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/attestations:
+    post:
+      tags:
+        - Attestations
+      summary: Create attestation
+      description: Creates a new attestation record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "201":
+          description: Attestation created
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/bulk:
+    post:
+      tags:
+        - Bulk
+      summary: Bulk operation
+      description: Performs a bulk data operation.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Bulk operation result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/imports:
+    post:
+      tags:
+        - Imports
+      summary: Import data
+      description: Imports external data records.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/orgs/{orgId}/policies:
+    get:
+      tags:
+        - Organizations
+      summary: Get org policies
+      description: Returns policies for the given organization.
+      parameters:
+        - name: orgId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy list
+          content:
+            application/json:
+              schema:
+                type: object
+        "404":
+          description: Not found
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/analytics:
+    get:
+      tags:
+        - Analytics
+      summary: Get analytics
+      description: Returns aggregated analytics data.
+      responses:
+        "200":
+          description: Analytics data
+          content:
+            application/json:
+              schema:
+                type: object
+  /api/payouts:
+    post:
+      tags:
+        - Payouts
+      summary: Initiate payout
+      description: Initiates a payout for a bond settlement.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+      responses:
+        "200":
+          description: Payout initiated
+          content:
+            application/json:
+              schema:
+                type: object
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
