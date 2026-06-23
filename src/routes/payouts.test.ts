@@ -57,6 +57,12 @@ const db = vi.hoisted(() => {
       return { rows: [], rowCount: 1 }
     }
 
+    if (sql.includes('FROM settlements') && sql.includes('transaction_hash')) {
+      const txHash = String(params[0])
+      const existing = settlementsByTx.get(txHash)
+      return { rows: existing ? [{ id: existing.id }] : [], rowCount: existing ? 1 : 0 }
+    }
+
     if (sql.includes('INSERT INTO settlements')) {
       if (failNextSettlement) {
         const error = failNextSettlement
