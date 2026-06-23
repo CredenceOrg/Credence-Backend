@@ -188,13 +188,13 @@ describe('disputes', () => {
     it('throws when already resolved', () => {
       const d = submitDispute(validInput())
       resolveDispute(d.id, 'done')
-      expect(() => resolveDispute(d.id, 'again')).toThrow('already resolved')
+      expect(() => resolveDispute(d.id, 'again')).toThrow('Invalid transition')
     })
 
     it('throws when dispute was dismissed', () => {
       const d = submitDispute(validInput())
       dismissDispute(d.id, 'Frivolous claim')
-      expect(() => resolveDispute(d.id, 'nah')).toThrow('dismissed')
+      expect(() => resolveDispute(d.id, 'nah')).toThrow('Invalid transition')
     })
 
     it('throws when dispute is expired', () => {
@@ -232,13 +232,13 @@ describe('disputes', () => {
     it('throws when already resolved', () => {
       const d = submitDispute(validInput())
       resolveDispute(d.id, 'done')
-      expect(() => dismissDispute(d.id, 'reason')).toThrow('resolved')
+      expect(() => dismissDispute(d.id, 'reason')).toThrow('Invalid transition')
     })
 
     it('throws when already dismissed', () => {
       const d = submitDispute(validInput())
       dismissDispute(d.id, 'reason')
-      expect(() => dismissDispute(d.id, 'again')).toThrow('already dismissed')
+      expect(() => dismissDispute(d.id, 'again')).toThrow('Invalid transition')
     })
 
     it('throws when reason is empty', () => {
@@ -259,7 +259,7 @@ describe('disputes', () => {
     it('throws when not in pending state', () => {
       const d = submitDispute(validInput())
       markUnderReview(d.id)
-      expect(() => markUnderReview(d.id)).toThrow('Cannot review dispute')
+      expect(() => markUnderReview(d.id)).toThrow('Invalid transition')
     })
 
     it('throws when dispute not found', () => {

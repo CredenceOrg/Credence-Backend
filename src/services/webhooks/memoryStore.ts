@@ -18,4 +18,23 @@ export class MemoryWebhookStore implements WebhookStore {
   async set(config: WebhookConfig): Promise<void> {
     this.webhooks.set(config.id, config)
   }
+
+  async rotateSecret(
+    id: string,
+    newSecret: string,
+    previousSecret: string,
+    previousSecretExpiresAt: string,
+  ): Promise<WebhookConfig> {
+    const existing = this.webhooks.get(id)
+    if (!existing) throw new Error(`Webhook not found: ${id}`)
+    const updated: WebhookConfig = {
+      ...existing,
+      secret: newSecret,
+      previousSecret,
+      secretRotatedAt: new Date().toISOString(),
+      previousSecretExpiresAt,
+    }
+    this.webhooks.set(id, updated)
+    return updated
+  }
 }

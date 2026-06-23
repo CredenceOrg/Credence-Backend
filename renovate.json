@@ -1,0 +1,42 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "separateMajorMinor": true,
+  "packageRules": [
+    {
+      "description": "Block auto-merging for all major dependency updates",
+      "matchUpdateTypes": ["major"],
+      "automerge": false,
+      "labels": ["major-update", "manual-review"]
+    },
+    {
+      "description": "Group npm packages by ecosystem",
+      "matchManagers": ["npm"],
+      "matchUpdateTypes": ["minor", "patch"],
+      "groupName": "npm-ecosystem-updates",
+      "groupSlug": "npm-deps"
+    },
+    {
+      "description": "Group GitHub Actions updates",
+      "matchManagers": ["github-actions"],
+      "groupName": "github-actions-updates",
+      "groupSlug": "gh-actions-deps"
+    },
+    {
+      "description": "Group Docker and Docker Compose updates",
+      "matchManagers": ["dockerfile", "docker-compose"],
+      "groupName": "docker-ecosystem-updates",
+      "groupSlug": "docker-deps"
+    },
+    {
+      "description": "Explicit group for all security-related updates",
+      "matchUpdateTypes": ["digest", "patch"],
+      "matchPackageNames": ["*"],
+      "semanticCommitType": "fix",
+      "semanticCommitScope": "security",
+      "labels": ["security"]
+    }
+  ]
+}

@@ -12,6 +12,8 @@ export interface ScoreSnapshot {
   attestationCount: number
   /** Timestamp when snapshot was taken (ISO string). */
   timestamp: string
+  /** Scoring model version used to compute this score. */
+  scoringModelVersion?: string
 }
 
 /**
@@ -100,8 +102,18 @@ export interface ReportJob {
   failureReason?: string
   /** URL or path to the generated artifact (if completed). */
   artifactUrl?: string
+  /** Storage key for the generated artifact (if completed). */
+  storageKey?: string
   /** ISO timestamp when job was created. */
   createdAt: string
   /** ISO timestamp when job was last updated. */
   updatedAt: string
+}
+
+/**
+ * Report worker configuration.
+ */
+export interface ReportWorkerConfig {
+  /** Tenant ID for the report. */
+  tenantId?: string
 }

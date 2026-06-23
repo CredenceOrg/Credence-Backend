@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../db/migrations.js'
 import { IdentitiesRepository } from '../repositories/identities.repository.js'
 import { AttestationsRepository } from '../repositories/attestations.repository.js'
+import { getTenantId, setTenantId } from '../utils/tenantContext.js'
+
+// Mock the tenant context
+vi.mock('../utils/tenantContext.js', () => ({
+  getTenantId: vi.fn(),
+  setTenantId: vi.fn(),
+}))
 
 describe('AttestationsRepository', () => {
   let db: Database.Database
@@ -11,17 +18,24 @@ describe('AttestationsRepository', () => {
   let identityId: number
 
   beforeEach(() => {
+    // Set up tenant context for tests
+    vi.mocked(getTenantId).mockReturnValue('test-tenant')
+    
     db = new Database(':memory:')
     db.pragma('foreign_keys = ON')
     runMigrations(db)
-    identities = new IdentitiesRepository(db)
+    
+    // Create repositories with skipTenantCheck option
+    identities = new IdentitiesRepository(db, { skipTenantCheck: true })
     attestations = new AttestationsRepository(db)
-    const identity = identities.create({ address: '0xABCDEF1234567890' })
+    
+    const identity = identities.create({ address: '0xABCDEF1234567890', tenantId: 'test-tenant' })
     identityId = identity.id
   })
 
   afterEach(() => {
     db.close()
+    vi.clearAllMocks()
   })
 
   it('should create an attestation with default weight', () => {

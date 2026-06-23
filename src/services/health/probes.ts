@@ -1,7 +1,19 @@
 import type { HealthProbe } from "./types.js";
+import { pool } from "../../db/pool.js";
+import { RedisConnection } from "../../cache/redis.js";
+import { getCircuitBreaker } from "../../clients/circuitBreaker.js";
+import {
+  getHorizonListenerState,
+  getOutboxPublisherState,
+  setHorizonListenerConfigured,
+  setOutboxPublisherConfigured,
+} from "./runtimeState.js";
 
 /** Default timeout (ms) for each dependency check to avoid hanging. */
 const CHECK_TIMEOUT_MS = 5000;
+const WORKER_HEARTBEAT_STALE_MS = Number(
+  process.env.HEALTH_WORKER_STALE_MS ?? "60000",
+);
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([
@@ -10,6 +22,10 @@ function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
       setTimeout(() => reject(new Error("timeout")), ms),
     ),
   ]);
+}
+
+function elapsed(start: number): number {
+  return Date.now() - start;
 }
 
 /**
@@ -27,25 +43,23 @@ export interface DbProbeOptions {
 export function createDbProbe(
   options: DbProbeOptions = {},
 ): HealthProbe | undefined {
-  const url = process.env.DATABASE_URL;
-  if (!url && !options.runQuery) return undefined;
-
-  let pool: import("pg").Pool | null = null;
+  if (!process.env.DB_URL && !options.runQuery) return undefined;
 
   return async () => {
+    const start = Date.now();
     try {
       if (options.runQuery) {
         await withTimeout(options.runQuery(), CHECK_TIMEOUT_MS);
-        return { status: "up" };
+      } else {
+        await withTimeout(pool.query("SELECT 1"), CHECK_TIMEOUT_MS);
       }
-      if (!pool) {
-        const pg = (await import("pg")).default;
-        pool = new pg.Pool({ connectionString: url });
-      }
-      await withTimeout(pool.query("SELECT 1"), CHECK_TIMEOUT_MS);
-      return { status: "up" };
-    } catch {
-      return { status: "down" };
+      return { status: "up", latencyMs: elapsed(start) };
+    } catch (err) {
+      const reason =
+        err instanceof Error && err.message === "timeout"
+          ? "timeout"
+          : "connection_refused";
+      return { status: "down", reason, latencyMs: elapsed(start) };
     }
   };
 }
@@ -69,26 +83,27 @@ function createGenericRedisProbe(
   const url = process.env[urlEnvVar];
   if (!url && !options.ping) return undefined;
 
-  let client: {
-    ping: () => Promise<string>;
-    quit: () => Promise<string>;
-  } | null = null;
-
   return async () => {
+    const start = Date.now();
     try {
       if (options.ping) {
         await withTimeout(options.ping(), CHECK_TIMEOUT_MS);
-        return { status: "up" };
+        return { status: "up", latencyMs: elapsed(start) };
       }
-      if (!client) {
-        const ioredis = await import("ioredis");
-        const Redis = ioredis.default as any;
-        client = new Redis(url!, { maxRetriesPerRequest: 1 });
+
+      const redis = RedisConnection.getInstance();
+      await withTimeout(redis.connect(), CHECK_TIMEOUT_MS);
+      const healthy = await withTimeout(redis.isHealthy(), CHECK_TIMEOUT_MS);
+      if (!healthy) {
+        return { status: "down", reason: "connection_refused", latencyMs: elapsed(start) };
       }
-      await withTimeout(client!.ping(), CHECK_TIMEOUT_MS);
-      return { status: "up" };
-    } catch {
-      return { status: "down" };
+      return { status: "up", latencyMs: elapsed(start) };
+    } catch (err) {
+      const reason =
+        err instanceof Error && err.message === "timeout"
+          ? "timeout"
+          : "connection_refused";
+      return { status: "down", reason, latencyMs: elapsed(start) };
     }
   };
 }
@@ -111,46 +126,164 @@ export function createQueueProbe(
   return createGenericRedisProbe("QUEUE_URL", options);
 }
 
-/**
- * Optional gateway (e.g. Horizon/contract) probe.
- * When provided, failure is reported as degraded, not unhealthy.
- */
-export function createGatewayProbe(
-  check?: () => Promise<boolean>,
-): HealthProbe | undefined {
-  if (!check) return undefined;
-  
+export function createHorizonListenerProbe(
+  maxStaleMs: number = WORKER_HEARTBEAT_STALE_MS,
+): HealthProbe {
   return async () => {
+    const start = Date.now();
+    const state = getHorizonListenerState();
+    if (!state.configured) {
+      return { status: "not_configured" };
+    }
+    if (!state.running) {
+      return { status: "down", reason: "not_running", latencyMs: elapsed(start) };
+    }
+    if (state.lastHeartbeatAt === null) {
+      return { status: "down", reason: "no_heartbeat", latencyMs: elapsed(start) };
+    }
+
+    const ageMs = Date.now() - state.lastHeartbeatAt;
+    if (ageMs > maxStaleMs) {
+      return {
+        status: "down",
+        reason: "stale_heartbeat",
+        latencyMs: elapsed(start),
+        details: {
+          heartbeatAgeMs: ageMs,
+          maxHeartbeatAgeMs: maxStaleMs,
+          lastCursor: state.lastCursor,
+        },
+      };
+    }
+
+    return {
+      status: "up",
+      latencyMs: elapsed(start),
+      details: {
+        heartbeatAgeMs: ageMs,
+        maxHeartbeatAgeMs: maxStaleMs,
+        lastCursor: state.lastCursor,
+      },
+    };
+  };
+}
+
+export function createOutboxPublisherProbe(
+  maxStaleMs: number = WORKER_HEARTBEAT_STALE_MS,
+): HealthProbe {
+  return async () => {
+    const start = Date.now();
+    const state = getOutboxPublisherState();
+    if (!state.configured) {
+      return { status: "not_configured" };
+    }
+    if (!state.running) {
+      return { status: "down", reason: "not_running", latencyMs: elapsed(start) };
+    }
+    if (state.lastHeartbeatAt === null) {
+      return { status: "down", reason: "no_heartbeat", latencyMs: elapsed(start) };
+    }
+
+    const ageMs = Date.now() - state.lastHeartbeatAt;
+    if (ageMs > maxStaleMs) {
+      return {
+        status: "down",
+        reason: "stale_heartbeat",
+        latencyMs: elapsed(start),
+        details: {
+          heartbeatAgeMs: ageMs,
+          maxHeartbeatAgeMs: maxStaleMs,
+        },
+      };
+    }
+
+    return {
+      status: "up",
+      latencyMs: elapsed(start),
+      details: {
+        heartbeatAgeMs: ageMs,
+        maxHeartbeatAgeMs: maxStaleMs,
+      },
+    };
+  };
+}
+
+/**
+ * Options for the Horizon/Soroban circuit breaker probe (for testing).
+ */
+export interface HorizonClientProbeOptions {
+  /** Inject a state getter for testing; returns the breaker state string. */
+  getState?: () => string;
+}
+
+/**
+ * Creates a Horizon/Soroban reachability probe using the circuit breaker state.
+ * Reports 'down' when the breaker is OPEN (repeated failures to the RPC endpoint).
+ * Reports 'not_configured' when HORIZON_URL is absent.
+ */
+export function createHorizonClientProbe(
+  options: HorizonClientProbeOptions = {},
+): HealthProbe | undefined {
+  const horizonUrl = process.env.HORIZON_URL;
+  if (!horizonUrl && !options.getState) return undefined;
+
+  return async () => {
+    const start = Date.now();
     try {
-      const ok = await withTimeout(check(), CHECK_TIMEOUT_MS);
-      return { status: ok ? "up" : "down" };
-    } catch {
-      return { status: "down" };
+      let state: string;
+      if (options.getState) {
+        state = options.getState();
+      } else {
+        const host = new URL(horizonUrl!).host;
+        const breaker = getCircuitBreaker(host, { failureThreshold: 5, cooldownPeriodMs: 10000 });
+        state = breaker.getState();
+      }
+
+      if (state === 'OPEN') {
+        return { status: 'down', reason: 'circuit_open', latencyMs: elapsed(start) };
+      }
+      return {
+        status: 'up',
+        latencyMs: elapsed(start),
+        details: { circuitState: state },
+      };
+    } catch (err) {
+      return { status: 'down', reason: 'unreachable', latencyMs: elapsed(start) };
     }
   };
 }
 
 /**
- * Builds default probes from environment (DATABASE_URL, REDIS_URL, QUEUE_URL).
+ * Builds default probes from environment and runtime worker state.
  * When not configured, skips that probe (reported as not_configured).
  */
 export function createDefaultProbes(): {
-  db?: HealthProbe;
-  cache?: HealthProbe;
-  queue?: HealthProbe;
-  gateway?: HealthProbe;
+  postgres?: HealthProbe;
+  redis?: HealthProbe;
+  horizonListener?: HealthProbe;
+  outboxPublisher?: HealthProbe;
+  horizon?: HealthProbe;
 } {
-  const out: { db?: HealthProbe; cache?: HealthProbe; queue?: HealthProbe; gateway?: HealthProbe } =
-    {};
-  if (process.env.DATABASE_URL) out.db = createDbProbe();
-  if (process.env.REDIS_URL) out.cache = createCacheProbe();
-  if (process.env.QUEUE_URL) out.queue = createQueueProbe();
-  // Gateway could have a default check if GATEWAY_URL is provided, but currently it's externally provided
-  if (process.env.GATEWAY_URL) {
-    out.gateway = createGatewayProbe(async () => {
-      const res = await fetch(process.env.GATEWAY_URL!);
-      return res.ok;
-    });
-  }
+  const out: {
+    postgres?: HealthProbe;
+    redis?: HealthProbe;
+    horizonListener?: HealthProbe;
+    outboxPublisher?: HealthProbe;
+    horizon?: HealthProbe;
+  } = {};
+
+  if (process.env.DB_URL) out.postgres = createDbProbe();
+  if (process.env.REDIS_URL) out.redis = createCacheProbe();
+
+  setHorizonListenerConfigured(Boolean(process.env.HORIZON_URL));
+  out.horizonListener = createHorizonListenerProbe();
+
+  const outboxEnabled = (process.env.OUTBOX_ENABLED ?? "true") === "true";
+  setOutboxPublisherConfigured(outboxEnabled);
+  out.outboxPublisher = createOutboxPublisherProbe();
+
+  const horizonProbe = createHorizonClientProbe();
+  if (horizonProbe) out.horizon = horizonProbe;
+
   return out;
 }

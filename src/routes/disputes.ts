@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { type AuthenticatedRequest, requireUserAuth } from '../middleware/auth.js'
+import { ErrorCode, getErrorCatalogEntry } from '../lib/errorCatalog.js'
 import {
   dismissDispute,
   getDispute,
@@ -11,6 +12,16 @@ import { auditLogService, AuditAction } from '../services/audit/index.js'
 
 const router = Router()
 
+function invalidTransitionResponse(message: string) {
+  const catalog = getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION)
+  return {
+    error: catalog.defaultMessage,
+    code: catalog.code,
+    error_code: catalog.code,
+    message,
+  }
+}
+
 router.post('/', requireUserAuth, async (req: Request, res: Response) => {
   const authReq = req as AuthenticatedRequest
   const actor = authReq.user!
@@ -19,6 +30,7 @@ router.post('/', requireUserAuth, async (req: Request, res: Response) => {
     const dispute = submitDispute(req.body)
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_SUBMITTED,
@@ -35,6 +47,7 @@ router.post('/', requireUserAuth, async (req: Request, res: Response) => {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_SUBMITTED,
@@ -67,6 +80,7 @@ router.post('/:id/review', requireUserAuth, async (req: Request, res: Response) 
     const dispute = markUnderReview(id)
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_MARKED_UNDER_REVIEW,
@@ -79,6 +93,7 @@ router.post('/:id/review', requireUserAuth, async (req: Request, res: Response) 
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_MARKED_UNDER_REVIEW,
@@ -88,7 +103,9 @@ router.post('/:id/review', requireUserAuth, async (req: Request, res: Response) 
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -102,6 +119,7 @@ router.post('/:id/resolve', requireUserAuth, async (req: Request, res: Response)
     const dispute = resolveDispute(id, resolution)
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_RESOLVED,
@@ -114,6 +132,7 @@ router.post('/:id/resolve', requireUserAuth, async (req: Request, res: Response)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_RESOLVED,
@@ -123,7 +142,9 @@ router.post('/:id/resolve', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -137,6 +158,7 @@ router.post('/:id/dismiss', requireUserAuth, async (req: Request, res: Response)
     const dispute = dismissDispute(id, reason)
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_DISMISSED,
@@ -149,6 +171,7 @@ router.post('/:id/dismiss', requireUserAuth, async (req: Request, res: Response)
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.DISPUTE_DISMISSED,
@@ -158,7 +181,9 @@ router.post('/:id/dismiss', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 

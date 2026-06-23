@@ -8,6 +8,10 @@ import {
   type VoteChoice,
 } from '../services/governance/slashingVotes.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
+import {
+  buildPaginationMeta,
+  parsePaginationParams,
+} from '../lib/pagination.js'
 
 const router = Router()
 
@@ -19,6 +23,7 @@ router.post('/slash-requests', requireUserAuth, async (req: Request, res: Respon
     const request = createSlashRequest(req.body)
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.SLASH_REQUEST_CREATED,
@@ -35,6 +40,7 @@ router.post('/slash-requests', requireUserAuth, async (req: Request, res: Respon
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.SLASH_REQUEST_CREATED,
@@ -64,6 +70,7 @@ router.post('/slash-requests/:id/votes', requireUserAuth, async (req: Request, r
     }
 
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.SLASH_VOTE_CAST,
@@ -82,6 +89,7 @@ router.post('/slash-requests/:id/votes', requireUserAuth, async (req: Request, r
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error'
     await auditLogService.logAction({
+      tenantId: actor.tenantId,
       actorId: actor.id,
       actorEmail: actor.email,
       action: AuditAction.SLASH_VOTE_CAST,
@@ -104,10 +112,16 @@ router.get('/slash-requests/:id', requireUserAuth, (req: Request, res: Response)
   res.status(200).json(request)
 })
 
-router.get('/slash-requests', requireUserAuth, (req: Request, res: Response) => {
-  const status = req.query.status as 'pending' | 'approved' | 'rejected' | undefined
-  const requests = listSlashRequests(status)
-  res.status(200).json({ requests })
+router.get('/slash-requests', requireUserAuth, (req: Request, res: Response, next) => {
+  try {
+    const status = req.query.status as 'pending' | 'approved' | 'rejected' | undefined
+    const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
+    const { requests, total } = listSlashRequests(status, limit, offset)
+    const paginationMeta = buildPaginationMeta(total, page, limit)
+    res.status(200).json({ success: true, data: requests, ...paginationMeta })
+  } catch (error) {
+    next(error)
+  }
 })
 
 export default router

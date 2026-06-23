@@ -1,4 +1,13 @@
 import { Horizon } from '@stellar/stellar-sdk'
+import type { Pool } from 'pg'
+import { Gauge, register } from 'prom-client'
+import { pool as defaultPool } from '../db/pool.js'
+import { CursorRepository } from '../db/repositories/cursorRepository.js'
+import {
+  recordHorizonListenerHeartbeat,
+  setHorizonListenerConfigured,
+  setHorizonListenerRunning,
+} from '../services/health/runtimeState.js'
 
 /**
  * Interface for bond withdrawal event data
@@ -43,6 +52,24 @@ export interface ScoreHistorySnapshot {
   transactionHash: string
 }
 
+const STREAM_NAME = 'bond_withdrawal'
+
+const cursorLagGauge = (register.getSingleMetric('horizon_listener_cursor_lag_seconds') as Gauge<string> | undefined)
+  ?? new Gauge({
+    name: 'horizon_listener_cursor_lag_seconds',
+    help: 'Time elapsed since last Horizon cursor checkpoint',
+    labelNames: ['stream_name'],
+    registers: [register],
+  })
+
+const lastCheckpointGauge = (register.getSingleMetric('horizon_listener_last_checkpoint_timestamp') as Gauge<string> | undefined)
+  ?? new Gauge({
+    name: 'horizon_listener_last_checkpoint_timestamp',
+    help: 'Unix timestamp of last Horizon cursor checkpoint',
+    labelNames: ['stream_name'],
+    registers: [register],
+  })
+
 /**
  * Configuration for the Horizon withdrawal listener
  */
@@ -71,16 +98,28 @@ export class HorizonWithdrawalListener {
   private pollTimer?: NodeJS.Timeout
   private lastCursor: string
   private replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }
+  private readonly pool: Pool
+  private readonly cursorRepo: CursorRepository
 
-  constructor(config: HorizonListenerConfig, replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }) {
+  constructor(
+    config: HorizonListenerConfig,
+    replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> } = {
+      captureFailure: async () => ({}),
+    },
+    pool: Pool = defaultPool,
+  ) {
     this.config = config
     this.server = new Horizon.Server(config.horizonUrl)
+    this.pool = pool
+    this.cursorRepo = new CursorRepository(pool)
     this.lastCursor = config.lastCursor || 'now'
     this.replayService = replayService
+    setHorizonListenerConfigured(true)
   }
 
   /**
    * Start listening for withdrawal events
+   * Loads saved cursor on startup for gap-free resume
    */
   public async start(): Promise<void> {
     if (this.isRunning) {
@@ -88,7 +127,18 @@ export class HorizonWithdrawalListener {
       return
     }
 
+    // Load saved cursor on startup, fall back to 'now' on first run
+    const savedCursor = await this.cursorRepo.findByStreamName(STREAM_NAME)
+    if (savedCursor) {
+      this.lastCursor = savedCursor.pagingToken
+      console.log(`[${STREAM_NAME}] Resuming from saved cursor: ${this.lastCursor}`)
+    } else {
+      console.log(`[${STREAM_NAME}] No saved cursor found, starting from: ${this.lastCursor}`)
+    }
+
     this.isRunning = true
+    setHorizonListenerRunning(true)
+    recordHorizonListenerHeartbeat(this.lastCursor)
     console.log(`Starting Horizon withdrawal listener for ${this.config.horizonUrl}`)
 
     // Start polling for events
@@ -104,6 +154,7 @@ export class HorizonWithdrawalListener {
     }
 
     this.isRunning = false
+    setHorizonListenerRunning(false)
     
     if (this.pollTimer) {
       clearTimeout(this.pollTimer)
@@ -146,17 +197,27 @@ export class HorizonWithdrawalListener {
       const events = await this.fetchWithdrawalEvents()
       
       if (events.length > 0) {
-        console.log(`Processing ${events.length} withdrawal events`)
+        console.log(`[${STREAM_NAME}] Processing ${events.length} withdrawal events`)
         
         for (const event of events) {
           await this.processWithdrawalEvent(event)
+          
+          // Persist cursor after each successfully processed event
+          await this.cursorRepo.upsert({
+            streamName: STREAM_NAME,
+            pagingToken: event.pagingToken
+          })
+          
+          // Update local cursor only after successful persistence
+          this.lastCursor = event.pagingToken
         }
+        
+        // Update metrics after batch processing
+        await this.updateMetrics()
       }
 
-      // Update cursor to the latest event
-      if (events.length > 0) {
-        this.lastCursor = events[events.length - 1].pagingToken
-      }
+      // Poll completed and cursor is current; mark heartbeat.
+      recordHorizonListenerHeartbeat(this.lastCursor)
 
     } catch (error) {
       console.error('Error polling for withdrawal events:', error)
@@ -412,12 +473,41 @@ export class HorizonWithdrawalListener {
       pollingInterval: this.config.pollingInterval || 5000
     }
   }
+
+  /**
+   * Update Prometheus metrics for cursor monitoring
+   */
+  private async updateMetrics(): Promise<void> {
+    try {
+      const lag = await this.cursorRepo.getCursorLag(STREAM_NAME)
+      if (lag !== null) {
+        cursorLagGauge.set({ stream_name: STREAM_NAME }, lag)
+      }
+      
+      const cursor = await this.cursorRepo.findByStreamName(STREAM_NAME)
+      if (cursor) {
+        lastCheckpointGauge.set(
+          { stream_name: STREAM_NAME },
+          Math.floor(cursor.lastCheckpoint.getTime() / 1000)
+        )
+      }
+    } catch (err) {
+      console.error(`[${STREAM_NAME}] Error updating metrics:`, err)
+    }
+  }
 }
 
 /**
  * Factory function to create a configured Horizon withdrawal listener
+ * @param config - Partial configuration to override defaults
+ * @param pool - PostgreSQL connection pool for cursor persistence
+ * @param replayService - Service to capture failed events for replay
  */
-export function createHorizonWithdrawalListener(config: Partial<HorizonListenerConfig> = {}): HorizonWithdrawalListener {
+export function createHorizonWithdrawalListener(
+  config: Partial<HorizonListenerConfig> = {},
+  pool: Pool = defaultPool,
+  replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> } = { captureFailure: async () => ({}) }
+): HorizonWithdrawalListener {
   const defaultConfig: HorizonListenerConfig = {
     horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org',
     networkPassphrase: process.env.STELLAR_NETWORK_PASSPHRASE || 'Test SDF Network ; September 2015',
@@ -425,8 +515,8 @@ export function createHorizonWithdrawalListener(config: Partial<HorizonListenerC
     lastCursor: 'now'
   }
 
-  return new HorizonWithdrawalListener({ ...defaultConfig, ...config })
+  return new HorizonWithdrawalListener({ ...defaultConfig, ...config }, replayService, pool)
 }
 
-// Export singleton instance for convenience
 export const horizonWithdrawalListener = createHorizonWithdrawalListener()
+

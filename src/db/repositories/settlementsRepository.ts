@@ -59,23 +59,11 @@ export class SettlementsRepository {
     const settledAt = input.settledAt ?? new Date()
     const status = input.status ?? 'pending'
 
-    const exists = await this.db.query<{ id: number | string }>(
-      `
-      SELECT id
-      FROM settlements
-      WHERE bond_id = $1 AND transaction_hash = $2
-      LIMIT 1
-      `,
-      [input.bondId, input.transactionHash],
-    )
-
-    const isDuplicate = exists.rows.length > 0
-
     const result = await this.db.query<SettlementRow>(
       `
       INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
       VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (bond_id, transaction_hash)
+      ON CONFLICT (transaction_hash)
       DO UPDATE SET
         amount     = EXCLUDED.amount,
         status     = EXCLUDED.status,
@@ -89,7 +77,7 @@ export class SettlementsRepository {
     )
 
     const row = result.rows[0]
-    return { settlement: mapSettlement(row), isDuplicate }
+    return { settlement: mapSettlement(row), isDuplicate: Boolean(row.is_duplicate) }
   }
 
   async findById(id: string | number): Promise<Settlement | null> {
@@ -155,5 +143,38 @@ export class SettlementsRepository {
     )
 
     return (result.rowCount ?? 0) > 0
+  }
+
+  async findManyPaginated(params: {
+    limit: number
+    cursor?: { t: string; i: string }
+    bondId?: string
+  }): Promise<Settlement[]> {
+    const { limit, cursor, bondId } = params
+    const values: any[] = [limit]
+    let whereClause = ''
+    let paramIndex = 2
+
+    if (bondId) {
+      whereClause = `WHERE bond_id = $${paramIndex++}`
+      values.push(bondId)
+    }
+
+    if (cursor) {
+      const prefix = whereClause ? 'AND' : 'WHERE'
+      whereClause += ` ${prefix} (settled_at, id) < ($${paramIndex}, $${paramIndex + 1})`
+      values.push(cursor.t, cursor.i)
+    }
+
+    const query = `
+      SELECT id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at
+      FROM settlements
+      ${whereClause}
+      ORDER BY settled_at DESC, id DESC
+      LIMIT $1
+    `
+
+    const result = await this.db.query<SettlementRow>(query, values)
+    return result.rows.map(mapSettlement)
   }
 }

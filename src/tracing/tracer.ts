@@ -5,6 +5,19 @@ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
 import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base'
 
 /**
+ * Canonical span names for the payment processing pipeline.
+ * Using constants prevents typos and makes refactoring easier.
+ */
+export const PaymentSpans = {
+  PROCESS:    'payment.process',
+  INGEST:     'payment.ingest',
+  VALIDATE:   'payment.validate',
+  RISK_CHECK: 'payment.risk_check',
+  PROCESSOR:  'payment.processor',
+  SETTLE:     'payment.settle',
+} as const
+
+/**
  * Initialize OpenTelemetry tracing for the application
  */
 export function initTracing(serviceName = 'credence-backend'): NodeTracerProvider {

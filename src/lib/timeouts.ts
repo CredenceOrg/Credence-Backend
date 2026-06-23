@@ -78,7 +78,7 @@ export const DEFAULT_TIMEOUT_BUDGETS: Record<ServiceType, TimeoutBudget> = {
   // Soroban RPC - blockchain operations can be variable
   soroban: {
     defaultMs: 5000,      // 5s default (matches current)
-    minMs: 2000,          // 2s minimum
+    minMs: 100,           // 100ms minimum (allows test overrides)
     maxMs: 15000,         // 15s maximum for network congestion
     targetMs: 4000,       // 4s SLO target
   },

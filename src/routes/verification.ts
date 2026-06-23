@@ -1,5 +1,6 @@
 import type { Router } from 'express'
 import { verificationService } from '../services/verificationService.js'
+import { AppError, ErrorCode, ValidationError } from '../lib/errors.js'
 
 /**
  * Setup verification routes

@@ -1,5 +1,9 @@
-import type { ScoreSnapshotJob } from './scoreSnapshot.js'
 import type { DistributedLock } from './distributedLock.js'
+
+export interface SchedulableJob {
+  run(): Promise<unknown>
+}
+
 
 /**
  * Scheduler options.
@@ -57,7 +61,7 @@ export class JobScheduler {
   private readonly lockTtlMs: number
 
   constructor(
-    private readonly job: ScoreSnapshotJob,
+    private readonly job: SchedulableJob,
     options: {
       intervalMs: number
       runOnStart?: boolean
@@ -210,7 +214,7 @@ export function parseCronToInterval(cronExpression: string): number {
  * @returns JobScheduler instance
  */
 export function createScheduler(
-  job: ScoreSnapshotJob,
+  job: SchedulableJob,
   options: SchedulerOptions = {}
 ): JobScheduler {
   const cronExpression = options.cronExpression ?? '0 * * * *'
@@ -224,4 +228,34 @@ export function createScheduler(
     lockKey: options.lockKey,
     lockTtlMs: options.lockTtlMs,
   })
+}
+
+/**
+ * Helper that returns a SQL string to select the next bulk job according to
+ * a weighted-fair-queueing ordering which uses `org_usage_daily` to derive
+ * per-org weights. This function is a convenience for bulk worker poll logic
+ * and keeps the SQL localized so it can be reviewed and tested.
+ *
+ * NOTE: Integrators should validate table/column names to avoid SQL injection
+ * when interpolating dynamic identifiers.
+ */
+export function getBulkWorkerPollQuery(jobsTable = 'bulk_jobs', orgUsageTable = 'org_usage_daily') {
+  return `WITH org_w AS (
+    SELECT org_id, 1.0 / (1 + COALESCE(usage, 0)) AS weight
+    FROM ${orgUsageTable}
+    WHERE day = CURRENT_DATE
+  ), queued AS (
+    SELECT j.*, COALESCE(w.weight, 1.0) AS weight
+    FROM ${jobsTable} j
+    LEFT JOIN org_w w ON j.org_id = w.org_id
+    WHERE j.status = 'pending'
+  ), scored AS (
+    SELECT q.*,
+      -- virtual score approximation: size divided by weight
+      (q.size::float / q.weight) AS wfq_score
+    FROM queued q
+  )
+  SELECT * FROM scored
+  ORDER BY wfq_score ASC, created_at ASC
+  LIMIT 1;`
 }

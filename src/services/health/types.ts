@@ -6,16 +6,23 @@ export type DependencyStatus = 'up' | 'down' | 'not_configured'
 
 export interface DependencyHealth {
   status: DependencyStatus
+  /** Human-readable reason for non-'up' status. Omitted when status is 'up'. */
+  reason?: string
+  /** Wall-clock milliseconds the check took. Always present when a probe ran. */
+  latencyMs?: number
+  /** Optional safe metadata for debugging readiness (no secrets). */
+  details?: Record<string, string | number | boolean | null>
 }
 
 export interface HealthResult {
   status: 'ok' | 'degraded' | 'unhealthy'
   service: string
   dependencies: {
-    db: DependencyHealth
-    cache: DependencyHealth
-    queue: DependencyHealth
-    gateway: DependencyHealth
+    postgres: DependencyHealth
+    redis: DependencyHealth
+    horizonListener: DependencyHealth
+    outboxPublisher: DependencyHealth
+    horizon: DependencyHealth
   }
 }
 

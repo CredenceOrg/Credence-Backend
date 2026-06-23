@@ -53,7 +53,7 @@ const BLOCKING_PATTERNS = [
 ]
 
 /**
- * Patterns that indicate long-running operations
+ * Patterns that indicate long-running operations requiring batching
  */
 const LONG_RUNNING_PATTERNS = [
   {
@@ -66,13 +66,19 @@ const LONG_RUNNING_PATTERNS = [
     pattern: /UPDATE.*SET.*WHERE/i,
     type: 'long-running' as const,
     message: 'Large UPDATE operations can lock rows and cause replication lag',
-    suggestion: 'Consider batching updates or using a backfill script'
+    suggestion: 'Use batching for operations affecting >10,000 rows'
   },
   {
     pattern: /DELETE.*WHERE/i,
     type: 'long-running' as const,
     message: 'Large DELETE operations can lock rows and bloat transaction logs',
-    suggestion: 'Consider batching deletes or using a soft delete approach'
+    suggestion: 'Use batching or soft delete approach'
+  },
+  {
+    pattern: /INSERT.*SELECT.*FROM.*WHERE/i,
+    type: 'long-running' as const,
+    message: 'Large INSERT...SELECT operations can cause significant load',
+    suggestion: 'Break into smaller batches or use COPY command'
   }
 ]
 
@@ -97,6 +103,12 @@ const UNSAFE_PATTERNS = [
     type: 'unsafe' as const,
     message: 'TRUNCATE is destructive and cannot be rolled back',
     suggestion: 'Use DELETE with WHERE clause or ensure data is backed up'
+  },
+  {
+    pattern: /UPDATE.*SET.*WHERE.*LIMIT\s+[0-9]{4,}/i,
+    type: 'unsafe' as const,
+    message: 'Large UPDATE without batching may cause locks',
+    suggestion: 'Use batching utilities or LIMIT with smaller batch sizes'
   }
 ]
 
@@ -112,7 +124,7 @@ export function analyzeMigration(filePath: string): PreflightResult {
     const lines = content.split('\n')
 
     // Check each pattern against the migration content
-    const allPatterns = [...BLOCKING_PATTERNS, ...LONG_RUNNING_PATTERNS, ...UNSAFE_PATTERNS]
+    const allPatterns: Array<{ pattern: RegExp; type: MigrationIssue['type']; message: string; suggestion: string }> = [...BLOCKING_PATTERNS, ...LONG_RUNNING_PATTERNS, ...UNSAFE_PATTERNS]
 
     lines.forEach((line, index) => {
       allPatterns.forEach(({ pattern, type, message, suggestion }) => {
@@ -177,7 +189,7 @@ function checkMigrationStructure(
     warnings.push({
       type: 'warning',
       message: 'Migration missing documentation',
-      suggestion: 'Add JSDoc comments explaining the migration purpose',
+      suggestion: 'Add JSDoc comments explaining the migration purpose, risk level, and estimated runtime',
       migration: filePath
     })
   }
@@ -188,7 +200,28 @@ function checkMigrationStructure(
     warnings.push({
       type: 'warning',
       message: 'Timeout might be too short for large operations',
-      suggestion: 'Consider using longer timeouts for schema changes',
+      suggestion: 'Consider using longer timeouts for schema changes (30s+ for DDL, 5min+ for data)',
+      migration: filePath
+    })
+  }
+
+  // Check for batching requirements
+  const largeUpdateMatch = content.match(/UPDATE.*SET.*WHERE/i)
+  if (largeUpdateMatch && !content.includes('LIMIT') && !content.includes('batch')) {
+    warnings.push({
+      type: 'warning',
+      message: 'Large UPDATE without batching detected',
+      suggestion: 'Add LIMIT clause or use batching utilities for operations affecting >10,000 rows',
+      migration: filePath
+    })
+  }
+
+  // Check for lock timeout configuration
+  if (!content.includes('statement_timeout') && content.includes('CONCURRENTLY')) {
+    warnings.push({
+      type: 'warning',
+      message: 'Index creation without explicit timeout',
+      suggestion: 'Set statement_timeout for CONCURRENTLY index operations',
       migration: filePath
     })
   }

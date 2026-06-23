@@ -1,0 +1,34 @@
+# buf.yaml — Buf CLI workspace configuration (v2)
+# https://buf.build/docs/configuration/v2/buf-yaml
+version: v2
+
+# Modules define the proto roots that buf manages.
+modules:
+  - path: proto
+    name: buf.build/credence/credence-backend
+
+# ---------------------------------------------------------------------------
+# Lint rules
+# Enforce style and correctness across all proto files.
+# https://buf.build/docs/lint/rules/
+# ---------------------------------------------------------------------------
+lint:
+  use:
+    # DEFAULT includes the full recommended rule set:
+    #   MINIMAL + BASIC + DEFAULT categories.
+    # Covers: naming conventions, field presence, comment requirements,
+    # import hygiene, enum zero-value naming, and more.
+    - DEFAULT
+
+# ---------------------------------------------------------------------------
+# Breaking-change detection rules
+# Checked in CI against the merge-base branch (origin/main).
+# https://buf.build/docs/breaking/rules/
+#
+# FILE is the strictest category — it catches anything that would break
+# wire compatibility, JSON compatibility, or generated source code at the
+# per-file level.  This is the recommended setting for internal services.
+# ---------------------------------------------------------------------------
+breaking:
+  use:
+    - FILE

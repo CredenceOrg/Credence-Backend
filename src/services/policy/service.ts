@@ -42,12 +42,14 @@ export class PolicyService {
   // ---------------------------------------------------------------------------
 
   createRule(
+    tenantId: string,
     actorId: string,
     actorEmail: string,
     input: CreatePolicyRuleInput,
   ): PolicyRule {
     const rule = this.store.create(input)
     this.audit.logAction(
+      tenantId,
       actorId,
       actorEmail,
       AuditAction.POLICY_RULE_CREATED,
@@ -59,6 +61,7 @@ export class PolicyService {
   }
 
   updateRule(
+    tenantId: string,
     actorId: string,
     actorEmail: string,
     ruleId: string,
@@ -67,6 +70,7 @@ export class PolicyService {
     const updated = this.store.update(ruleId, patch)
     if (!updated) throw new Error(`Policy rule not found: ${ruleId}`)
     this.audit.logAction(
+      tenantId,
       actorId,
       actorEmail,
       AuditAction.POLICY_RULE_UPDATED,
@@ -77,11 +81,12 @@ export class PolicyService {
     return updated
   }
 
-  deleteRule(actorId: string, actorEmail: string, ruleId: string): void {
+  deleteRule(tenantId: string, actorId: string, actorEmail: string, ruleId: string): void {
     const rule = this.store.findById(ruleId)
     if (!rule) throw new Error(`Policy rule not found: ${ruleId}`)
     this.store.delete(ruleId)
     this.audit.logAction(
+      tenantId,
       actorId,
       actorEmail,
       AuditAction.POLICY_RULE_DELETED,
@@ -91,8 +96,12 @@ export class PolicyService {
     )
   }
 
-  listRules(orgId: string): PolicyRule[] {
-    return this.store.findByOrg(orgId)
+  listRules(
+    orgId: string,
+    limit = 20,
+    offset = 0,
+  ): { rules: PolicyRule[]; total: number } {
+    return this.store.findByOrg(orgId, limit, offset)
   }
 
   getRule(ruleId: string): PolicyRule | null {

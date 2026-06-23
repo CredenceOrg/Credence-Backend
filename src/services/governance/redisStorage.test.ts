@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { Redis } from 'ioredis';
 import { RedisProposalStorage } from './redisStorage.js';
-import { Proposal, ProposalState } from './multisig.js';
+import type { MultisigProposal } from './types.js';
 
 describe('RedisProposalStorage', () => {
   let storage: RedisProposalStorage;
@@ -14,39 +14,37 @@ describe('RedisProposalStorage', () => {
     };
     storage = new RedisProposalStorage(mockRedis as unknown as Redis);
 
-    // Mock Date.now to freeze time
-    vi.spyOn(Date, 'now').mockReturnValue(10000000);
+    vi.spyOn(Date, 'now').mockReturnValue(10_000_000);
   });
 
   it('should save a proposal with TTL', async () => {
-    const prop: Proposal = {
+    const prop: MultisigProposal = {
       id: 'test-1',
       requiredSignatures: 2,
-      signers: new Set(['a', 'b']),
+      signers: ['a', 'b'],
+      action: 'slash_validator',
       signatures: new Map([['a', 'sig-a']]),
       slashingVotes: new Set(['c']),
       payload: { x: 1 },
-      state: ProposalState.PENDING,
-      createdAt: 10000000,
-      expiresAt: 10000000 + 3600000, // 1 hour later
+      status: 'pending',
+      createdAt: new Date(10_000_000),
+      expiresAt: new Date(10_000_000 + 3_600_000), // 1 hour later
     };
 
     await storage.saveProposal(prop);
 
     expect(mockRedis.set).toHaveBeenCalledTimes(1);
-    
-    // Check key, serialized json syntax, 'EX', and computed TTL (+86400 day buffer)
+
     const setArgs = mockRedis.set.mock.calls[0];
     expect(setArgs[0]).toBe('governance:proposal:test-1');
-    
-    // Test the parsing
+
     const savedJson = JSON.parse(setArgs[1]);
     expect(savedJson.signers).toEqual(['a', 'b']);
     expect(savedJson.signatures).toEqual([['a', 'sig-a']]);
     expect(savedJson.slashingVotes).toEqual(['c']);
-    
+
     expect(setArgs[2]).toBe('EX');
-    // TTL should be exactly 3600 + 86400 
+    // TTL: floor(3600000 / 1000) + 86400 = 3600 + 86400 = 90000
     expect(setArgs[3]).toBe(90000);
   });
 
@@ -55,23 +53,24 @@ describe('RedisProposalStorage', () => {
       id: 'test-2',
       requiredSignatures: 1,
       signers: ['d'],
+      action: 'distribute_rewards',
       signatures: [],
       slashingVotes: [],
       payload: null,
-      state: ProposalState.APPROVED,
-      createdAt: 0,
-      expiresAt: 0,
+      status: 'approved',
+      createdAt: new Date(0).toISOString(),
+      expiresAt: new Date(0).toISOString(),
     };
     mockRedis.get.mockResolvedValue(JSON.stringify(serializedData));
 
     const prop = await storage.getProposal('test-2');
-    
+
     expect(prop).toBeDefined();
     expect(prop?.id).toBe('test-2');
-    expect(prop?.signers).toBeInstanceOf(Set);
-    expect(prop?.signers.has('d')).toBe(true);
+    expect(prop?.signers).toEqual(['d']);
     expect(prop?.signatures).toBeInstanceOf(Map);
-    expect(prop?.state).toBe(ProposalState.APPROVED);
+    expect(prop?.slashingVotes).toBeInstanceOf(Set);
+    expect(prop?.status).toBe('approved');
     expect(mockRedis.get).toHaveBeenCalledWith('governance:proposal:test-2');
   });
 
@@ -80,18 +79,19 @@ describe('RedisProposalStorage', () => {
     const prop = await storage.getProposal('test-not-found');
     expect(prop).toBeUndefined();
   });
-  
+
   it('should update a proposal with positive TTL', async () => {
-    const prop: Proposal = {
+    const prop: MultisigProposal = {
       id: 'test-3',
       requiredSignatures: 2,
-      signers: new Set(),
+      signers: [],
+      action: 'slash_validator',
       signatures: new Map(),
       slashingVotes: new Set(),
-      payload: { },
-      state: ProposalState.PENDING,
-      createdAt: 10000000,
-      expiresAt: 10000000 + 1000, 
+      payload: {},
+      status: 'pending',
+      createdAt: new Date(10_000_000),
+      expiresAt: new Date(10_000_000 + 1_000), // 1 second later
     };
 
     await storage.updateProposal(prop);
@@ -100,23 +100,23 @@ describe('RedisProposalStorage', () => {
     const setArgs = mockRedis.set.mock.calls[0];
     expect(setArgs[0]).toBe('governance:proposal:test-3');
     expect(setArgs[2]).toBe('EX');
-    
-    // TTL should be exactly 1 + 86400 = 86401
+    // TTL: floor(1000 / 1000) + 86400 = 1 + 86400 = 86401
     expect(setArgs[3]).toBe(86401);
   });
 
-  it('should update a proposal with negative/expired TTL', async () => {
-    const prop: Proposal = {
+  it('should update a proposal with expired TTL and fall back to minimum', async () => {
+    const prop: MultisigProposal = {
       id: 'test-4',
       requiredSignatures: 2,
-      signers: new Set(),
+      signers: [],
+      action: 'slash_validator',
       signatures: new Map(),
       slashingVotes: new Set(),
-      payload: { },
-      state: ProposalState.PENDING,
-      createdAt: 10000000,
-      // Create a scenario where TTL < 0 (i.e. long ago)
-      expiresAt: 10000000 - 90000000, 
+      payload: {},
+      status: 'pending',
+      createdAt: new Date(10_000_000),
+      // expiresAt far in the past → ttlSeconds < 0
+      expiresAt: new Date(10_000_000 - 90_000_000),
     };
 
     await storage.updateProposal(prop);
@@ -125,8 +125,7 @@ describe('RedisProposalStorage', () => {
     const setArgs = mockRedis.set.mock.calls[0];
     expect(setArgs[0]).toBe('governance:proposal:test-4');
     expect(setArgs[2]).toBe('EX');
-    
-    // Should fallback to 3600 minimal TTL
+    // Falls back to minimal TTL of 3600
     expect(setArgs[3]).toBe(3600);
   });
 });

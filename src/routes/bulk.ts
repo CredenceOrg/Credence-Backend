@@ -1,29 +1,21 @@
 import { Router, Request, Response } from 'express'
 import { requireApiKey, ApiScope } from '../middleware/auth.js'
-import { IdentityService } from '../services/identityService.js'
+import { VerificationService } from '../services/verificationService.js'
 import { AppError, ErrorCode, ValidationError } from '../lib/errors.js'
 
 const router = Router()
-const identityService = new IdentityService()
+const verificationService = new VerificationService()
 
-/**
- * Configuration for bulk verification limits
- */
 const BULK_LIMITS = {
-  MAX_BATCH_SIZE: 100,
+  MAX_SYNC_BATCH_SIZE: 100,
+  MAX_ASYNC_BATCH_SIZE: 10000,
   MIN_BATCH_SIZE: 1,
 }
 
-/**
- * Request body schema for bulk verification
- */
 interface BulkVerifyRequest {
   addresses: string[]
 }
 
-/**
- * POST /api/bulk/verify
- */
 router.post(
   '/verify',
   requireApiKey(ApiScope.ENTERPRISE),
@@ -31,12 +23,10 @@ router.post(
     try {
       const { addresses } = req.body as BulkVerifyRequest
 
-      // Validate request body
       if (!addresses || !Array.isArray(addresses)) {
         throw new ValidationError('addresses must be an array')
       }
 
-      // Validate batch size limits
       if (addresses.length < BULK_LIMITS.MIN_BATCH_SIZE) {
         throw new AppError(
           `Minimum batch size is ${BULK_LIMITS.MIN_BATCH_SIZE} address`,
@@ -46,27 +36,40 @@ router.post(
         )
       }
 
-      if (addresses.length > BULK_LIMITS.MAX_BATCH_SIZE) {
+      if (addresses.length > BULK_LIMITS.MAX_ASYNC_BATCH_SIZE) {
         throw new AppError(
-          `Maximum batch size is ${BULK_LIMITS.MAX_BATCH_SIZE} addresses`,
+          `Maximum batch size is ${BULK_LIMITS.MAX_ASYNC_BATCH_SIZE} addresses`,
           ErrorCode.BATCH_SIZE_EXCEEDED,
           413,
-          { limit: BULK_LIMITS.MAX_BATCH_SIZE, received: addresses.length }
+          { limit: BULK_LIMITS.MAX_ASYNC_BATCH_SIZE, received: addresses.length }
         )
       }
 
-      // Validate all addresses are strings
       if (!addresses.every((addr) => typeof addr === 'string')) {
         throw new ValidationError('All addresses must be strings')
       }
 
-      // Remove duplicates
       const uniqueAddresses = [...new Set(addresses)]
 
-      // Perform bulk verification
-      const { results, errors } = await identityService.verifyBulk(uniqueAddresses)
+      if (uniqueAddresses.length > BULK_LIMITS.MAX_SYNC_BATCH_SIZE) {
+        // Compute server-side metadata to prevent clients from influencing
+        // scheduler behavior. Use the API key identifier as `orgId` when
+        // available; fall back to 'unknown'.
+        const orgId = (req as any).apiKey?.key ?? 'unknown'
+        const jobId = await verificationService.enqueueBulkVerification(uniqueAddresses, { orgId, size: uniqueAddresses.length })
+        res.status(202).json({
+          message: 'Batch verification queued',
+          jobId,
+          metadata: {
+            totalRequested: addresses.length,
+            batchSize: uniqueAddresses.length,
+          }
+        })
+        return
+      }
 
-      // Return results with metadata
+      const { results, errors } = await verificationService.verifyBulkChunked(uniqueAddresses)
+
       res.status(200).json({
         results,
         errors,

@@ -63,7 +63,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool; proxiedPool: 
                                      CHECK (status IN ('pending', 'settled', 'failed')),
       created_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
       updated_at      TIMESTAMPTZ    NOT NULL DEFAULT NOW(),
-      CONSTRAINT settlements_bond_tx_unique UNIQUE (bond_id, transaction_hash)
+      CONSTRAINT settlements_transaction_hash_unique UNIQUE (transaction_hash)
     );
   `)
 
@@ -350,6 +350,118 @@ describe('SettlementsRepository', () => {
     it('returns false for a non-existent id', async () => {
       const deleted = await repo.delete(999999)
       expect(deleted).toBe(false)
+    })
+  })
+
+  describe('transaction_hash uniqueness (global idempotency)', () => {
+    it('prevents inserting settlement with same transaction_hash for different bonds', async () => {
+      // Create settlement for first bond
+      await repo.upsert({
+        bondId: bondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_global_unique_001',
+        status: 'pending',
+      })
+
+      // Attempting to create settlement with same transaction_hash for different bond
+      // should update the existing one, not create a new one
+      const result = await repo.upsert({
+        bondId: unusedBondId as unknown as number,
+        amount: '200',
+        transactionHash: 'tx_global_unique_001',
+        status: 'settled',
+      })
+
+      // The existing settlement should be returned (updated)
+      expect(result.isDuplicate).toBe(true)
+      // The bondId should remain the original one (first insert)
+      expect(result.settlement.bondId).toBe(String(bondId))
+      expect(String(result.settlement.amount)).toBe('200') // amount was updated
+      expect(result.settlement.status).toBe('settled') // status was updated
+    })
+
+    it('produces only one row across all bonds for the same transaction_hash', async () => {
+      // Insert for first bond
+      const first = await repo.upsert({
+        bondId: bondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_one_row_001',
+      })
+
+      // Insert for second bond with same transaction_hash
+      const second = await repo.upsert({
+        bondId: unusedBondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_one_row_001',
+      })
+
+      // Both should return the same settlement ID
+      expect(first.settlement.id).toBe(second.settlement.id)
+      expect(second.isDuplicate).toBe(true)
+
+      // Verify only one row exists with this transaction_hash
+      const found = await repo.findByTransactionHash('tx_one_row_001')
+      expect(found).not.toBeNull()
+      expect(found!.transactionHash).toBe('tx_one_row_001')
+
+      // Verify bondId stayed with the first insert
+      expect(found!.bondId).toBe(String(bondId))
+    })
+
+    it('handles rapid concurrent inserts with same transaction_hash across different bonds', async () => {
+      const input1 = {
+        bondId: bondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_concurrent_global_001',
+      }
+
+      const input2 = {
+        bondId: unusedBondId as unknown as number,
+        amount: '200',
+        transactionHash: 'tx_concurrent_global_001',
+      }
+
+      const results = await Promise.all([
+        repo.upsert(input1),
+        repo.upsert(input2),
+        repo.upsert(input1),
+        repo.upsert(input2),
+      ])
+
+      // All should return the same ID
+      const ids = new Set(results.map((r) => r.settlement.id))
+      expect(ids.size).toBe(1)
+
+      // Verify only one row exists
+      const count = await repo.countByBondId(bondId as unknown as number)
+      const count2 = await repo.countByBondId(unusedBondId as unknown as number)
+      expect(count + count2).toBe(1)
+    })
+
+    it('correctly marks duplicates across bonds', async () => {
+      // First insert
+      const first = await repo.upsert({
+        bondId: bondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_dup_mark_001',
+      })
+      expect(first.isDuplicate).toBe(false)
+
+      // Second insert - different bond, same transaction_hash
+      const second = await repo.upsert({
+        bondId: unusedBondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_dup_mark_001',
+      })
+      expect(second.isDuplicate).toBe(true)
+
+      // Third insert - first bond again, same transaction_hash
+      const third = await repo.upsert({
+        bondId: bondId as unknown as number,
+        amount: '100',
+        transactionHash: 'tx_dup_mark_001',
+      })
+      expect(third.isDuplicate).toBe(true)
     })
   })
 })

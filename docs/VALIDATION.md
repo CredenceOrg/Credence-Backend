@@ -39,10 +39,21 @@ You can combine them: `validate({ params: schemaA, query: schemaB, body: schemaC
 
 ## Schemas
 
-- **Address:** `src/schemas/address.ts` — `0x` + 40 hex chars (e.g. Ethereum-style).
+- **Address:** `src/schemas/address.ts` — contains:
+  - `addressSchema`: Validates either a `0x` + 40 hex characters Ethereum-style address or a basic Stellar address pattern.
+  - `stellarAddressSchema`: Enforces strict request-edge Stellar address validation by calling the existing `isValidStellarAddress` validator.
 - **Trust:** `src/schemas/trust.ts` — path params for `/api/trust/:address`.
 - **Bond:** `src/schemas/bond.ts` — path params for `/api/bond/:address`.
-- **Attestations:** `src/schemas/attestations.ts` — path, query (limit/offset), and body (create).
+- **Attestations:** `src/schemas/attestations.ts` — path, query (limit/offset), and body (create). Uses `stellarAddressSchema` for Stellar-specific body fields (`subject`, `attesterAddress`).
+
+### Stellar Address Validation & Error Semantics
+
+Stellar address validation is enforced at the schema layer (request edge) before any service, repository, persistence layer, or audit log is reached.
+
+- **Supported Address Types:** Only standard Stellar public keys (G-addresses) are supported. G-addresses must start with the character `G` followed by exactly 55 uppercase base32 characters (A–Z and 2–7).
+- **Unsupported Address Types:** Muxed accounts (M-addresses), federated addresses (`user*domain.com`), mixed-case addresses, or addresses with incorrect checksums/lengths are rejected.
+- **Error Behavior:** Any request violating Stellar address validation is rejected immediately with a `400 Bad Request` status and the error code `invalid_stellar_address`.
+
 
 Import from `src/schemas/index.js` for a single entry point.
 

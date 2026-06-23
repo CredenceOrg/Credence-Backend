@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { Dispute, DisputeInput } from './types.js'
+import { tryTransition } from './disputeStateMachine.js'
 
 const store = new Map<string, Dispute>()
 
@@ -83,14 +84,17 @@ export function isExpired(dispute: Dispute): boolean {
 export function resolveDispute(id: string, resolution: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status === 'resolved') throw new Error('Dispute already resolved')
-  if (dispute.status === 'dismissed') throw new Error('Cannot resolve a dismissed dispute')
   if (isExpired(dispute)) {
     dispute.status = 'expired'
     throw new Error('Cannot resolve an expired dispute')
   }
   if (!resolution || resolution.trim().length === 0) {
     throw new Error('Resolution text is required')
+  }
+
+  const transition = tryTransition(dispute.status, 'resolved')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'resolved'
@@ -101,10 +105,13 @@ export function resolveDispute(id: string, resolution: string): Dispute {
 export function dismissDispute(id: string, reason: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status === 'resolved') throw new Error('Cannot dismiss a resolved dispute')
-  if (dispute.status === 'dismissed') throw new Error('Dispute already dismissed')
   if (!reason || reason.trim().length === 0) {
     throw new Error('Dismiss reason is required')
+  }
+
+  const transition = tryTransition(dispute.status, 'dismissed')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'dismissed'
@@ -115,8 +122,10 @@ export function dismissDispute(id: string, reason: string): Dispute {
 export function markUnderReview(id: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status !== 'pending') {
-    throw new Error(`Cannot review dispute in "${dispute.status}" state`)
+
+  const transition = tryTransition(dispute.status, 'under_review')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'under_review'

@@ -1,4 +1,5 @@
 import { Queryable } from './queryable.js'
+import { BaseRepository } from './baseRepository.js'
 import { v4 as uuidv4 } from 'uuid'
 
 export type FailedEventStatus = 'failed' | 'replayed' | 'skipped'
@@ -46,8 +47,7 @@ const mapFailedEvent = (row: FailedEventRow): FailedInboundEvent => ({
   updatedAt: toDate(row.updated_at),
 })
 
-export class FailedInboundEventsRepository {
-  constructor(private readonly db: Queryable) {}
+export class FailedInboundEventsRepository extends BaseRepository {
 
   async create(input: CreateFailedEventInput): Promise<FailedInboundEvent> {
     const replayToken = input.replayToken || uuidv4()
@@ -63,7 +63,7 @@ export class FailedInboundEventsRepository {
     return mapFailedEvent(result.rows[0])
   }
 
-  async findById(id: string): Promise<FailedInboundEvent | undefined> {
+  async findById(id: string): Promise<FailedInboundEvent | null> {
     const result = await this.db.query<FailedEventRow>(
       `
       SELECT id, event_type, event_data, failure_reason, replay_token, status, created_at, updated_at
@@ -73,7 +73,7 @@ export class FailedInboundEventsRepository {
       [id]
     )
 
-    return result.rows[0] ? mapFailedEvent(result.rows[0]) : undefined
+    return result.rows[0] ? mapFailedEvent(result.rows[0]) : null
   }
 
   async updateStatus(id: string, status: FailedEventStatus): Promise<void> {

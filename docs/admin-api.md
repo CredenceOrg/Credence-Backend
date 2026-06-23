@@ -23,7 +23,7 @@ Authorization: Bearer <admin-api-key>
 Admin users must authenticate using their API key as a Bearer token:
 
 ```bash
-Authorization: Bearer admin-key-12345
+Authorization: Bearer <ADMIN_API_KEY_RAW>
 ```
 
 ### Authorization
@@ -76,7 +76,7 @@ List all users with pagination and optional filtering.
 
 ```bash
 curl -X GET 'http://localhost:3000/api/admin/users?limit=10&offset=0&role=verifier' \
-  -H "Authorization: Bearer admin-key-12345"
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
 ```
 
 #### Example Response (200 OK)
@@ -90,7 +90,7 @@ curl -X GET 'http://localhost:3000/api/admin/users?limit=10&offset=0&role=verifi
         "id": "verifier-user-1",
         "email": "verifier@credence.org",
         "role": "verifier",
-        "apiKey": "verifier-key-67890",
+        "apiKey": "<VERIFIER_API_KEY_RAW>",
         "createdAt": "2025-01-25T10:00:00.000Z",
         "lastActivity": "2026-02-25T12:30:45.123Z",
         "active": true
@@ -137,7 +137,7 @@ Assign or change a user's role. The user's previous role is replaced with the ne
 
 ```bash
 curl -X POST http://localhost:3000/api/admin/roles/assign \
-  -H "Authorization: Bearer admin-key-12345" \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "verifier-user-1",
@@ -155,7 +155,7 @@ curl -X POST http://localhost:3000/api/admin/roles/assign \
     "id": "verifier-user-1",
     "email": "verifier@credence.org",
     "role": "admin",
-    "apiKey": "verifier-key-67890",
+    "apiKey": "<VERIFIER_API_KEY_RAW>",
     "createdAt": "2025-01-25T10:00:00.000Z",
     "lastActivity": "2026-02-25T12:30:45.123Z",
     "active": true
@@ -204,11 +204,11 @@ Revoke an API key for a user and issue a new replacement key. The old key is inv
 
 ```bash
 curl -X POST http://localhost:3000/api/admin/keys/revoke \
-  -H "Authorization: Bearer admin-key-12345" \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "verifier-user-1",
-    "apiKey": "verifier-key-67890"
+    "apiKey": "<VERIFIER_API_KEY_RAW>"
   }'
 ```
 
@@ -269,7 +269,7 @@ Retrieve audit logs of admin actions with pagination and filtering.
 
 ```bash
 curl -X GET 'http://localhost:3000/api/admin/audit-logs?action=ASSIGN_ROLE&limit=20&offset=0' \
-  -H "Authorization: Bearer admin-key-12345"
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
 ```
 
 #### Example Response (200 OK)
@@ -453,7 +453,7 @@ The admin API includes comprehensive test coverage:
 
 ```bash
 #!/bin/bash
-ADMIN_TOKEN="Bearer admin-key-12345"
+ADMIN_TOKEN="Bearer <ADMIN_API_KEY_RAW>"
 BASE_URL="http://localhost:3000/api/admin"
 
 # 1. List all verifiers
@@ -470,7 +470,7 @@ curl -X POST "${BASE_URL}/roles/assign" \
 curl -X POST "${BASE_URL}/keys/revoke" \
   -H "Authorization: ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"userId": "verifier-user-1", "apiKey": "verifier-key-67890"}'
+  -d '{"userId": "verifier-user-1", "apiKey": "<VERIFIER_API_KEY_RAW>"}'
 
 # 4. Review audit logs
 curl -X GET "${BASE_URL}/audit-logs?adminId=admin-user-1" \

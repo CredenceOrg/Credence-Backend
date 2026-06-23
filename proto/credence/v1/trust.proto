@@ -1,0 +1,95 @@
+// proto/credence/v1/trust.proto
+//
+// TrustService — internal gRPC contract for querying trust scores.
+//
+// Breaking-change rules (enforced by buf breaking):
+//   - Never remove or renumber existing fields.
+//   - Never change a field's type.
+//   - Never rename the package or service.
+//   - Reserve removed field numbers with `reserved` statements.
+//
+// PII policy:
+//   - `address` is a public blockchain address — classified PUBLIC.
+//   - No SENSITIVE fields in this file.
+
+syntax = "proto3";
+
+package credence.v1;
+
+import "credence/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// TrustScore represents the computed reputation score for a single address.
+message TrustScore {
+  // Blockchain address (Stellar or Ethereum).
+  // Field 1 — do not reuse.
+  string address = 1;
+
+  // Computed trust score in the range [0, 100].
+  // Field 2 — do not reuse.
+  uint32 score = 2;
+
+  // Total amount currently bonded, expressed as a decimal string to preserve
+  // precision across languages (e.g. "1000.0000000").
+  // Field 3 — do not reuse.
+  string bonded_amount = 3;
+
+  // Timestamp when the bond was first created.  Absent when no bond exists.
+  // Field 4 — do not reuse.
+  google.protobuf.Timestamp bond_start = 4;
+
+  // Number of active attestations backing this identity.
+  // Field 5 — do not reuse.
+  uint32 attestation_count = 5;
+
+  // Timestamp of the most recent score calculation.
+  // Field 6 — do not reuse.
+  google.protobuf.Timestamp calculated_at = 6;
+}
+
+// GetTrustScoreRequest is the input to TrustService.GetTrustScore.
+message GetTrustScoreRequest {
+  // Address to look up.  Must be non-empty.
+  string address = 1;
+}
+
+// GetTrustScoreResponse wraps the result of TrustService.GetTrustScore.
+message GetTrustScoreResponse {
+  TrustScore trust_score = 1;
+}
+
+// BatchGetTrustScoresRequest allows callers to fetch multiple scores in one
+// round-trip.  Servers may impose a maximum batch size (default: 100).
+message BatchGetTrustScoresRequest {
+  // Addresses to look up.  Duplicates are deduplicated server-side.
+  repeated string addresses = 1;
+}
+
+// BatchGetTrustScoresResponse returns one TrustScore per requested address.
+// Addresses with no record are omitted from the result set.
+message BatchGetTrustScoresResponse {
+  repeated TrustScore trust_scores = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// TrustService exposes trust-score queries for internal service-to-service
+// communication.  Callers must present a valid shared-secret in the
+// `x-credence-internal-token` metadata header.
+service TrustService {
+  // GetTrustScore returns the current trust score for a single address.
+  // Returns NOT_FOUND when the address has no identity record.
+  rpc GetTrustScore(GetTrustScoreRequest) returns (GetTrustScoreResponse);
+
+  // BatchGetTrustScores returns trust scores for up to 100 addresses.
+  // Addresses with no record are silently omitted from the response.
+  rpc BatchGetTrustScores(BatchGetTrustScoresRequest) returns (BatchGetTrustScoresResponse);
+}

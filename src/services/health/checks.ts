@@ -4,49 +4,53 @@ const SERVICE_NAME = 'credence-backend'
 
 /**
  * Runs all health probes and computes overall status.
- * Returns 503-level "unhealthy" only when a critical dependency (db, cache, queue) is down.
- * Optional gateway dependency does not cause unhealthy, but degraded.
+ * Returns "unhealthy" when any critical dependency or background worker is down.
+ * Returns "degraded" when one or more checks are not configured.
+ * Each dependency result includes latencyMs when the probe ran.
  *
- * @param probes - Object with optional probes for db, cache, queue, and gateway
+ * @param probes - Object with optional probes for postgres, redis, horizon listener, outbox publisher, and horizon client
  * @returns Aggregated health result (no internal details exposed)
  */
 export async function runHealthChecks(probes: {
-  db?: HealthProbe
-  cache?: HealthProbe
-  queue?: HealthProbe
-  gateway?: HealthProbe
+  postgres?: HealthProbe
+  redis?: HealthProbe
+  horizonListener?: HealthProbe
+  outboxPublisher?: HealthProbe
+  horizon?: HealthProbe
 }): Promise<{
   status: 'ok' | 'degraded' | 'unhealthy'
   service: string
   dependencies: {
-    db: DependencyHealth
-    cache: DependencyHealth
-    queue: DependencyHealth
-    gateway: DependencyHealth
+    postgres: DependencyHealth
+    redis: DependencyHealth
+    horizonListener: DependencyHealth
+    outboxPublisher: DependencyHealth
+    horizon: DependencyHealth
   }
 }> {
-  const [db, cache, queue, gateway] = await Promise.all([
-    probes.db ? probes.db() : Promise.resolve({ status: 'not_configured' as const }),
-    probes.cache ? probes.cache() : Promise.resolve({ status: 'not_configured' as const }),
-    probes.queue ? probes.queue() : Promise.resolve({ status: 'not_configured' as const }),
-    probes.gateway ? probes.gateway() : Promise.resolve({ status: 'not_configured' as const }),
+  const [postgres, redis, horizonListener, outboxPublisher, horizon] = await Promise.all([
+    probes.postgres ? probes.postgres() : Promise.resolve({ status: 'not_configured' as const }),
+    probes.redis ? probes.redis() : Promise.resolve({ status: 'not_configured' as const }),
+    probes.horizonListener
+      ? probes.horizonListener()
+      : Promise.resolve({ status: 'not_configured' as const }),
+    probes.outboxPublisher
+      ? probes.outboxPublisher()
+      : Promise.resolve({ status: 'not_configured' as const }),
+    probes.horizon
+      ? probes.horizon()
+      : Promise.resolve({ status: 'not_configured' as const }),
   ])
 
-  const deps = { db, cache, queue, gateway }
+  const deps = { postgres, redis, horizonListener, outboxPublisher, horizon }
 
-  const criticalDown =
-    (db.status === 'down') ||
-    (cache.status === 'down') ||
-    (queue.status === 'down')
-  const anyCriticalConfigured =
-    (db.status !== 'not_configured') ||
-    (cache.status !== 'not_configured') ||
-    (queue.status !== 'not_configured')
+  const criticalDown = Object.values(deps).some(d => d.status === 'down')
+  const anyNotConfigured = Object.values(deps).some(d => d.status === 'not_configured')
 
   let status: 'ok' | 'degraded' | 'unhealthy'
-  if (criticalDown && anyCriticalConfigured) {
+  if (criticalDown) {
     status = 'unhealthy'
-  } else if (gateway.status === 'down') {
+  } else if (anyNotConfigured) {
     status = 'degraded'
   } else {
     status = 'ok'
