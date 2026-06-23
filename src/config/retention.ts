@@ -34,6 +34,34 @@ export interface RetentionConfig {
   }
 }
 
+export interface FailedInboundSweeperConfig {
+  /**
+   * When true the sweeper logs what *would* be deleted without touching the DB.
+   * Default: false.
+   */
+  dryRun: boolean
+
+  /** Maximum rows deleted per run. Default: 5000. */
+  batchSize: number
+
+  /**
+   * Run interval in milliseconds. Default: 3600000 (1 hour).
+   */
+  intervalMs: number
+
+  /**
+   * Terminal events (replayed/skipped) older than this many days are deleted.
+   * Default: 30.
+   */
+  terminalRetentionDays: number
+
+  /**
+   * Failed-status events older than this many days are also deleted.
+   * Set to 0 to keep failed events forever. Default: 0.
+   */
+  failedMaxAgeDays: number
+}
+
 export const DEFAULT_RETENTION_CONFIG: RetentionConfig = {
   dryRun: false,
   batchLimit: 5_000,
@@ -44,6 +72,14 @@ export const DEFAULT_RETENTION_CONFIG: RetentionConfig = {
     outboxEvents: { ttlDays: 30 },
     evidence: { ttlDays: 0 },
   },
+}
+
+export const DEFAULT_FAILED_INBOUND_SWEEPER_CONFIG: FailedInboundSweeperConfig = {
+  dryRun: false,
+  batchSize: 5_000,
+  intervalMs: 3600000,
+  terminalRetentionDays: 30,
+  failedMaxAgeDays: 0,
 }
 
 function parseTtl(raw: string | undefined, fallback: number): number {
@@ -91,5 +127,24 @@ export function loadRetentionConfig(
         ),
       },
     },
+  }
+}
+
+export function loadFailedInboundSweeperConfig(
+  env: Record<string, string | undefined> = process.env,
+  defaults: FailedInboundSweeperConfig = DEFAULT_FAILED_INBOUND_SWEEPER_CONFIG,
+): FailedInboundSweeperConfig {
+  return {
+    dryRun: (env.FAILED_INBOUND_SWEEPER_DRY_RUN ?? '').toLowerCase() === 'true',
+    batchSize: parseTtl(env.FAILED_INBOUND_SWEEPER_BATCH_SIZE, defaults.batchSize),
+    intervalMs: parseTtl(env.FAILED_INBOUND_SWEEPER_INTERVAL_MS, defaults.intervalMs),
+    terminalRetentionDays: parseTtl(
+      env.FAILED_INBOUND_SWEEPER_TERMINAL_RETENTION_DAYS,
+      defaults.terminalRetentionDays,
+    ),
+    failedMaxAgeDays: parseTtl(
+      env.FAILED_INBOUND_SWEEPER_FAILED_MAX_AGE_DAYS,
+      defaults.failedMaxAgeDays,
+    ),
   }
 }
