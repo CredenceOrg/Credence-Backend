@@ -9,11 +9,13 @@ function formatMessage(level: LogLevel, message: string | object) {
   const context = tracingContext.getStore()
   const requestId = context?.get('requestId') || 'N/A'
   const correlationId = context?.get('correlationId') || 'N/A'
+  const tenantId = context?.get('tenantId') || 'N/A'
 
   const metadata = {
     level,
     requestId,
     correlationId,
+    tenantId,
     timestamp: new Date().toISOString(),
   }
 
@@ -21,7 +23,7 @@ function formatMessage(level: LogLevel, message: string | object) {
     return JSON.stringify({ ...metadata, ...message })
   }
 
-  return `[${metadata.timestamp}] [${level}] [RequestID: ${requestId}] [CorrelationID: ${correlationId}] - ${message}`
+  return `[${metadata.timestamp}] [${level}] [RequestID: ${requestId}] [CorrelationID: ${correlationId}] [TenantID: ${tenantId}] - ${message}`
 }
 
 export const logger = {
