@@ -923,6 +923,355 @@ components:
             type: never
           type: never
       type: object
+    createSlashRequestBodySchema:
+      def:
+        type: object
+        shape:
+          targetAddress:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          requestedBy:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          threshold:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          totalSigners:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    dismissDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    disputeErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    disputePathParamsSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+      type: object
+    disputeSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          filedBy:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          respondent:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          evidence:
+            def:
+              type: array
+              element:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: array
+            element:
+              def:
+                type: string
+              type: string
+              format: null
+              minLength: null
+              maxLength: null
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                under_review: under_review
+                resolved: resolved
+                dismissed: dismissed
+                expired: expired
+            type: enum
+            enum:
+              pending: pending
+              under_review: under_review
+              resolved: resolved
+              dismissed: dismissed
+              expired: expired
+            options:
+              - pending
+              - under_review
+              - resolved
+              - dismissed
+              - expired
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          deadline:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          resolution:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: nullable
+      type: object
+    disputeStatusSchema:
+      def:
+        type: enum
+        entries:
+          pending: pending
+          under_review: under_review
+          resolved: resolved
+          dismissed: dismissed
+          expired: expired
+      type: enum
+      enum:
+        pending: pending
+        under_review: under_review
+        resolved: resolved
+        dismissed: dismissed
+        expired: expired
+      options:
+        - pending
+        - under_review
+        - resolved
+        - dismissed
+        - expired
+    disputeTransitionErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          code:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          error_code:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    governanceErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
     policyListQuerySchema:
       def:
         type: object
@@ -1985,6 +2334,108 @@ components:
       format: null
       minLength: 1
       maxLength: null
+    submitDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          filedBy:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          respondent:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 10
+            maxLength: null
+          evidence:
+            def:
+              type: array
+              element:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+              checks:
+                - {}
+            type: array
+            element:
+              def:
+                type: string
+              type: string
+              format: null
+              minLength: null
+              maxLength: null
+          deadlineMs:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 3600000
+            maxValue: 2592000000
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    submitVoteBodySchema:
+      def:
+        type: object
+        shape:
+          voterId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+      type: object
     transactionsHistoryQuerySchema:
       def:
         type: object
@@ -2401,6 +2852,154 @@ components:
             type: never
           type: never
       type: object
+    voteChoiceSchema:
+      def:
+        type: enum
+        entries:
+          approve: approve
+          reject: reject
+      type: enum
+      enum:
+        approve: approve
+        reject: reject
+      options:
+        - approve
+        - reject
+    voteResultSchema:
+      def:
+        type: object
+        shape:
+          slashRequestId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          voterId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+          approveCount:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          rejectCount:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                approved: approved
+                rejected: rejected
+            type: enum
+            enum:
+              pending: pending
+              approved: approved
+              rejected: rejected
+            options:
+              - pending
+              - approved
+              - rejected
+      type: object
+    voteSchema:
+      def:
+        type: object
+        shape:
+          voterId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+          timestamp:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
     withdrawalEventSchema:
       def:
         type: object
@@ -2632,9 +3231,641 @@ components:
         - address
         - bondedAmount
         - bondDuration
+    SlashRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          example: a1b2c3d4e5f6a7b8
+        targetAddress:
+          type: string
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        reason:
+          type: string
+          example: Repeated SLA violations on delivery commitments
+        requestedBy:
+          type: string
+          example: validator-12
+        createdAt:
+          type: string
+          format: date-time
+          example: 2024-01-15T09:00:00.000Z
+        votes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vote"
+        status:
+          $ref: "#/components/schemas/SlashRequestStatus"
+        threshold:
+          type: integer
+          example: 3
+        totalSigners:
+          type: integer
+          example: 5
+      required:
+        - id
+        - targetAddress
+        - reason
+        - requestedBy
+        - createdAt
+        - votes
+        - status
+        - threshold
+        - totalSigners
+    Vote:
+      type: object
+      properties:
+        voterId:
+          type: string
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp the vote was cast
+          example: 2024-01-15T10:00:00.000Z
+      required:
+        - voterId
+        - choice
+        - timestamp
+    VoteChoice:
+      type: string
+      enum:
+        - approve
+        - reject
+    SlashRequestStatus:
+      type: string
+      enum:
+        - pending
+        - approved
+        - rejected
+    GovernanceError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: NotFound
+        message:
+          type: string
+          example: Slash request not found
+      required:
+        - error
+        - message
+    CreateSlashRequestBody:
+      type: object
+      properties:
+        targetAddress:
+          type: string
+          minLength: 1
+          description: On-chain address of the entity being slashed
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        reason:
+          type: string
+          minLength: 1
+          description: Reason for requesting the slash
+          example: Repeated SLA violations on delivery commitments
+        requestedBy:
+          type: string
+          minLength: 1
+          description: Identifier of the requester
+          example: validator-12
+        threshold:
+          type: integer
+          minimum: 1
+          description: "Approve votes required to pass (default: 3)"
+          example: 3
+        totalSigners:
+          type: integer
+          minimum: 1
+          description: "Total eligible signers (default: 5)"
+          example: 5
+      required:
+        - targetAddress
+        - reason
+        - requestedBy
+    SlashRequestsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlashRequest"
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 1
+        hasNext:
+          type: boolean
+          example: false
+      required:
+        - success
+        - data
+        - page
+        - limit
+        - total
+        - hasNext
+    VoteResult:
+      type: object
+      properties:
+        slashRequestId:
+          type: string
+          example: a1b2c3d4e5f6a7b8
+        voterId:
+          type: string
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+        approveCount:
+          type: integer
+          example: 2
+        rejectCount:
+          type: integer
+          example: 0
+        status:
+          $ref: "#/components/schemas/SlashRequestStatus"
+      required:
+        - slashRequestId
+        - voterId
+        - choice
+        - approveCount
+        - rejectCount
+        - status
+    SubmitVoteBody:
+      type: object
+      properties:
+        voterId:
+          type: string
+          minLength: 1
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+      required:
+        - voterId
+        - choice
+    Dispute:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+        filedBy:
+          type: string
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        respondent:
+          type: string
+          example: GBVFLWXYZ6JJ7TUSU6QDJ6DOY4J5G5VHGJWSCMHL7QSAHRDEQU3EXFW2
+        reason:
+          type: string
+          example: Goods delivered did not match the agreed specification
+        evidence:
+          type: array
+          items:
+            type: string
+          example:
+            - ipfs://bafybeih...
+        status:
+          $ref: "#/components/schemas/DisputeStatus"
+        createdAt:
+          type: string
+          format: date-time
+          example: 2024-01-15T09:00:00.000Z
+        deadline:
+          type: string
+          format: date-time
+          example: 2024-01-16T09:00:00.000Z
+        resolution:
+          type: string
+          nullable: true
+          example: null
+      required:
+        - id
+        - filedBy
+        - respondent
+        - reason
+        - evidence
+        - status
+        - createdAt
+        - deadline
+        - resolution
+    DisputeStatus:
+      type: string
+      enum:
+        - pending
+        - under_review
+        - resolved
+        - dismissed
+        - expired
+    DisputeError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: NotFound
+        message:
+          type: string
+          example: Dispute not found
+      required:
+        - error
+        - message
+    SubmitDisputeBody:
+      type: object
+      properties:
+        filedBy:
+          type: string
+          pattern: ^G[A-Z2-7]{55}$
+          description: Stellar address of the party filing the dispute
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        respondent:
+          type: string
+          pattern: ^G[A-Z2-7]{55}$
+          description: Stellar address of the respondent
+          example: GBVFLWXYZ6JJ7TUSU6QDJ6DOY4J5G5VHGJWSCMHL7QSAHRDEQU3EXFW2
+        reason:
+          type: string
+          minLength: 10
+          description: Reason for the dispute (minimum 10 characters)
+          example: Goods delivered did not match the agreed specification
+        evidence:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Evidence references (URIs, hashes, etc.) supporting the dispute
+          example:
+            - ipfs://bafybeih...
+        deadlineMs:
+          type: integer
+          minimum: 3600000
+          maximum: 2592000000
+          description: Resolution deadline expressed as milliseconds from now (min 1 hour,
+            max 30 days)
+          example: 86400000
+      required:
+        - filedBy
+        - respondent
+        - reason
+        - evidence
+        - deadlineMs
+    DisputeTransitionError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid dispute state transition
+        code:
+          type: string
+          example: invalid_dispute_transition
+        error_code:
+          type: string
+          example: invalid_dispute_transition
+        message:
+          type: string
+          example: Invalid transition from "resolved" to "resolved"
+      required:
+        - error
+        - code
+        - error_code
+        - message
+    ResolveDisputeBody:
+      type: object
+      properties:
+        resolution:
+          type: string
+          minLength: 1
+          description: Resolution text describing the outcome
+          example: Respondent agreed to a partial refund of 20%
+      required:
+        - resolution
+    DismissDisputeBody:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Reason the dispute is being dismissed
+          example: Insufficient evidence provided
+      required:
+        - reason
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "API key sent as `Authorization: Bearer <key>`"
   parameters: {}
 paths:
   /api/health:
+    get:
+      summary: Health check
+      description: Service health status.
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                required:
+                  - status
+                  - service
+        "503":
+          description: Unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                required:
+                  - status
+                  - service
+  /.well-known/jwks.json:
+    get:
+      summary: JWKS
+      description: JSON Web Key Set for verifying JWT signatures.
+      tags:
+        - Security
+      responses:
+        "200":
+          description: JWKS returned
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties:
+                  nullable: true
+  /api/trust/{address}:
+    get:
+      summary: Get trust score
+      description: Returns computed trust score and identity data.
+      tags:
+        - Trust
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: address
+          in: path
+      responses:
+        "200":
+          description: Trust data
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "400":
+          description: Invalid address format
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "404":
+          description: No identity record
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/trust:
+    post:
+      summary: Trust query (internal)
+      description: Trust lookup entrypoint.
+      tags:
+        - Trust
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Trust data
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/attestations/{address}:
+    get:
+      summary: List attestations
+      description: Returns attestations for a subject address.
+      tags:
+        - Attestations
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: address
+          in: path
+      responses:
+        "200":
+          description: Attestations
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/attestations:
+    post:
+      summary: Create attestation
+      description: Creates an attestation and emits events.
+      tags:
+        - Attestations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bondId:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                attesterAddress:
+                  type: string
+                  minLength: 1
+                subject:
+                  type: string
+                  minLength: 1
+                value:
+                  type: string
+                  minLength: 1
+                  maxLength: 2048
+                key:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                score:
+                  type: integer
+                  nullable: true
+                  minimum: 0
+                  maximum: 100
+              required:
+                - subject
+                - value
+              additionalProperties: false
+      responses:
+        "201":
+          description: Attestation created
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "409":
+          description: Duplicate attestation
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/bulk:
+    post:
+      summary: Bulk operations
+      description: Performs bulk operations.
+      tags:
+        - Bulk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Bulk result
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/imports:
+    post:
+      summary: Imports
+      description: Imports data.
+      tags:
+        - Imports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/orgs/{orgId}/policies:
+    get:
+      summary: List policies
+      description: Lists policies for an organization.
+      tags:
+        - Policy
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: orgId
+          in: path
+      responses:
+        "200":
+          description: Policies
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/analytics:
+    get:
+      summary: Analytics
+      description: Returns analytics summary.
+      tags:
+        - Analytics
+      responses:
+        "200":
+          description: Analytics
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/payouts:
+    post:
+      summary: Create payout
+      description: Creates a payout job.
+      tags:
+        - Payouts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bondId:
+                  anyOf:
+                    - type: string
+                    - type: number
+                amount:
+                  type: string
+                  pattern: ^\d+(\.\d{1,18})?$
+                transactionHash:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                settledAt:
+                  type: string
+                  format: date-time
+                status:
+                  type: string
+                  enum:
+                    - pending
+                    - settled
+                    - failed
+              required:
+                - bondId
+                - amount
+                - transactionHash
+      responses:
+        "201":
+          description: Payout created
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/bond/{address}:
     get:
       summary: Get bond status
       description: Returns the current bond status and lifecycle state for a wallet address.
@@ -2695,242 +3926,367 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/BondError"
-  /.well-known/jwks.json:
-    get:
-      tags:
-        - Auth
-      summary: JWKS endpoint
-      description: Returns the JSON Web Key Set used to verify JWT tokens.
-      responses:
-        "200":
-          description: JWKS payload
-          content:
-            application/json:
-              schema:
-                type: object
-  /api/health:
-    get:
-      tags:
-        - System
-      summary: Health check
-      description: Returns service health status.
-      responses:
-        "200":
-          description: Service is healthy
-          content:
-            application/json:
-              schema:
-                type: object
-  /api/trust/{address}:
-    get:
-      tags:
-        - Trust
-      summary: Get trust record
-      description: Returns the trust record for a wallet address.
-      parameters:
-        - name: address
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Trust record found
-          content:
-            application/json:
-              schema:
-                type: object
-        "404":
-          description: Not found
-          content:
-            application/json:
-              schema:
-                type: object
-  /api/trust:
+  /api/governance/slash-requests:
     post:
+      summary: Create a slash request
+      description: Opens a new slash request awaiting governance votes.
       tags:
-        - Trust
-      summary: Create trust record
-      description: Creates a trust record for a wallet address.
+        - Governance
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/CreateSlashRequestBody"
       responses:
         "201":
-          description: Trust record created
+          description: Slash request created
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/SlashRequest"
         "400":
-          description: Validation error
+          description: Validation error (e.g. threshold < 1, or totalSigners < threshold)
           content:
             application/json:
               schema:
-                type: object
-  /api/attestations/{address}:
+                $ref: "#/components/schemas/GovernanceError"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
     get:
+      summary: List slash requests
+      description: Returns a paginated list of slash requests, optionally filtered by
+        status.
       tags:
-        - Attestations
-      summary: Get attestations for address
-      description: Returns attestations for a given subject address.
+        - Governance
+      security:
+        - bearerAuth: []
       parameters:
-        - name: address
-          in: path
-          required: true
-          schema:
-            type: string
+        - schema:
+            $ref: "#/components/schemas/SlashRequestStatus"
+          required: false
+          name: status
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            example: 1
+          required: false
+          name: page
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            example: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            nullable: true
+            minimum: 0
+          required: false
+          name: offset
+          in: query
       responses:
         "200":
-          description: Attestation list
+          description: Paginated list of slash requests
           content:
             application/json:
               schema:
-                type: object
-        "404":
-          description: Not found
+                $ref: "#/components/schemas/SlashRequestsListResponse"
+        "401":
+          description: Missing or invalid bearer token
           content:
             application/json:
               schema:
-                type: object
-  /api/attestations:
-    post:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/governance/slash-requests/{id}:
+    get:
+      summary: Get a slash request
+      description: Returns a single slash request by ID.
       tags:
-        - Attestations
-      summary: Create attestation
-      description: Creates a new attestation record.
+        - Governance
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            description: Slash request ID
+            example: a1b2c3d4e5f6a7b8
+          required: true
+          description: Slash request ID
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Slash request found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlashRequest"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+        "404":
+          description: No slash request with this ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/governance/slash-requests/{id}/votes:
+    post:
+      summary: Vote on a slash request
+      description: Casts an approve/reject vote on a pending slash request.
+      tags:
+        - Governance
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            description: Slash request ID
+            example: a1b2c3d4e5f6a7b8
+          required: true
+          description: Slash request ID
+          name: id
+          in: path
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/SubmitVoteBody"
       responses:
         "201":
-          description: Attestation created
+          description: Vote recorded
           content:
             application/json:
               schema:
-                type: object
-        "400":
-          description: Validation error
+                $ref: "#/components/schemas/VoteResult"
+        "401":
+          description: Missing or invalid bearer token
           content:
             application/json:
               schema:
-                type: object
-  /api/bulk:
-    post:
-      tags:
-        - Bulk
-      summary: Bulk operation
-      description: Performs a bulk data operation.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Bulk operation result
-          content:
-            application/json:
-              schema:
-                type: object
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                type: object
-  /api/imports:
-    post:
-      tags:
-        - Imports
-      summary: Import data
-      description: Imports external data records.
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-      responses:
-        "200":
-          description: Import result
-          content:
-            application/json:
-              schema:
-                type: object
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                type: object
-  /api/orgs/{orgId}/policies:
-    get:
-      tags:
-        - Organizations
-      summary: Get org policies
-      description: Returns policies for the given organization.
-      parameters:
-        - name: orgId
-          in: path
-          required: true
-          schema:
-            type: string
-      responses:
-        "200":
-          description: Policy list
-          content:
-            application/json:
-              schema:
-                type: object
+                $ref: "#/components/schemas/GovernanceError"
         "404":
-          description: Not found
+          description: No slash request with this ID
           content:
             application/json:
               schema:
-                type: object
-  /api/analytics:
-    get:
-      tags:
-        - Analytics
-      summary: Get analytics
-      description: Returns aggregated analytics data.
-      responses:
-        "200":
-          description: Analytics data
+                $ref: "#/components/schemas/GovernanceError"
+        "409":
+          description: Request already resolved, or voter has already voted
           content:
             application/json:
               schema:
-                type: object
-  /api/payouts:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/disputes:
     post:
+      summary: Submit a dispute
+      description: Files a new dispute between two Stellar addresses with supporting
+        evidence.
       tags:
-        - Payouts
-      summary: Initiate payout
-      description: Initiates a payout for a bond settlement.
+        - Disputes
+      security:
+        - bearerAuth: []
       requestBody:
         required: true
         content:
           application/json:
             schema:
-              type: object
+              $ref: "#/components/schemas/SubmitDisputeBody"
+      responses:
+        "201":
+          description: Dispute submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "400":
+          description: Validation error (invalid Stellar address, reason too short,
+            missing evidence, or deadline out of range)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+  /api/disputes/{id}:
+    get:
+      summary: Get a dispute
+      description: Returns a single dispute by ID.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
       responses:
         "200":
-          description: Payout initiated
+          description: Dispute found
           content:
             application/json:
               schema:
-                type: object
-        "400":
-          description: Validation error
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
           content:
             application/json:
               schema:
-                type: object
+                $ref: "#/components/schemas/DisputeError"
+        "404":
+          description: No dispute with this ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+  /api/disputes/{id}/review:
+    post:
+      summary: Mark a dispute under review
+      description: Transitions a pending dispute to `under_review`.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Dispute marked under review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition (e.g. dispute is not pending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"
+  /api/disputes/{id}/resolve:
+    post:
+      summary: Resolve a dispute
+      description: Transitions a pending or under-review dispute to `resolved` with a
+        resolution note.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveDisputeBody"
+      responses:
+        "200":
+          description: Dispute resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition, missing resolution text, or dispute has
+            expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"
+  /api/disputes/{id}/dismiss:
+    post:
+      summary: Dismiss a dispute
+      description: Transitions a pending or under-review dispute to `dismissed` with a
+        reason.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DismissDisputeBody"
+      responses:
+        "200":
+          description: Dispute dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition or missing dismiss reason
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"
