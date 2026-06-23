@@ -322,3 +322,7 @@ It also exports the following Prometheus metrics to track throughput, lag, and f
 - **`outbox_pending_gauge`** (Gauge): Current number of pending outbox events (lag/backlog).
 - **`outbox_lease_renew_total`** (Counter): Total number of outbox events whose lease was renewed, indicating processing duration or stalls.
 - **`outbox_dead_letter_total`** (Counter): Total number of outbox events moved to dead-letter, labeled by `error_code`.
+
+## Timeouts & Retry Policies
+
+Timeout events are captured in observability metrics and logs. For a comprehensive guide to configuring timeout budgets, retry policies, and operational tuning runbooks, see [`docs/timeouts-and-retries.md`](./timeouts-and-retries.md).

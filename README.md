@@ -262,6 +262,16 @@ The Grafana dashboard includes:
 - HTTP metrics (request rate, latency, error rate, status codes)
 - Infrastructure health (DB, Redis status and check duration)
 - Business metrics (reputation calculations, identity verifications, bulk operations)
+
+## Resilience: Timeouts & Retries
+
+The backend implements a comprehensive timeout and retry strategy for all external service dependencies. See **[docs/timeouts-and-retries.md](docs/timeouts-and-retries.md)** for:
+
+- Timeout budgets by service type (database, cache, HTTP, Soroban, webhooks)
+- Default and per-provider retry policies
+- Environment variable tuning guide
+- Operational runbook (symptom → diagnosis → tuning)
+
 ## Horizon Listener
 
 The service includes a Horizon withdrawal events listener that:
