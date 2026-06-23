@@ -7,7 +7,9 @@ import governanceRouter from './routes/governance.js'
 import disputesRouter from './routes/disputes.js'
 import evidenceRouter from './routes/evidence.js'
 import { loadConfig } from './config/index.js'
-import { pool } from './db/pool.js'
+import { pool, workerPool, replicaPool } from './db/pool.js'
+import { redisConnection } from './cache/redis.js'
+import { createShutdownMetrics } from './observability/shutdownMetrics.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
 import { AnalyticsRefreshScheduler } from './jobs/analyticsRefreshScheduler.js'
@@ -78,6 +80,9 @@ if (process.env.NODE_ENV !== "test") {
       gracePeriodMs: config.shutdown.gracePeriodMs,
       logger: console.log,
       forceExit: (code) => process.exit(code),
+      dbPools: [pool, workerPool, replicaPool],
+      redis: redisConnection,
+      metrics: createShutdownMetrics(),
     });
 
     server.on("connection", (socket) => {
@@ -121,7 +126,10 @@ if (process.env.NODE_ENV !== "test") {
         stop() {
           refreshScheduler.stop()
           reconcilerScheduler.stop()
-        }
+        },
+        isJobRunning() {
+          return refreshScheduler.isJobRunning() || reconcilerScheduler.isJobRunning()
+        },
       } as any
     }
 

@@ -118,6 +118,14 @@ export class JobScheduler {
   }
 
   /**
+   * Check if a job invocation is currently executing.
+   * Used by the shutdown coordinator to wait for in-flight work to drain.
+   */
+  isJobRunning(): boolean {
+    return this.isRunning
+  }
+
+  /**
    * Run the job (internal).
    *
    * When a `distributedLock` is configured the job only runs if this worker
