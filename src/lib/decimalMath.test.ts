@@ -464,4 +464,242 @@ describe('decimalMath', () => {
       )
     })
   })
+
+  describe('property-based rounding & multiply invariants', () => {
+    /**
+     * Arbitrary decimal strings suitable for decimalMath.
+     *
+     * - Allows negative values but excludes signed zero (e.g. "-0"), matching library expectations.
+     * - Produces varying integer/frac lengths to exercise different scale boundaries.
+     */
+    const decimalStringArb = fc
+      .tuple(
+        fc.boolean(), // negative
+        fc.integer({ min: 0, max: 999_999 }), // integer part
+        fc.integer({ min: 0, max: 12 }), // frac length
+        fc.integer({ min: 0, max: 9_999_999_999 }), // frac digits value (trimmed)
+      )
+      .map(([negative, intPart, fracLen, fracVal]) => {
+        const safeFracLen = Math.min(fracLen, 12)
+        const fracStr =
+          safeFracLen === 0
+            ? ''
+            : fracVal
+                .toString()
+                .padStart(safeFracLen, '0')
+                .slice(0, safeFracLen)
+        const abs =
+          safeFracLen > 0 ? `${intPart}.${fracStr}` : `${intPart}`
+        const isZero = intPart === 0 && (safeFracLen === 0 || fracVal === 0)
+        return negative && !isZero ? `-${abs}` : abs
+      })
+
+    const nonZeroDecimalStringArb = decimalStringArb.filter(
+      (s) => compareDecimals(s, '0') !== 0,
+    )
+
+    /**
+     * Builds a scale-specific “expected step” invariant bound.
+     * The library operates in base-10 scaled integers, so the ULP at scale
+     * `scale` is exactly 10^-scale (or 1 if scale === 0).
+     */
+    const ulpAtScale = (scale: number): string => {
+      if (scale === 0) return '1'
+      return `0.${'0'.repeat(scale - 1)}1`
+    }
+
+    const getFracLen = (v: string): number => {
+      const s = v.trim()
+      const dot = s.indexOf('.')
+      if (dot === -1) return 0
+      return s.length - dot - 1
+    }
+
+    const stripSign = (v: string): string => (v.startsWith('-') ? v.slice(1) : v)
+
+    const toScaledBigInt = (v: string): { mag: bigint; scale: number } => {
+      const isNeg = v.startsWith('-')
+      const abs = stripSign(v)
+      const parts = abs.split('.')
+      const intPart = parts[0] ?? '0'
+      const fracPart = parts[1] ?? ''
+      const scale = fracPart.length
+      const mag = BigInt((intPart === '' ? '0' : intPart) + fracPart)
+      return { mag: isNeg ? -mag : mag, scale }
+    }
+
+    const assertNoNegativeZero = (s: string) => {
+      expect(s).not.toMatch(/^\-0(\.|$)/)
+    }
+
+    it('roundToScale invariants: HALF modes bound error by ≤ 1 ULP and ordering DOWN ≤ value ≤ UP', () => {
+      fc.assert(
+        fc.property(
+          decimalStringArb,
+          fc.integer({ min: 0, max: 12 }),
+          (value, targetScale) => {
+            const rDown = roundToScale(value, targetScale, RoundingMode.DOWN)
+            const rUp = roundToScale(value, targetScale, RoundingMode.UP)
+            const rHalfUp = roundToScale(value, targetScale, RoundingMode.HALF_UP)
+            const rHalfDown = roundToScale(
+              value,
+              targetScale,
+              RoundingMode.HALF_DOWN,
+            )
+            const rHalfEven = roundToScale(
+              value,
+              targetScale,
+              RoundingMode.HALF_EVEN,
+            )
+
+            // DOWN and UP establish an interval that all other rounding modes must respect.
+            const within = (x: string) => {
+              const cmpLow = compareDecimals(rDown, x)
+              const cmpHigh = compareDecimals(x, rUp)
+              return cmpLow <= 0 && cmpHigh <= 0
+            }
+
+            expect(within(rHalfUp)).toBe(true)
+            expect(within(rHalfDown)).toBe(true)
+            expect(within(rHalfEven)).toBe(true)
+
+            // Error bound: |rounded - exact| ≤ 1 ULP.
+            // Compute the exact scaled value by rounding to a larger precision (no rounding loss)
+            // then comparing against the library’s scaled integer rounding.
+            const { scale: inputScale } = toScaledBigInt(value)
+            const safeScale = Math.max(inputScale, targetScale) + 2
+
+            const exactAtSafeScale = roundToScale(value, safeScale, RoundingMode.DOWN)
+            const exactRoundedDownToTarget = roundToScale(
+              exactAtSafeScale,
+              targetScale,
+              RoundingMode.DOWN,
+            )
+
+            const ulp = ulpAtScale(targetScale)
+            const withinOneUlp = (rounded: string) => {
+              const diff = subtractDecimals(rounded, exactRoundedDownToTarget)
+              const absDiff = diff.startsWith('-') ? diff.slice(1) : diff
+              // absDiff ≤ 1 ULP
+              return compareDecimals(absDiff, ulp) <= 0
+            }
+
+            expect(withinOneUlp(rHalfUp)).toBe(true)
+            expect(withinOneUlp(rHalfDown)).toBe(true)
+            expect(withinOneUlp(rHalfEven)).toBe(true)
+
+            assertNoNegativeZero(rDown)
+            assertNoNegativeZero(rUp)
+            assertNoNegativeZero(rHalfUp)
+            assertNoNegativeZero(rHalfDown)
+            assertNoNegativeZero(rHalfEven)
+          },
+        ),
+        { numRuns: 2000 },
+      )
+    })
+
+    it("HALF_EVEN produces even last digit at exact midpoints", () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 0, max: 25 }),
+          fc.integer({ min: 1, max: 12 }), // target scale >= 1 to exercise fractional midpoint construction
+          (lastEvenDigit, targetScale) => {
+            const evenDigit = lastEvenDigit % 10
+            if (evenDigit % 2 !== 0) return true
+
+            // Construct a value whose discarded digit at targetScale is exactly '5'
+            // and the retained last digit is `evenDigit`.
+            // Example: scale=2, create 0.<prefix><evenDigit>5 where everything after is 0.
+            const prefixInt = '0'
+            const retained = `${prefixInt}.${'0'.repeat(Math.max(0, targetScale - 1))}${evenDigit}`
+            const value = `${retained}5` // appending '5' creates midpoint at targetScale
+
+            const rounded = roundToScale(value, targetScale, RoundingMode.HALF_EVEN)
+            const fracLen = getFracLen(rounded)
+            expect(fracLen).toBe(targetScale)
+
+            const lastDigit = rounded[targetScale === 0 ? 0 : rounded.length - 1]
+            expect(lastDigit).toBe(String(evenDigit))
+            return true
+          },
+        ),
+        { numRuns: 500 },
+      )
+    })
+
+    it('sign correctness: no -0 output; negative rounding is symmetric for HALF_UP/HALF_DOWN', () => {
+      fc.assert(
+        fc.property(
+          nonZeroDecimalStringArb,
+          fc.integer({ min: 0, max: 12 }),
+          (value, targetScale) => {
+            const pos = value.startsWith('-') ? value.slice(1) : value
+            const neg = `-${pos}`
+
+            const rPosUp = roundToScale(pos, targetScale, RoundingMode.HALF_UP)
+            const rNegUp = roundToScale(neg, targetScale, RoundingMode.HALF_UP)
+
+            const rPosDown = roundToScale(pos, targetScale, RoundingMode.HALF_DOWN)
+            const rNegDown = roundToScale(neg, targetScale, RoundingMode.HALF_DOWN)
+
+            // no -0 anywhere
+            assertNoNegativeZero(rPosUp)
+            assertNoNegativeZero(rNegUp)
+            assertNoNegativeZero(rPosDown)
+            assertNoNegativeZero(rNegDown)
+
+            // symmetry: rounding(-x) = -rounding(x) for HALF_UP/HALF_DOWN
+            expect(rNegUp).toBe(rPosUp === '0' || rPosUp === '0.0' ? '0' : `-${rPosUp}`)
+            expect(rNegDown).toBe(rPosDown === '0' || rPosDown === '0.0' ? '0' : `-${rPosDown}`)
+          },
+        ),
+        { numRuns: 2000 },
+      )
+    })
+
+    it('multiplyDecimals exactness: equals BigInt product reference and scale is sum of input scales', () => {
+      fc.assert(
+        fc.property(
+          decimalStringArb,
+          decimalStringArb,
+          (a, b) => {
+            const { mag: aMag, scale: aScale } = toScaledBigInt(a)
+            const { mag: bMag, scale: bScale } = toScaledBigInt(b)
+            const product = aMag * bMag
+            const expectedScale = aScale + bScale
+
+            const out = multiplyDecimals(a, b)
+            assertNoNegativeZero(out)
+
+            // verify scale (fraction digits length)
+            const outFracLen = getFracLen(out)
+            expect(outFracLen).toBe(expectedScale)
+
+            const outScaled = toScaledBigInt(out)
+            expect(outScaled.mag).toBe(product)
+          },
+        ),
+        { numRuns: 2000 },
+      )
+    })
+
+    it('focused regressions: 0.005, 10.545, 2.5 (HALF_EVEN), and large many-digit inputs', () => {
+      expect(roundToScale('0.005', 2, RoundingMode.HALF_UP)).toBe('0.01')
+      expect(roundToScale('10.545', 2, RoundingMode.HALF_EVEN)).toBe('10.54')
+      expect(roundToScale('2.5', 0, RoundingMode.HALF_EVEN)).toBe('2')
+
+      const largeA = '123456789012345678901234567890.12345678901234567890'
+      const largeB = '987654321098765432109876543210.54321098765432109876'
+
+      const m = multiplyDecimals(largeA, largeB)
+      const { mag: aMag, scale: aScale } = toScaledBigInt(largeA)
+      const { mag: bMag, scale: bScale } = toScaledBigInt(largeB)
+
+      expect(multiplyDecimals(largeA, largeB)).toBe(m)
+      expect(toScaledBigInt(m).mag).toBe(aMag * bMag)
+      expect(getFracLen(m)).toBe(aScale + bScale)
+    })
+  })
 })
+
