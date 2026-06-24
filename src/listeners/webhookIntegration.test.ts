@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
-import { detectEventType, emitWebhookForStateChange } from './webhookIntegration.js'
+import { emitWebhookForStateChange } from './webhookIntegration.js'
+import { detectEventType } from './webhookDetection.js'
 import type { IdentityState } from './types.js'
 import type { WebhookService } from '../services/webhooks/index.js'
 

@@ -1,7 +1,7 @@
 /**
  * Webhook event types for bond lifecycle.
  */
-export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn'
+export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn' | 'attestation.added' | 'attestation.revoked' | 'score.updated' | 'attestation.added' | 'attestation.revoked' | 'score.updated'
 
 /**
  * Webhook configuration for a registered endpoint.
@@ -55,6 +55,11 @@ export interface WebhookPayload {
     bondStart: number | null
     bondDuration: number | null
     active: boolean
+    attestationId?: string
+    verifier?: string
+    weight?: number
+    claim?: string
+    score?: number
   }
 }
 

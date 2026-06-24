@@ -7,6 +7,9 @@ Webhook system for delivering bond lifecycle events to registered endpoints.
 - `bond.created` - Bond becomes active
 - `bond.slashed` - Bond amount decreases while active
 - `bond.withdrawn` - Bond becomes inactive with zero amount
+- `attestation.added` - A new attestation was added
+- `attestation.revoked` - An attestation was revoked
+- `score.updated` - Reputation score was recomputed
 
 ## Payload Format
 

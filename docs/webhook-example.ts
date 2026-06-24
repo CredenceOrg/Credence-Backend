@@ -5,7 +5,7 @@
 import { createIdentityStateSync } from '../src/listeners/identityStateSync.js'
 import { createWebhookService } from '../src/services/webhooks/service.js'
 import { MemoryWebhookStore } from '../src/services/webhooks/memoryStore.js'
-import { emitWebhookForStateChange } from '../src/listeners/webhookIntegration.js'
+import { emitWebhookForStateChange, emitWebhookForScoreChange, emitWebhookForAttestationChange } from '../src/listeners/webhookIntegration.js'
 import type { ContractReader, IdentityStateStore } from '../src/listeners/types.js'
 
 // Setup webhook service
