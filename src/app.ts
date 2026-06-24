@@ -6,12 +6,14 @@ import trustRouter from './routes/trust.js'
 import bulkRouter from './routes/bulk.js'
 import importsRouter from './routes/imports.js'
 import { createAdminRouter } from './routes/admin/index.js'
+import { createWebhookAdminRouter } from './routes/admin/webhooks.js'
 import { createPolicyRouter } from './routes/policy.js'
 import { createAnalyticsRouter } from './routes/analytics.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { pool } from './db/pool.js'
 import { validate } from './middleware/validate.js'
 import { requestIdMiddleware } from './middleware/requestId.js'
+import { errorHandler } from './middleware/errorHandler.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
@@ -24,6 +26,8 @@ import {
 import { compressionMiddleware, compressionMetricsMiddleware } from './middleware/compression.js'
 import { metricsMiddleware, register } from './middleware/metrics.js'
 import { createMembersRouter } from './routes/admin/member.ts'
+import http from 'http'
+import { getWsUpgradeHandler, shutdownWebSocketServer } from './routes/ws.js'
 
 const app = express()
 
@@ -122,5 +126,24 @@ app.use('/api/analytics', createAnalyticsRouter(analyticsService))
 
 // Final error handler
 app.use(errorHandler)
+
+/**
+ * Create HTTP server with WebSocket upgrade support
+ */
+export function createServer(): http.Server {
+  const server = http.createServer(app)
+  
+  // Handle WebSocket upgrades at /ws endpoint
+  server.on('upgrade', (req, socket, head) => {
+    const url = new URL(req.url || '/', `http://${req.headers.host}`)
+    if (url.pathname === '/ws') {
+      getWsUpgradeHandler()(req, socket, head)
+    } else {
+      socket.destroy()
+    }
+  })
+  
+  return server
+}
 
 export default app

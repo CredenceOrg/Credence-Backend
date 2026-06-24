@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import app from './app.js'
+import { createServer } from './app.js'
 import { createAdminRouter } from './routes/admin/index.js'
 import governanceRouter from './routes/governance.js'
 import disputesRouter from './routes/disputes.js'
@@ -9,6 +10,7 @@ import { pool } from './db/pool.js'
 import { AnalyticsService } from './services/analytics/service.js'
 import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
 import { keyManager } from './services/keyManager/index.js'
+import { shutdownWebSocketServer } from './routes/ws.js'
 
 app.use('/api/admin', createAdminRouter())
 app.use('/api/governance', governanceRouter)
@@ -20,10 +22,34 @@ export default app
 if (process.env.NODE_ENV !== 'test') {
   try {
     const config = loadConfig()
+    const server = createServer()
 
-    app.listen(config.port, () => {
+    server.listen(config.port, () => {
       console.log(`Credence API listening on port ${config.port}`)
     })
+
+    // Graceful shutdown
+    const shutdown = async (signal: string): Promise<void> => {
+      console.log(`Received ${signal}, shutting down gracefully...`)
+      
+      // Shutdown WebSocket server
+      await shutdownWebSocketServer()
+      
+      // Close HTTP server
+      server.close(() => {
+        console.log('HTTP server closed')
+        process.exit(0)
+      })
+      
+      // Force shutdown after 10 seconds
+      setTimeout(() => {
+        console.error('Forced shutdown after timeout')
+        process.exit(1)
+      }, 10000)
+    }
+
+    process.on('SIGTERM', () => void shutdown('SIGTERM'))
+    process.on('SIGINT', () => void shutdown('SIGINT'))
 
     if (process.env.DATABASE_URL) {
       const thresholdSeconds = Number(process.env.ANALYTICS_STALENESS_SECONDS ?? '300')
