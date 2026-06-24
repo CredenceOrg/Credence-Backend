@@ -45,6 +45,7 @@ Edit `k8s/configmap.yaml` or override at apply time:
 | `DATABASE_URL` | `postgresql://credence:CHANGEME@postgres:5432/credence` | PostgreSQL connection string |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection string |
 | `LOG_LEVEL` | `info` | Application log level |
+| `SHUTDOWN_GRACE_PERIOD_MS` | `30000` | Time in milliseconds to wait for graceful shutdown before forcing exit |
 
 ### Secret (`credence-backend-secret`)
 
@@ -66,8 +67,19 @@ The deployment uses the existing health endpoints:
 | Probe | Endpoint | Purpose |
 |---|---|---|
 | **Liveness** | `GET /api/health/live` | Restart pod if process hangs |
-| **Readiness** | `GET /api/health/ready` | Remove from Service if dependencies are down |
+| **Readiness** | `GET /api/health/ready` | Remove from Service if dependencies are down or during shutdown |
 | **Startup** | `GET /api/health/live` | Allow time for container startup |
+
+## Graceful Shutdown
+
+The application now handles `SIGTERM` and `SIGINT` by:
+
+- stopping the HTTP server from accepting new requests
+- marking readiness false so Kubernetes stops routing traffic
+- stopping listeners and workers
+- waiting up to `SHUTDOWN_GRACE_PERIOD_MS` before force exiting
+
+Make sure `terminationGracePeriodSeconds` in `k8s/deployment.yaml` exceeds `SHUTDOWN_GRACE_PERIOD_MS` so pods can shut down cleanly.
 
 ## Scaling
 

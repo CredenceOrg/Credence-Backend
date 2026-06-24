@@ -2,6 +2,8 @@
  * Webhook event types for bond lifecycle.
  */
 export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn'
+  | 'attestation.created'
+  | 'attestation.revoked'
 
 /**
  * Webhook configuration for a registered endpoint.
@@ -13,7 +15,7 @@ export interface WebhookConfig {
   url: string
   /** Events this webhook is subscribed to. */
   events: WebhookEventType[]
-  /** Secret key for HMAC signature verification. */
+  /** Current HMAC signing secret. */
   secret: string
   /** Previously active secret (during grace period). */
   previousSecret?: string
@@ -21,6 +23,31 @@ export interface WebhookConfig {
   secretUpdatedAt: Date
   /** Whether this webhook is active. */
   active: boolean
+  /** ISO timestamp when the secret was last rotated. */
+  secretRotatedAt?: string
+  /** ISO timestamp after which previousSecret is no longer valid. */
+  previousSecretExpiresAt?: string
+  /** Optional per-webhook delivery retry attempt cap. */
+  maxAttempts?: number
+  /** Optional per-webhook delivery timeout in milliseconds. */
+  timeoutMs?: number
+  /** Optional mTLS client certificate (PEM) presented to the endpoint. */
+  clientCertPem?: string
+  /** Optional KMS reference for the mTLS client private key. */
+  clientKeyKmsRef?: string
+  /** Optional SHA-256 pin of the expected server certificate. */
+  pinnedServerCertSha256?: string
+}
+
+/**
+ * Result returned to the caller after a successful secret rotation.
+ * newSecret is shown exactly once — it is never persisted in plain text.
+ */
+export interface WebhookSecretRotationResult {
+  webhookId: string
+  newSecret: string
+  rotatedAt: string
+  previousSecretExpiresAt: string
 }
 
 /**
@@ -31,14 +58,18 @@ export interface WebhookPayload {
   event: WebhookEventType
   /** ISO timestamp when event occurred. */
   timestamp: string
-  /** Event data (identity state). */
-  data: {
-    address: string
-    bondedAmount: string
-    bondStart: number | null
-    bondDuration: number | null
-    active: boolean
-  }
+  /** Event data (identity state, or a list of items for chunked payloads). */
+  data: Record<string, unknown> | unknown[]
+  /** Chunk ID for chunked payloads (optional). */
+  chunkId?: string
+  /** Index of this chunk (0-based). */
+  chunkIndex?: number
+  /** Total number of chunks. */
+  totalChunks?: number
+  /** Flag indicating payload was truncated. */
+  payloadTruncated?: boolean
+  /** URL to fetch remaining data (optional). */
+  paginationUrl?: string
 }
 
 /**
@@ -57,6 +88,8 @@ export interface WebhookDeliveryResult {
   attempts: number
   /** First 500 chars of response body on failure. */
   responseBodySnippet?: string
+  /** Error code for mTLS-specific failures. */
+  errorCode?: string
 }
 
 /**
@@ -96,4 +129,15 @@ export interface WebhookStore {
   get(id: string): Promise<WebhookConfig | null>
   /** Save or update webhook config. */
   set(config: WebhookConfig): Promise<void>
+  /**
+   * Atomically swap in a new signing secret while preserving the old one
+   * for the given grace period. Implementations must treat this as a single
+   * operation so concurrent rotations cannot race.
+   */
+  rotateSecret(
+    id: string,
+    newSecret: string,
+    previousSecret: string,
+    previousSecretExpiresAt: string,
+  ): Promise<WebhookConfig>
 }

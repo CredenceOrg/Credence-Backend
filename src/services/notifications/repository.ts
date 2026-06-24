@@ -1,4 +1,9 @@
 import type { Queryable } from '../../db/repositories/queryable.js'
+import {
+  createIdempotentNotificationJob,
+  type AsyncJob,
+  type IdempotentJobResult,
+} from '../../jobs/notificationIdempotency.js'
 import type {
   SendAttempt,
   NotificationStore,
@@ -12,6 +17,24 @@ import { randomUUID } from 'crypto'
  */
 export class NotificationRepository implements NotificationStore {
   constructor(private readonly db: Queryable) {}
+
+  /**
+   * Run a delivery workflow through the shared idempotent job repository.
+   */
+  async executeIdempotentJob<T>(
+    jobKey: string,
+    jobType: string,
+    job: AsyncJob<T>,
+    expiresInSeconds?: number
+  ): Promise<IdempotentJobResult<T>> {
+    return createIdempotentNotificationJob(
+      this.db,
+      jobKey,
+      jobType,
+      job,
+      expiresInSeconds
+    ).execute()
+  }
 
   /**
    * Create a new send attempt and mark it as pending.

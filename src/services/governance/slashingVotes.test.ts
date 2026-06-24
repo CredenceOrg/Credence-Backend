@@ -11,7 +11,7 @@ beforeEach(() => {
   _resetStore()
 })
 
-// ── createSlashRequest ────────────────────────────────────────────────────────
+// ── createSlashRequest ───────────────────────────────────────────────────────
 
 describe('createSlashRequest', () => {
   it('creates a request with default threshold and totalSigners', () => {
@@ -61,7 +61,7 @@ describe('createSlashRequest', () => {
   })
 })
 
-// ── submitVote ────────────────────────────────────────────────────────────────
+// ── submitVote ───────────────────────────────────────────────────────────────
 
 describe('submitVote', () => {
   it('returns null for an unknown slash request', () => {
@@ -146,7 +146,7 @@ describe('submitVote', () => {
   })
 })
 
-// ── getSlashRequest ───────────────────────────────────────────────────────────
+// ── getSlashRequest ─────────────────────────────────────────────────────────
 
 describe('getSlashRequest', () => {
   it('returns null for unknown id', () => {
@@ -177,7 +177,8 @@ describe('listSlashRequests', () => {
   it('returns all requests when no filter is given', () => {
     createSlashRequest({ targetAddress: '0x1', reason: 'r', requestedBy: 'v' })
     createSlashRequest({ targetAddress: '0x2', reason: 'r', requestedBy: 'v' })
-    expect(listSlashRequests()).toHaveLength(2)
+    expect(listSlashRequests().requests).toHaveLength(2)
+    expect(listSlashRequests().total).toBe(2)
   })
 
   it('filters by status', () => {
@@ -191,8 +192,23 @@ describe('listSlashRequests', () => {
     createSlashRequest({ targetAddress: '0x2', reason: 'r', requestedBy: 'v' })
     submitVote(req.id, 'voter1', 'approve')
 
-    expect(listSlashRequests('approved')).toHaveLength(1)
-    expect(listSlashRequests('pending')).toHaveLength(1)
-    expect(listSlashRequests('rejected')).toHaveLength(0)
+    expect(listSlashRequests('approved').requests).toHaveLength(1)
+    expect(listSlashRequests('pending').requests).toHaveLength(1)
+    expect(listSlashRequests('rejected').requests).toHaveLength(0)
+  })
+
+  it('respects pagination limit and offset', () => {
+    for (let i = 0; i < 5; i++) {
+      createSlashRequest({ targetAddress: `0x${i}`, reason: 'r', requestedBy: 'v' })
+    }
+    const page1 = listSlashRequests(undefined, 2, 0)
+    expect(page1.requests).toHaveLength(2)
+    expect(page1.total).toBe(5)
+    const page2 = listSlashRequests(undefined, 2, 2)
+    expect(page2.requests).toHaveLength(2)
+    expect(page2.total).toBe(5)
+    const page3 = listSlashRequests(undefined, 2, 4)
+    expect(page3.requests).toHaveLength(1)
+    expect(page3.total).toBe(5)
   })
 })

@@ -2,7 +2,51 @@
 
 ## Overview
 
-This module provides a comprehensive reputation scoring system based on bonded amounts, attestations, and time-weighted factors.
+This module provides a comprehensive reputation scoring system based on bonded amounts, attestations, and time-weighted factors. **All scoring weights and caps are externalized to configuration** and versioned via `REPUTATION_MODEL_VERSION` for audit trail and tuning flexibility.
+
+## Configuration
+
+Scoring parameters are configured via environment variables in `.env`:
+
+```bash
+# Scoring model version (recorded in snapshots for audit trail)
+REPUTATION_MODEL_VERSION=1.0.0
+
+# Maximum points for each component (must sum to ≤ 100)
+REPUTATION_BOND_SCORE_MAX=50
+REPUTATION_DURATION_SCORE_MAX=20
+REPUTATION_ATTESTATION_SCORE_MAX=30
+
+# Thresholds for maximum scores
+REPUTATION_ONE_ETH_WEI=1000000000000000000  # 1 ETH in wei
+REPUTATION_MAX_DURATION_DAYS=365             # Days for full duration score
+REPUTATION_MAX_ATTESTATION_COUNT=5           # Attestations for full score
+```
+
+### Configuration Validation
+
+- All score maxima are validated to be between 0 and 100
+- `REPUTATION_ONE_ETH_WEI` must be a valid BigInt string
+- Duration and attestation count must be positive integers
+- Invalid configuration will cause the application to fail at startup with a clear error message
+
+### Tuning the Model
+
+To adjust the trust model:
+
+1. Update the environment variables in `.env`
+2. Increment `REPUTATION_MODEL_VERSION` (e.g., `1.0.0` → `1.1.0`)
+3. Restart the application
+4. New scores will be computed with the updated weights
+5. Score snapshots will record the model version for audit trail
+
+**Example: Emphasize attestations over bond amount**
+```bash
+REPUTATION_MODEL_VERSION=1.1.0
+REPUTATION_BOND_SCORE_MAX=30
+REPUTATION_DURATION_SCORE_MAX=20
+REPUTATION_ATTESTATION_SCORE_MAX=50
+```
 
 ## Formula
 
@@ -12,20 +56,20 @@ totalScore = (bondScore + attestationScore) × timeWeight
 
 ### Components
 
-1. **Bond Score**: `min(bondedAmount × 0.01, 1000)`
+1. **Bond Score**: `min(bondedAmount × (bondScoreMax / oneEthWei), bondScoreMax)`
    - Based on the amount bonded by the user
-   - Capped at maximum of 1000
+   - Capped at configured maximum
    - Returns 0 if bond is slashed
 
-2. **Attestation Score**: `min(Σ(validAttestationWeights) × 0.1, 100)`
+2. **Attestation Score**: `min(Σ(validAttestationWeights) × 0.1, attestationScoreMax)`
    - Sum of all valid attestation weights
    - Multiplied by 0.1
-   - Capped at maximum of 100
+   - Capped at configured maximum
 
 3. **Time Weight**: `1 - e^(-0.5 × (duration/maxDuration) × 10)`
    - Exponential growth from 0 to 1
    - Based on bond duration
-   - Reaches 1.0 at 1 year (default max duration)
+   - Reaches 1.0 at configured max duration
 
 ## Usage
 

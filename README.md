@@ -262,6 +262,16 @@ The Grafana dashboard includes:
 - HTTP metrics (request rate, latency, error rate, status codes)
 - Infrastructure health (DB, Redis status and check duration)
 - Business metrics (reputation calculations, identity verifications, bulk operations)
+
+## Resilience: Timeouts & Retries
+
+The backend implements a comprehensive timeout and retry strategy for all external service dependencies. See **[docs/timeouts-and-retries.md](docs/timeouts-and-retries.md)** for:
+
+- Timeout budgets by service type (database, cache, HTTP, Soroban, webhooks)
+- Default and per-provider retry policies
+- Environment variable tuning guide
+- Operational runbook (symptom → diagnosis → tuning)
+
 ## Horizon Listener
 
 The service includes a Horizon withdrawal events listener that:
@@ -500,11 +510,15 @@ Extend with additional Horizon event ingestion when implementing the full archit
 - Integration notes: `docs/stellar-integration.md`
 - Tests: `src/clients/soroban.test.ts`
 
-## Integration tests
+## Testing
 
-Repository integration tests are under `tests/integration/` and execute against real PostgreSQL.
+For a full walkthrough — prerequisites, pg-mem vs testcontainers, running migrations, all test commands, the chaos suite, and troubleshooting — see **[docs/CONTRIBUTING-TESTING.md](docs/CONTRIBUTING-TESTING.md)**.
 
-- Use Docker/Testcontainers automatically: `npm run test:integration`
-- Use an existing DB in CI: `TEST_DATABASE_URL=postgresql://... npm run test:integration`
-- Coverage report: `npm run coverage`
-dummy
+Quick reference:
+
+```bash
+pnpm test                  # all tests (testcontainers auto-provisions Postgres)
+pnpm run test:coverage     # with coverage (40% global threshold)
+pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evidence)
+pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
+```

@@ -1,0 +1,20 @@
+title = "gitleaks config"
+
+[allowlist]
+paths = [".*/test/.*", ".*/fixtures/.*"]
+regexes = ["FAKE_SECRET", "dummyjwt"]
+
+[[rules]]
+id = "stellar-key"
+description = "Stellar secret key"
+regex = 'S[0-9A-Z]{55}'
+
+[[rules]]
+id = "jwt-token"
+description = "JWT token"
+regex = '(eyJ[a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)\.([a-zA-Z0-9_-]+)'
+
+[[rules]]
+id = "postgres-uri"
+description = "Postgres URI"
+regex = 'postgres://'

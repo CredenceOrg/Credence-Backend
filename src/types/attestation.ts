@@ -53,10 +53,9 @@ export interface AttestationListQuery {
 export interface AttestationListResponse {
   identity: string;
   attestations: Attestation[];
-  page: number;
   limit: number;
-  total: number;
-  hasNext: boolean;
+  hasNextPage: boolean;
+  nextCursor?: string;
 }
 
 /** Shape returned by the count endpoint. */

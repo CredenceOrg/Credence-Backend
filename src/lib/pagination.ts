@@ -6,6 +6,8 @@ export interface PaginationParams {
   page: number
   limit: number
   offset: number
+  cursor: string | null
+  decodedCursor?: DecodedCursor
 }
 
 export interface PaginationMeta {
@@ -13,6 +15,34 @@ export interface PaginationMeta {
   limit: number
   total: number
   hasNext: boolean
+}
+
+export interface CursorPaginationMeta {
+  limit: number
+  hasNextPage: boolean
+  nextCursor?: string
+}
+
+/**
+ * Standard cursor-based pagination envelope.
+ * Provides a consistent response structure for paginated endpoints.
+ */
+export interface CursorPaginationEnvelope<T> {
+  data: T[]
+  page: {
+    nextCursor: string | null
+    hasMore: boolean
+    limit: number
+  }
+}
+
+/**
+ * Options for building a cursor pagination envelope.
+ */
+export interface BuildCursorEnvelopeOptions {
+  limit: number
+  hasMore: boolean
+  nextCursor?: string | null
 }
 
 export interface DecodedCursor {
@@ -37,7 +67,7 @@ export class PaginationValidationError extends Error {
 }
 
 function parsePositiveInteger(value: unknown, path: string): number | undefined {
-  if (value === undefined) {
+  if (value === undefined || value === null) {
     return undefined
   }
 
@@ -46,7 +76,7 @@ function parsePositiveInteger(value: unknown, path: string): number | undefined 
   }
 
   const parsed = Number(value)
-  if (!Number.isInteger(parsed)) {
+  if (Number.isNaN(parsed) || !Number.isInteger(parsed)) {
     throw new PaginationValidationError([{ path, message: 'Expected an integer' }])
   }
 
@@ -87,16 +117,43 @@ export function parsePaginationParams(
     }
   }
 
-  const rawOffset = query.offset ?? query.cursor
+  // Treat an empty (or whitespace-only) cursor query param as "no cursor"
+  // rather than an invalid one, so `?cursor=` is ignored gracefully.
+  const rawCursor =
+    typeof query.cursor === 'string' && query.cursor.trim() !== ''
+      ? query.cursor
+      : null
+  const decodedCursor = rawCursor ? decodeCursor(rawCursor) : undefined
+
+  // Backwards compatibility: allow client to pass offset via ?cursor=10
+  // But ONLY if it parses as an integer and is NOT a valid encoded cursor
+  let rawOffset = query.offset
+  if (rawOffset === undefined && rawCursor !== null && !decodedCursor) {
+    rawOffset = rawCursor
+  }
+  
   const offsetPath = query.offset !== undefined ? 'offset' : 'cursor'
   try {
-    offset = parsePositiveInteger(rawOffset, offsetPath)
-  } catch (error) {
-    if (error instanceof PaginationValidationError) {
-      errors.push(...error.details)
-    } else {
-      throw error
+    // Only attempt to parse offset if it's explicitly provided or cursor is used as a legacy offset
+    if (rawOffset !== undefined) {
+      offset = parsePositiveInteger(rawOffset, offsetPath)
     }
+  } catch (error) {
+    // If it fails, only add error if it was strictly meant to be an offset,
+    // or if we failed fallback parsing. But to be safe, if decodedCursor is valid,
+    // we should just ignore the offset parsing error.
+    if (!decodedCursor) {
+      if (error instanceof PaginationValidationError) {
+        errors.push(...error.details)
+      } else {
+        throw error
+      }
+    }
+  }
+
+  // Reject tampered/invalid cursor strings that aren't numeric offsets either
+  if (rawCursor !== null && !decodedCursor && offset === undefined) {
+    errors.push({ path: 'cursor', message: 'Invalid cursor format' })
   }
 
   if (page !== undefined && page < 1) {
@@ -125,6 +182,8 @@ export function parsePaginationParams(
     page: resolvedPage,
     limit: resolvedLimit,
     offset: resolvedOffset,
+    cursor: rawCursor,
+    decodedCursor: decodedCursor ?? undefined,
   }
 }
 
@@ -141,8 +200,21 @@ export function buildPaginationMeta(
   }
 }
 
-export function encodeCursor(timestamp: string, id: string): string {
-  return Buffer.from(JSON.stringify({ t: timestamp, i: id }), 'utf8').toString('base64url')
+export function buildCursorPaginationMeta(
+  hasNextPage: boolean,
+  limit: number,
+  nextCursor?: string,
+): CursorPaginationMeta {
+  return {
+    limit,
+    hasNextPage,
+    nextCursor,
+  }
+}
+
+export function encodeCursor(timestamp: string | Date, id: string): string {
+  const t = timestamp instanceof Date ? timestamp.toISOString() : timestamp
+  return Buffer.from(JSON.stringify({ t, i: id }), 'utf8').toString('base64url')
 }
 
 export function decodeCursor(cursor: string): DecodedCursor | null {
@@ -154,5 +226,26 @@ export function decodeCursor(cursor: string): DecodedCursor | null {
     return { t: parsed.t, i: parsed.i }
   } catch {
     return null
+  }
+}
+
+/**
+ * Builds a standard cursor pagination envelope for API responses.
+ * @template T The type of items in the data array
+ * @param data The paginated results
+ * @param options Pagination metadata options
+ * @returns A standardized envelope with data and pagination info
+ */
+export function buildCursorEnvelope<T>(
+  data: T[],
+  options: BuildCursorEnvelopeOptions
+): CursorPaginationEnvelope<T> {
+  return {
+    data,
+    page: {
+      nextCursor: options.nextCursor ?? null,
+      hasMore: options.hasMore,
+      limit: options.limit,
+    },
   }
 }

@@ -17,6 +17,8 @@ export interface SnapshotJobOptions {
   continueOnError?: boolean
   /** Logger function for progress/errors. */
   logger?: (message: string) => void
+  /** Scoring model version to record in snapshots (optional). */
+  scoringModelVersion?: string
 }
 
 /**
@@ -39,6 +41,7 @@ export class ScoreSnapshotJob {
   private readonly batchSize: number
   private readonly continueOnError: boolean
   private readonly logger: (message: string) => void
+  private readonly scoringModelVersion: string
 
   constructor(
     private readonly dataSource: IdentityDataSource,
@@ -49,6 +52,7 @@ export class ScoreSnapshotJob {
     this.batchSize = options.batchSize ?? 100
     this.continueOnError = options.continueOnError ?? true
     this.logger = options.logger ?? (() => {})
+    this.scoringModelVersion = options.scoringModelVersion ?? '1.0.0'
   }
 
   /**
@@ -102,6 +106,7 @@ export class ScoreSnapshotJob {
                 bondedAmount: data.bondedAmount,
                 attestationCount: data.attestationCount,
                 timestamp: new Date().toISOString(),
+                scoringModelVersion: this.scoringModelVersion,
               }
 
               snapshots.push(snapshot)
@@ -136,6 +141,7 @@ export class ScoreSnapshotJob {
                 bondedAmount: data.bondedAmount,
                 attestationCount: data.attestationCount,
                 timestamp: new Date().toISOString(),
+                scoringModelVersion: this.scoringModelVersion,
               }
 
               snapshots.push(snapshot)

@@ -45,6 +45,9 @@ export interface VerificationProof {
   timestamp: string | null
 }
 
+/**
+ * @deprecated Use {@link CredenceError} and typed subclasses from `./errors.generated.js`.
+ */
 export class CredenceApiError extends Error {
   public readonly status: number
   public readonly body: string

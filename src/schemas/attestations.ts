@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { addressSchema } from './address.js'
+import { addressSchema, stellarAddressSchema } from './address.js'
 
 /**
  * Path params for attestation routes (e.g. GET /api/attestations/:address)
@@ -25,9 +25,12 @@ export const attestationsQuerySchema = z
  */
 export const createAttestationBodySchema = z
   .object({
+    bondId: z.coerce.number().int().positive('Bond ID is required').optional(),
+    attesterAddress: addressSchema.optional(),
     subject: addressSchema,
-    value: z.string().min(1, 'Attestation value is required'),
-    key: z.string().min(1).optional(),
+    value: z.string().min(1, 'Attestation value is required').max(2048, 'Attestation value is too large'),
+    key: z.string().min(1).max(128).optional(),
+    score: z.coerce.number().int().min(0).max(100).optional(),
   })
   .strict()
 

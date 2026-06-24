@@ -156,14 +156,24 @@ export function getSlashRequest(id: string): SlashRequest | null {
 }
 
 /**
- * List all slash requests, optionally filtered by status.
+ * List slash requests with optional status filter and pagination.
  *
  * @param status  Optional status filter
- * @returns       Array of matching slash requests
+ * @param limit   Max items to return (default 20, max 100)
+ * @param offset  Number of items to skip (default 0)
+ * @returns       Matching slash requests and total count
  */
-export function listSlashRequests(status?: SlashRequestStatus): SlashRequest[] {
+export function listSlashRequests(
+  status?: SlashRequestStatus,
+  limit = 20,
+  offset = 0,
+): { requests: SlashRequest[]; total: number } {
   const all = [...store.values()]
-  return status ? all.filter((r) => r.status === status) : all
+  const filtered = status ? all.filter((r) => r.status === status) : all
+  return {
+    requests: filtered.slice(offset, offset + limit),
+    total: filtered.length,
+  }
 }
 
 /** Reset the in-memory store. Intended for use in tests only. */

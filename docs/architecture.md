@@ -28,7 +28,8 @@ graph TD
     end
 
     subgraph "Data Layer"
-        DB
+        DB[(Primary DB)]
+        Replica[(Read Replica)]
         Redis[(Redis Cache & Rate Limit)]
         Storage[Encrypted Evidence Storage]
     end
@@ -38,9 +39,11 @@ graph TD
         Webhooks -->|Notify| Ext[External Systems]
     end
 
+    DB -.->|Replication| Replica
     Listener <-->|Poll/Stream| Stellar
     API --> Redis
-    API --> DB
+    API -->|Write| DB
+    API -->|Read| Replica
     Rep --> DB
     Gov --> DB
     Gov --> Storage
@@ -115,7 +118,7 @@ Handles the generation of cryptographic proofs for identity data.
 ## 3. Data Architecture
 
 ### 3.1 PostgreSQL Schema
-The relational database serves as the source of truth for off-chain data and system state.
+The relational database serves as the source of truth for off-chain data and system state. The application employs a primary instance for writes and standard operations, and a **Read Replica** for offloading read-heavy endpoints (e.g., trust scores and attestations). Read queries gracefully fall back to the primary instance if the replica lag exceeds `MAX_REPLICA_LAG_MS` or if the replica becomes unreachable.
 
 | Domain | Table | Description | Relationships |
 |--------|-------|-------------|---------------|
@@ -147,6 +150,8 @@ The application requires the following key environment variables, validated at s
 | Variable | Description | Required |
 |----------|-------------|----------|
 | `DATABASE_URL` | PostgreSQL connection string | **Yes** |
+| `DB_REPLICA_URL` | PostgreSQL connection string for the read replica | No (Falls back to primary) |
+| `MAX_REPLICA_LAG_MS` | Max acceptable lag for replica reads | No (Default: 1000) |
 | `REDIS_URL` | Redis connection string | **Yes** |
 | `JWT_SECRET` | Secret for signing/verifying JWTs | **Yes** |
 | `ALLOWED_ORIGINS` | Comma-separated CORS allowlist | **Yes (Prod)** |

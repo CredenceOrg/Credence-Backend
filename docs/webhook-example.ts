@@ -1,29 +1,13 @@
 /**
- * Example: Webhook integration with identity state sync
+ * Example: Webhook integration with identity state sync via transactional outbox.
  */
 
-import { createIdentityStateSync } from '../src/listeners/identityStateSync.js'
-import { createWebhookService } from '../src/services/webhooks/service.js'
-import { MemoryWebhookStore } from '../src/services/webhooks/memoryStore.js'
-import { emitWebhookForStateChange } from '../src/listeners/webhookIntegration.js'
-import type { ContractReader, IdentityStateStore } from '../src/listeners/types.js'
+import type { Queryable } from '../src/db/repositories/queryable.js'
+import { emitWebhookForStateChange } from '../src/listeners/webhookIntegrationOutbox.js'
+import type { ContractReader, IdentityState, IdentityStateStore } from '../src/listeners/types.js'
 
-// Setup webhook service
-const webhookStore = new MemoryWebhookStore()
-await webhookStore.set({
-  id: 'wh_enterprise_1',
-  url: 'https://api.example.com/webhooks/bonds',
-  events: ['bond.created', 'bond.slashed', 'bond.withdrawn'],
-  secret: 'your-webhook-secret',
-  active: true,
-})
-
-const webhookService = createWebhookService(webhookStore)
-
-// Setup identity sync with webhook integration
 const contract: ContractReader = {
   async getIdentityState(address: string) {
-    // Fetch from blockchain
     return {
       address,
       bondedAmount: '1000',
@@ -36,10 +20,9 @@ const contract: ContractReader = {
 
 const store: IdentityStateStore = {
   async get(address: string) {
-    // Fetch from database
     return null
   },
-  async set(state) {
+  async set(_state: IdentityState) {
     // Save to database
   },
   async getAllAddresses() {
@@ -47,16 +30,19 @@ const store: IdentityStateStore = {
   },
 }
 
-// Enhanced reconciliation with webhooks
-async function reconcileWithWebhooks(address: string) {
+/**
+ * Reconcile identity state and emit webhook events atomically via the outbox.
+ * Replace `db` with your transaction client (e.g. pool or pg transaction).
+ */
+async function reconcileWithWebhooks(db: Queryable, address: string) {
   const oldState = await store.get(address)
   const newState = await contract.getIdentityState(address)
-  
+
   if (newState) {
     await store.set(newState)
-    await emitWebhookForStateChange(webhookService, oldState, newState)
+    await emitWebhookForStateChange(db, oldState, newState)
   }
 }
 
-// Use in your event listener
-await reconcileWithWebhooks('0xabc...')
+// Use in your event listener (within a transaction in production)
+await reconcileWithWebhooks({} as Queryable, '0xabc...')

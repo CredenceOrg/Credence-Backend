@@ -24,12 +24,18 @@ vi.mock('@stellar/stellar-sdk', () => {
 
 // Import after mocking
 import { HorizonWithdrawalListener, createHorizonWithdrawalListener } from '../horizonWithdrawalEvents.js'
+import { CursorRepository } from '../../db/repositories/cursorRepository.js'
 
 describe('HorizonWithdrawalListener', () => {
   let listener: HorizonWithdrawalListener
 
   beforeEach(() => {
     vi.clearAllMocks()
+    
+    // Spy on prototype methods to prevent real database queries
+    vi.spyOn(CursorRepository.prototype, 'findByStreamName').mockResolvedValue(null)
+    vi.spyOn(CursorRepository.prototype, 'upsert').mockResolvedValue({} as any)
+    vi.spyOn(CursorRepository.prototype, 'getCursorLag').mockResolvedValue(0)
     
     // Create listener with test configuration
     listener = createHorizonWithdrawalListener({

@@ -1,7 +1,16 @@
 import { generateKeyPair, exportJWK, SignJWT, jwtVerify, decodeProtectedHeader, importPKCS8 } from 'jose'
-import { randomUUID } from 'crypto'
-import type { KeyLike } from 'jose'
-import type { ManagedKey, JwksResponse, KeyManagerConfig, KeyAuditEvent } from './types.js'
+import { randomUUID, randomBytes } from 'crypto'
+import type {
+  ManagedKey,
+  JwksResponse,
+  KeyManagerConfig,
+  KeyAuditEvent,
+  KeyLike,
+  KekVersion,
+  KekApproval,
+  KekAuditEvent,
+  KekRegistrationResult,
+} from './types.js'
 
 const ALG = 'PS256'
 
@@ -299,3 +308,191 @@ export const keyManager = new KeyManager({
   privateKeyPem: process.env.KEY_PRIVATE_PEM,
   initialKid: process.env.KEY_INITIAL_KID,
 })
+
+/**
+ * Manages versioned Key Encryption Keys (KEKs) for envelope-encrypting evidence at rest.
+ *
+ * ## Lifecycle
+ *  1. `registerVersion(keyMaterial)` — registers a new KEK version (requires dual-control approval).
+ *  2. `approveActivation(version, approver)` — records an approval (two approvals required).
+ *  3. `activateVersion(version)` — promotes the version to active; retires the previous one.
+ *  4. After re-encryption completes, call `zeroizeRetired()` to wipe old key material.
+ *
+ * ## Thread safety
+ * This implementation is single-process in-memory. For multi-replica deployments,
+ * persist KEK metadata in the database and distribute key material via a secrets manager.
+ */
+export class KekManager {
+  private readonly versions: Map<number, KekVersion> = new Map()
+  private currentVersion: number | null = null
+  private readonly pendingApprovals: Map<number, KekApproval[]> = new Map()
+  private readonly auditLog: KekAuditEvent[] = []
+
+  /** Required number of distinct approvers before a version can be activated. */
+  static readonly REQUIRED_APPROVALS = 2
+
+  /**
+   * Register a new KEK version. The version number is auto-incremented.
+   * Key material must be exactly 32 bytes (AES-256).
+   */
+  registerVersion(keyMaterial: Buffer): KekRegistrationResult {
+    if (keyMaterial.length !== 32) {
+      throw new Error('KEK key material must be exactly 32 bytes (AES-256)')
+    }
+    const version = this.versions.size + 1
+    const kek: KekVersion = {
+      version,
+      keyMaterial: Buffer.from(keyMaterial), // copy to own buffer
+      state: 'retired', // starts retired until explicitly activated
+      createdAt: new Date(),
+      retiredAt: null,
+    }
+    this.versions.set(version, kek)
+    this.pendingApprovals.set(version, [])
+    this._emitAudit({ timestamp: new Date().toISOString(), event: 'KEK_REGISTERED', version })
+
+    // Auto-activate if this is the very first version (no prior active key)
+    if (this.currentVersion === null) {
+      kek.state = 'active'
+      this.currentVersion = version
+      this._emitAudit({ timestamp: new Date().toISOString(), event: 'KEK_ACTIVATED', version })
+      return { version, autoActivated: true }
+    }
+
+    return { version, autoActivated: false }
+  }
+
+  /**
+   * Record an approval for activating a pending KEK version.
+   * Each approver may only approve once per version.
+   */
+  approveActivation(version: number, approvedBy: string): void {
+    const kek = this.versions.get(version)
+    if (!kek) throw new Error(`KEK version ${version} not found`)
+    if (kek.state === 'active') throw new Error(`KEK version ${version} is already active`)
+
+    const approvals = this.pendingApprovals.get(version) ?? []
+    if (approvals.some((a) => a.approvedBy === approvedBy)) {
+      throw new Error(`Approver ${approvedBy} has already approved version ${version}`)
+    }
+    approvals.push({ version, approvedBy, approvedAt: new Date() })
+    this.pendingApprovals.set(version, approvals)
+  }
+
+  /**
+   * Activate a registered KEK version.
+   * Requires `REQUIRED_APPROVALS` distinct approvals first (dual-control).
+   * Retires the previously active version.
+   */
+  activateVersion(version: number): void {
+    const kek = this.versions.get(version)
+    if (!kek) throw new Error(`KEK version ${version} not found`)
+    if (kek.state === 'active') throw new Error(`KEK version ${version} is already active`)
+
+    const approvals = this.pendingApprovals.get(version) ?? []
+    if (approvals.length < KekManager.REQUIRED_APPROVALS) {
+      throw new Error(
+        `KEK version ${version} requires ${KekManager.REQUIRED_APPROVALS} approvals, got ${approvals.length}`,
+      )
+    }
+
+    const previousVersion = this.currentVersion
+    if (previousVersion !== null) {
+      const prev = this.versions.get(previousVersion)!
+      prev.state = 'retired'
+      prev.retiredAt = new Date()
+      this._emitAudit({
+        timestamp: prev.retiredAt.toISOString(),
+        event: 'KEK_RETIRED',
+        version: previousVersion,
+      })
+    }
+
+    kek.state = 'active'
+    this.currentVersion = version
+    this._emitAudit({
+      timestamp: new Date().toISOString(),
+      event: 'KEK_ACTIVATED',
+      version,
+      previousVersion: previousVersion ?? undefined,
+    })
+  }
+
+  /** Returns the currently active KEK. Throws if none is registered. */
+  getCurrentKek(): KekVersion {
+    if (this.currentVersion === null) {
+      throw new Error('No active KEK — call registerVersion() first')
+    }
+    return this.versions.get(this.currentVersion)!
+  }
+
+  /** Returns a specific KEK version (for decrypting legacy ciphertext during rotation). */
+  getVersion(version: number): KekVersion {
+    const kek = this.versions.get(version)
+    if (!kek) throw new Error(`KEK version ${version} not found`)
+    return kek
+  }
+
+  /** Returns all registered versions (active + retired). */
+  getAllVersions(): KekVersion[] {
+    return [...this.versions.values()]
+  }
+
+  /**
+   * Zeroize key material for all retired versions.
+   * Call after re-encryption of all records with the old version is confirmed complete.
+   */
+  zeroizeRetired(): number[] {
+    const zeroized: number[] = []
+    for (const kek of this.versions.values()) {
+      if (kek.state === 'retired' && kek.keyMaterial.length > 0) {
+        kek.keyMaterial.fill(0)
+        zeroized.push(kek.version)
+        this._emitAudit({
+          timestamp: new Date().toISOString(),
+          event: 'KEK_ZEROIZED',
+          version: kek.version,
+        })
+      }
+    }
+    return zeroized
+  }
+
+  /** Returns pending approvals for a version. */
+  getPendingApprovals(version: number): KekApproval[] {
+    return [...(this.pendingApprovals.get(version) ?? [])]
+  }
+
+  /** Returns a copy of the KEK audit log. */
+  getAuditLog(): KekAuditEvent[] {
+    return [...this.auditLog]
+  }
+
+  /** Reset all state. For tests only. */
+  _resetStore(): void {
+    // Zeroize all key material before clearing
+    for (const kek of this.versions.values()) {
+      kek.keyMaterial.fill(0)
+    }
+    this.versions.clear()
+    this.pendingApprovals.clear()
+    this.currentVersion = null
+    this.auditLog.length = 0
+  }
+
+  private _emitAudit(event: KekAuditEvent): void {
+    this.auditLog.push(event)
+  }
+}
+
+/**
+ * Application-wide singleton KekManager.
+ * Seed with `kekManager.registerVersion(Buffer.from(process.env.EVIDENCE_ENCRYPTION_KEY!, 'utf-8'))`
+ * at startup to bootstrap version 1 from the existing env-var key.
+ */
+export const kekManager = new KekManager()
+
+/** Generate a cryptographically random 32-byte KEK. */
+export function generateKekMaterial(): Buffer {
+  return randomBytes(32)
+}

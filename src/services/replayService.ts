@@ -1,5 +1,9 @@
 import { FailedInboundEventsRepository, FailedInboundEvent } from '../db/repositories/failedInboundEventsRepository.js'
 import { auditLogService } from './audit/index.js'
+import { cache } from '../cache/redis.js'
+import { invalidateCache } from '../cache/invalidation.js'
+
+const FAILED_EVENT_CACHE_TTL = 300 // 5 minutes
 
 export interface ReplayHandler {
   handle(eventData: any): Promise<void>
@@ -40,16 +44,36 @@ export class ReplayService {
   }
 
   /**
+   * Get failed event by ID with caching.
+   */
+  async getFailedEvent(id: string): Promise<FailedInboundEvent | null> {
+    const cached = await cache.get<FailedInboundEvent>('failed_event', id)
+
+    if (cached) {
+      return cached
+    }
+
+    const event = await this.repository.findById(id)
+    if (event) {
+      await cache.set('failed_event', id, event, FAILED_EVENT_CACHE_TTL)
+    }
+
+    return event
+  }
+
+  /**
    * Replay a failed event by ID.
    * Ensures idempotency by checking status and using AuditLogService.
+   * Increments retry_count on each attempt.
    */
   async replayEvent(
     id: string,
     adminId: string,
     adminEmail: string,
+    tenantId: string,
     ipAddress?: string
   ): Promise<{ success: boolean; message: string }> {
-    const event = await this.repository.findById(id)
+    const event = await this.getFailedEvent(id)
     if (!event) {
       throw new Error(`Event ${id} not found`)
     }
@@ -65,13 +89,24 @@ export class ReplayService {
 
     try {
       await handler.handle(event.eventData)
-      
+
       await this.repository.updateStatus(id, 'replayed')
+      await this.repository.incrementRetryCount(id)
+
+      // Invalidate cache after status update
+      const updatedEvent = await this.repository.findById(id)
+      if (updatedEvent) {
+        await invalidateCache('failed_event', id, updatedEvent, {
+          verify: true,
+          verifyFn: (cached, fresh) => cached.status !== fresh.status
+        })
+      }
 
       auditLogService.logAction(
+        tenantId,
         adminId,
         adminEmail,
-        'REPLAY_EVENT' as any, // Should add to AuditAction enum
+        'REPLAY_EVENT' as any,
         id,
         'system',
         { eventType: event.eventType, status: 'success' },
@@ -83,8 +118,11 @@ export class ReplayService {
       return { success: true, message: 'Event successfully replayed' }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      
+
+      await this.repository.incrementRetryCount(id)
+
       auditLogService.logAction(
+        tenantId,
         adminId,
         adminEmail,
         'REPLAY_EVENT' as any,

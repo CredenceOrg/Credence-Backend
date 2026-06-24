@@ -9,6 +9,15 @@ The migration system includes built-in guardrails to prevent potentially dangero
 - **Preflight checks** that analyze migrations before execution
 - **Runtime safeguards** that block unsafe operations
 - **Online schema change patterns** for zero-downtime deployments
+- **Comprehensive guardrails** for long-running operations, batching, and rollback procedures
+
+## Enhanced Guardrails
+
+For comprehensive migration guardrails including batching strategies, lock timeout management, and rollback procedures, see:
+- **[Migration Guardrails Guide](./MIGRATION_GUARDRAILS.md)** - Complete guide for long-running schema changes
+- **[Batching Utilities](../src/migrations/utils/batching.ts)** - Safe batch operations
+- **[Lock Timeout Management](../src/migrations/utils/lock-timeout.ts)** - Lock safety and timeout configuration
+- **[Rollback Checklist](../src/migrations/utils/rollback-checklist.ts)** - Comprehensive rollback procedures
 
 ## Safe Migration Patterns
 

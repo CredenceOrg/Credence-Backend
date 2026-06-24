@@ -1,29 +1,51 @@
-import { Router, type Request, type Response } from 'express'
+import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getTrustScore } from '../services/reputationService.js'
-import { requireApiKey, requireScope } from '../middleware/apiKey.js'
-import { validate } from '../middleware/validate.js'
-import { trustPathParamsSchema } from '../schemas/index.js'
+import { PgTrustIdentityRepository } from '../db/repositories/trustIdentityRepository.js'
+import { pool, withReplica } from '../db/pool.js'
+import { apiKeyMiddleware } from '../middleware/apiKey.js'
+import { validate, type ValidatedRequest } from '../middleware/validate.js'
+import { trustPathParamsSchema, type TrustPathParams } from '../schemas/index.js'
 import { NotFoundError } from '../lib/errors.js'
-import { ApiKeyScope } from '../services/apiKeys.js'
+import { createHash } from 'crypto'
 
 const router = Router()
+
+function generateEtag(data: any): string {
+  return createHash('sha256').update(JSON.stringify(data)).digest('hex')
+}
 
 router.get(
   '/:address',
   validate({ params: trustPathParamsSchema }),
-  requireApiKey(),
-  requireScope(ApiKeyScope.TRUST_READ),
-  (req: Request, res: Response) => {
-    const { address } = req.validated!.params! as { address: string }
+  apiKeyMiddleware,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const validatedReq = req as ValidatedRequest<TrustPathParams>
+      const { address } = validatedReq.validated.params
 
-    const trustScore = getTrustScore(address)
+      const trustScore = await withReplica(async (client) => {
+        const trustRepo = new PgTrustIdentityRepository(client)
+        return await getTrustScore(address, trustRepo)
+      })
 
-    if (!trustScore) {
-      throw new NotFoundError('Identity record', address)
+      if (!trustScore) {
+        throw new NotFoundError('Identity record', address)
+      }
+
+      const etag = generateEtag(trustScore)
+      res.set('ETag', etag)
+      res.set('Cache-Control', 'public, max-age=60')
+
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).send()
+        return
+      }
+
+      res.json(trustScore)
+    } catch (error) {
+      next(error)
     }
-
-    res.json(trustScore)
-  },
+  }
 )
 
 export default router

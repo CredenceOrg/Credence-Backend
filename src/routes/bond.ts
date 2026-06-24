@@ -1,13 +1,16 @@
 import { Router, type Request, type Response } from 'express'
 import type { BondService } from '../services/bond/index.js'
 import { deriveBondPaymentStatus } from '../services/bond/index.js'
-import { requireApiKey, requireScope } from '../middleware/apiKey.js'
-import { ApiKeyScope } from '../services/apiKeys.js'
+import { validate, type ValidatedRequest } from '../middleware/validate.js'
+import { bondPathParamsSchema, type BondPathParams } from '../schemas/index.js'
+import { NotFoundError } from '../lib/errors.js'
 
 /**
  * Builds the bond status router.
  *
- * - GET /:address → 200 with bond data, 400 if address invalid, 404 if no record
+ * - GET /:address → 200 with bond data, 404 if no record
+ * Validation via centralised validate() middleware rejects invalid addresses
+ * with a uniform 400 error before the handler runs.
  *
  * @param bondService - BondService instance for querying bond status.
  * @returns Express Router
@@ -19,29 +22,23 @@ export function createBondRouter(bondService: BondService): Router {
    * GET /api/bond/:address
    *
    * Returns the bond status for an Ethereum address.
-   * Validates address format and returns appropriate error responses.
-   * Requires bond:read scope.
+   * Address format validation is handled by validate() middleware.
    */
   router.get(
     '/:address',
-    requireApiKey(),
-    requireScope(ApiKeyScope.BOND_READ),
+    validate({ params: bondPathParamsSchema }),
     (req: Request, res: Response) => {
-      const { address } = req.params
-
-      if (!bondService.isValidAddress(address)) {
-        res.status(400).json({
-          error:
-            'Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.',
-        })
-        return
-      }
+      const validatedReq = req as ValidatedRequest<BondPathParams>
+      const { address } = validatedReq.validated.params
 
       const bond = bondService.getBondStatus(address)
 
       if (!bond) {
-        res.status(404).json({
-          error: `No bond record found for address ${address.toLowerCase()}.`,
+        const err = new NotFoundError('Bond record', address)
+        res.status(err.status).json({
+          error: err.message,
+          code: err.code,
+          error_code: err.code,
         })
         return
       }
@@ -55,8 +52,17 @@ export function createBondRouter(bondService: BondService): Router {
         slashedAmount: bond.slashedAmount,
         status: deriveBondPaymentStatus(bond),
       })
-    }
+    },
   )
+
+  /**
+   * POST /api/bond
+   *
+   * Creates or tops up a bond. Stub — full implementation pending on-chain write layer.
+   */
+  router.post('/', (_req: Request, res: Response) => {
+    res.status(501).json({ error: 'Not implemented' })
+  })
 
   return router
 }
