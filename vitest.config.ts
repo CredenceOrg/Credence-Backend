@@ -10,6 +10,7 @@ export default defineConfig({
       "src/**/*.spec.ts",
       "src/**/__tests__/**/*.ts",
       "tests/integration/**/*.test.ts",
+      "tests/repositories/**/*.test.ts",
       "tests/routes/**/*.test.ts",
       "monitoring/**/*.test.ts",
     ],
