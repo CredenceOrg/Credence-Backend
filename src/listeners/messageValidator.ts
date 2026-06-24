@@ -1,4 +1,5 @@
-import type { ZodType, ZodError, ZodIssue } from 'zod'
+import { ZodType, ZodError, ZodIssue, z } from 'zod'
+import { StrKey } from '@stellar/stellar-sdk'
 
 // ── Reason codes ──────────────────────────────────────────────────────────────
 
@@ -162,12 +163,70 @@ export async function validateAndRoute<T>(
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
 function formatZodErrors(error: ZodError): string {
-  // Zod v4 exposes issues via `.issues`; v3 used `.errors` (aliased in v4 for compat).
-  const issues: ZodIssue[] = (error as any).issues ?? (error as any).errors ?? []
-  return issues
-    .map((issue: ZodIssue) => {
-      const path = issue.path.length > 0 ? issue.path.join('.') : '(root)'
-      return `${path}: ${issue.message}`
-    })
-    .join('; ')
-}
+   // Zod v4 exposes issues via `.issues`; v3 used `.errors` (aliased in v4 for compat).
+   const issues: ZodIssue[] = (error as any).issues ?? (error as any).errors ?? []
+   return issues
+     .map((issue: ZodIssue) => {
+       const path = issue.path.length > 0 ? issue.path.join('.') : '(root)'
+       return `${path}: ${issue.message}`
+     })
+     .join('; ')
+ }
+
+// ── Bond Event Schemas ──────────────────────────────────────────────────────────────
+/**
+ * Schema for bond creation operation from Horizon
+ * Validates that source_account is a valid Stellar account ID,
+ * amount is a non-negative integer string, and duration is either null or a string
+ */
+export const bondOperationSchema = z.object({
+  source_account: z.string().refine(
+    (account): boolean => {
+      try {
+        return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Invalid Stellar account ID' }
+  ),
+  id: z.string().min(1, 'Operation ID is required'),
+  amount: z.string().refine(
+    (amount): boolean => {
+      // Check if it's a non-negative integer string
+      return /^\d+$/.test(amount);
+    },
+    { message: 'Amount must be a non-negative integer string' }
+  ),
+  duration: z.union([z.string(), z.null()]).optional(),
+});
+
+/**
+ * Schema for bond withdrawal operation from Horizon
+ * Similar to bond creation but for withdrawal operations
+ */
+export const bondWithdrawalOperationSchema = z.object({
+  source_account: z.string().refine(
+    (account): boolean => {
+      try {
+        return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
+      } catch {
+        return false;
+      }
+    },
+    { message: 'Invalid Stellar account ID' }
+  ),
+  id: z.string().min(1, 'Operation ID is required'),
+  amount: z.string().refine(
+    (amount): boolean => {
+      // Check if it's a non-negative integer string
+      return /^\d+$/.test(amount);
+    },
+    { message: 'Amount must be a non-negative integer string' }
+  ),
+  duration: z.union([z.string(), z.null()]).optional(),
+});
+
+// Export types for convenience
+export type BondOperation = z.infer<typeof bondOperationSchema>;
+export type BondWithdrawalOperation = z.infer<typeof bondWithdrawalOperationSchema>;

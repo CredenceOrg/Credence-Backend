@@ -7,6 +7,7 @@
 
 import { cache, CacheService } from './redis.js'
 import { recordStaleCacheRead } from '../middleware/metrics.js'
+import { getInvalidationBus } from './invalidationBus.js'
 
 export interface InvalidationOptions {
   /**
@@ -39,6 +40,14 @@ export async function invalidateCache(
   
   // Delete the cache entry
   const deleted = await cache.delete(namespace, key)
+  
+  // Publish invalidation event
+  const bus = getInvalidationBus()
+  await bus.publish({
+    type: 'invalidate',
+    namespace,
+    key
+  })
   
   // Optionally verify the cache was cleared
   if (verify && freshData) {
@@ -80,6 +89,14 @@ export async function invalidateMultiple(
     })
   )
   
+  // Publish invalidation event
+  const bus = getInvalidationBus()
+  await bus.publish({
+    type: 'invalidate_multiple',
+    namespace,
+    keys
+  })
+  
   return count
 }
 
@@ -95,7 +112,17 @@ export async function invalidatePattern(
   namespace: string,
   pattern: string
 ): Promise<number> {
-  return cache.clearNamespace(`${namespace}:${pattern}`)
+  const count = await cache.clearNamespace(`${namespace}:${pattern}`)
+  
+  // Publish invalidation event
+  const bus = getInvalidationBus()
+  await bus.publish({
+    type: 'invalidate_pattern',
+    namespace,
+    pattern
+  })
+  
+  return count
 }
 
 /**

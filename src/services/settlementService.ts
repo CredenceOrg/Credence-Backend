@@ -2,6 +2,13 @@ import { SettlementsRepository, Settlement, CreateSettlementInput } from '../db/
 import { cache } from '../cache/redis.js'
 import { invalidateCache } from '../cache/invalidation.js'
 import { recordSettlementDuplicate } from '../middleware/metrics.js'
+/**
+ * Issue #325: Import the schema-inferred type to ensure the service input
+ * is aligned with the validated Zod schema. CreateSettlementInput from the
+ * repository already matches the schema shape, so no structural changes needed.
+ * This import documents the intentional alignment between schema and service.
+ */
+import type { CreatePayoutInput } from '../schemas/payout.js'
 
 export class SettlementService {
   constructor(private readonly repository: SettlementsRepository) {}

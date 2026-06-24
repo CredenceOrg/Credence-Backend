@@ -5,36 +5,12 @@
  * using safe route templates to prevent cardinality explosion.
  */
 
-import { Request, Response, NextFunction } from 'express'
-import { httpLatencyPercentiles, normalizeRoute } from '../observability/latencyMetrics.js'
+import { metricsMiddleware as latencyMetricsMiddleware } from './metrics.js'
 
 /**
- * Express middleware to track HTTP request latency percentiles.
+ * Re-export of main metrics middleware for backward compatibility.
+ * SLA metrics (histograms and status class counters) are now integrated into the central metrics middleware.
  * 
- * Usage:
- * ```typescript
- * import { latencyMetricsMiddleware } from './middleware/latencyMetrics.js'
- * app.use(latencyMetricsMiddleware)
- * ```
+ * @deprecated Use metricsMiddleware from ./metrics.js instead.
  */
-export function latencyMetricsMiddleware(req: Request, res: Response, next: NextFunction): void {
-  const start = process.hrtime.bigint()
-  
-  res.on('finish', () => {
-    const durationNs = process.hrtime.bigint() - start
-    const durationSeconds = Number(durationNs) / 1e9
-    
-    const route = normalizeRoute(req.path, req.route?.path)
-    
-    httpLatencyPercentiles.observe(
-      {
-        method: req.method,
-        route,
-        status: res.statusCode.toString(),
-      },
-      durationSeconds
-    )
-  })
-  
-  next()
-}
+export { latencyMetricsMiddleware }

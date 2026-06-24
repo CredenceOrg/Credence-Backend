@@ -6,22 +6,22 @@ Percentile latency metrics (p50, p95, p99) for HTTP requests with safe route tem
 
 ## Metrics
 
-### `http_request_duration_percentiles_seconds`
+### `http_request_duration_seconds`
 
-**Type:** Summary  
-**Labels:** `method`, `route`, `status`  
-**Percentiles:** p50, p95, p99  
-**Description:** HTTP request latency distribution
+**Type:** Histogram  
+**Labels:** `method`, `route`, `status_class`  
+**Buckets:** `0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 7.5, 10`  
+**Description:** HTTP request latency distribution for SLO tracking
 
 **Example output:**
 ```
-# HELP http_request_duration_percentiles_seconds HTTP request latency percentiles (p50, p95, p99)
-# TYPE http_request_duration_percentiles_seconds summary
-http_request_duration_percentiles_seconds{method="GET",route="/api/trust/:address",status="200",quantile="0.5"} 0.025
-http_request_duration_percentiles_seconds{method="GET",route="/api/trust/:address",status="200",quantile="0.95"} 0.15
-http_request_duration_percentiles_seconds{method="GET",route="/api/trust/:address",status="200",quantile="0.99"} 0.35
-http_request_duration_percentiles_seconds_sum{method="GET",route="/api/trust/:address",status="200"} 12.5
-http_request_duration_percentiles_seconds_count{method="GET",route="/api/trust/:address",status="200"} 1000
+# HELP http_request_duration_seconds HTTP request latency in seconds
+# TYPE http_request_duration_seconds histogram
+http_request_duration_seconds_bucket{method="GET",route="/api/trust/:address",status_class="2xx",le="0.01"} 10
+http_request_duration_seconds_bucket{method="GET",route="/api/trust/:address",status_class="2xx",le="0.25"} 950
+http_request_duration_seconds_bucket{method="GET",route="/api/trust/:address",status_class="2xx",le="+Inf"} 1000
+http_request_duration_seconds_sum{method="GET",route="/api/trust/:address",status_class="2xx"} 12.5
+http_request_duration_seconds_count{method="GET",route="/api/trust/:address",status_class="2xx"} 1000
 ```
 
 ## Cardinality Policy
@@ -33,7 +33,7 @@ Dynamic route segments are normalized to prevent cardinality explosion:
 | Original Path | Normalized Template |
 |--------------|---------------------|
 | `/api/trust/0x123abc` | `/api/trust/:address` |
-| `/api/bond/stellar123` | `/api/bond/:address` |
+| `/api/bond/GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ` | `/api/bond/:address` |
 | `/api/jobs/550e8400-e29b-41d4-a716-446655440000` | `/api/jobs/:id` |
 | `/api/users/12345` | `/api/users/:id` |
 | `/api/attestations/0xabc/verify/123` | `/api/attestations/:address/verify/:id` |
@@ -44,9 +44,9 @@ Dynamic route segments are normalized to prevent cardinality explosion:
 
 - **Methods:** ~10 (GET, POST, PUT, DELETE, PATCH, etc.)
 - **Routes:** ~50 (bounded by API surface area)
-- **Status codes:** ~10 (200, 201, 400, 401, 403, 404, 500, 502, 503, 504)
+- **Status classes:** 5 (1xx, 2xx, 3xx, 4xx, 5xx)
 
-**Total series:** ~5,000 time series (well within Prometheus limits)
+**Total series:** ~2,500 time series (well within Prometheus limits)
 
 ### Implementation
 
@@ -76,26 +76,26 @@ app.use(latencyMetricsMiddleware)
 
 **p95 latency by route:**
 ```promql
-http_request_duration_percentiles_seconds{quantile="0.95"}
+histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route))
 ```
 
 **p99 latency for specific endpoint:**
 ```promql
-http_request_duration_percentiles_seconds{route="/api/trust/:address",quantile="0.99"}
+histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket{route="/api/trust/:address"}[5m])) by (le))
 ```
 
 **Average latency (from sum/count):**
 ```promql
-rate(http_request_duration_percentiles_seconds_sum[5m]) 
+rate(http_request_duration_seconds_sum[5m]) 
 / 
-rate(http_request_duration_percentiles_seconds_count[5m])
+rate(http_request_duration_seconds_count[5m])
 ```
 
-**SLA compliance (% of requests under 200ms):**
+**SLA compliance (% of requests under 250ms):**
 ```promql
-sum(rate(http_request_duration_percentiles_seconds_bucket{le="0.2"}[5m])) 
+sum(rate(http_request_duration_seconds_bucket{le="0.25"}[5m])) 
 / 
-sum(rate(http_request_duration_percentiles_seconds_count[5m]))
+sum(rate(http_request_duration_seconds_count[5m]))
 ```
 
 ## Grafana Dashboard
@@ -103,13 +103,13 @@ sum(rate(http_request_duration_percentiles_seconds_count[5m]))
 Add panels for:
 
 1. **p50/p95/p99 latency by route** (line graph)
-2. **Latency heatmap** (heatmap visualization)
-3. **SLA compliance gauge** (% under threshold)
-4. **Slowest endpoints table** (sorted by p99)
+2. **SLA compliance table** (% of successful requests < 250ms)
+3. **HTTP Error Rate (5xx)** (gauge)
+4. **Latency heatmap** (heatmap visualization)
 
-Example query for panel 1:
+Example query for panel 1 (p99):
 ```promql
-http_request_duration_percentiles_seconds{quantile="0.95"}
+histogram_quantile(0.99, rate(http_request_duration_seconds_bucket{job="credence-backend"}[5m]))
 ```
 
 ## Testing
@@ -134,12 +134,16 @@ Coverage includes:
 **High p99 latency:**
 ```yaml
 - alert: HighP99Latency
-  expr: http_request_duration_percentiles_seconds{quantile="0.99"} > 1.0
+  expr: |
+    histogram_quantile(0.99, 
+      sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
+    ) > 1
   for: 5m
   labels:
     severity: warning
   annotations:
     summary: "High p99 latency on {{ $labels.route }}"
+    description: "P99 latency is {{ $value }}s (Threshold: 1s)"
 ```
 
 **SLA breach:**

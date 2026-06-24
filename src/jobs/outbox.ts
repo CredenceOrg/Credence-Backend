@@ -2,6 +2,7 @@ import { OutboxPublisher } from '../db/outbox/publisher.js'
 import type { OutboxPublisherConfig } from '../db/outbox/publisher.js'
 import { WebhookEventPublisher } from '../db/outbox/webhookPublisher.js'
 import { PostgresWebhookRepository } from '../db/repositories/webhookRepository.js'
+import { PostgresDlqStore } from '../services/webhooks/postgresDlqStore.js'
 import { auditLogService } from '../services/audit/index.js'
 import { WebhookService } from '../services/webhooks/service.js'
 import type { Pool } from 'pg'
@@ -35,7 +36,8 @@ export class OutboxJob {
   async start(): Promise<void> {
     // Create dependencies
     const webhookStore = new PostgresWebhookRepository(this.pool)
-    const webhookService = new WebhookService(webhookStore, auditLogService)
+    const dlqStore = new PostgresDlqStore(this.pool)
+    const webhookService = new WebhookService(webhookStore, undefined, dlqStore, auditLogService)
     const eventPublisher = new WebhookEventPublisher(webhookService)
 
     // Build configuration

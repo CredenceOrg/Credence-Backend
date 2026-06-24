@@ -4,8 +4,12 @@ import type { WebhookService, WebhookEventType } from '../services/webhooks/inde
 
 
 /**
- * Emit webhook for identity state change.
- * Call this after updating state in the store.
+ * Emit webhook for identity state change via direct service call.
+ *
+ * @deprecated Use `emitWebhookForStateChange` from `./webhookIntegrationOutbox.js`
+ * instead. Direct emission bypasses the transactional outbox and is not crash-safe.
+ * This module is retained only for backward compatibility and will be removed in a
+ * future release.
  */
 export async function emitWebhookForStateChange(
   webhookService: WebhookService,
@@ -13,7 +17,7 @@ export async function emitWebhookForStateChange(
   newState: IdentityState
 ): Promise<void> {
   const eventType = detectEventType(oldState, newState)
-  
+
   if (eventType) {
     await webhookService.emit(eventType, {
       address: newState.address,

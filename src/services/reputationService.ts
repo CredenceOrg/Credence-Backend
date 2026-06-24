@@ -10,8 +10,36 @@
  * All scoring weights are externalized to config and versioned via REPUTATION_MODEL_VERSION.
  */
 
-import { getIdentity, type Identity } from '../db/store.js'
 import { loadConfig } from '../config/index.js'
+
+/** Minimal identity shape needed for trust scoring. */
+export interface Identity {
+  address: string
+  bondedAmount: string
+  bondStart: string | null
+  attestationCount: number
+  agreedFields?: Record<string, string>
+}
+
+/** Repository interface for fetching identity data for trust scoring. */
+export interface TrustIdentityRepository {
+  getIdentityForScoring(address: string): Promise<Identity | null>
+}
+// Metrics for trust score cache
+import { Counter } from 'prom-client'
+import { register } from '../middleware/metrics.js'
+import { cache } from '../cache/redis.js'
+
+export const trustScoreCacheHits = new Counter({
+  name: 'trust_score_cache_hits_total',
+  help: 'Total trust score cache hits',
+  registers: [register]
+})
+export const trustScoreCacheMisses = new Counter({
+  name: 'trust_score_cache_misses_total',
+  help: 'Total trust score cache misses',
+  registers: [register]
+})
 
 export interface TrustScore {
   address: string
@@ -33,28 +61,36 @@ export interface ScoringConfig {
   scoringModelVersion: string
 }
 
-// Load config once at module initialization
-const config = loadConfig()
-const scoringConfig: ScoringConfig = config.reputation
+// Lazy-load config to avoid issues during test initialization
+let cachedScoringConfig: ScoringConfig | null = null
+
+function getDefaultScoringConfig(): ScoringConfig {
+  if (!cachedScoringConfig) {
+    const config = loadConfig()
+    cachedScoringConfig = config.reputation
+  }
+  return cachedScoringConfig
+}
 
 /**
  * Get the current scoring configuration.
  * Useful for testing and introspection.
  */
 export function getScoringConfig(): ScoringConfig {
-  return { ...scoringConfig }
+  return { ...getDefaultScoringConfig() }
 }
 
 /** Points proportional to bonded amount; maxes out at configured ONE_ETH_WEI. */
 export function computeBondScore(
   bondedAmountWei: string,
-  cfg: ScoringConfig = scoringConfig
+  cfg?: ScoringConfig
 ): number {
+  const config = cfg || getDefaultScoringConfig()
   try {
     const amount = BigInt(bondedAmountWei)
     if (amount <= 0n) return 0
-    const score = Number((amount * BigInt(cfg.bondScoreMax)) / cfg.oneEthWei)
-    return Math.min(cfg.bondScoreMax, score)
+    const score = Number((amount * BigInt(config.bondScoreMax)) / config.oneEthWei)
+    return Math.min(config.bondScoreMax, score)
   } catch {
     return 0
   }
@@ -64,34 +100,37 @@ export function computeBondScore(
 export function computeDurationScore(
   bondStart: string | null,
   now = Date.now(),
-  cfg: ScoringConfig = scoringConfig
+  cfg?: ScoringConfig
 ): number {
+  const config = cfg || getDefaultScoringConfig()
   if (!bondStart) return 0
   const startMs = new Date(bondStart).getTime()
   if (isNaN(startMs) || startMs >= now) return 0
   const daysBonded = (now - startMs) / 86_400_000
-  const score = (daysBonded / cfg.maxDurationDays) * cfg.durationScoreMax
-  return Math.min(cfg.durationScoreMax, Math.round(score))
+  const score = (daysBonded / config.maxDurationDays) * config.durationScoreMax
+  return Math.min(config.durationScoreMax, Math.round(score))
 }
 
 /** Points proportional to attestation count; maxes out at configured max attestation count. */
 export function computeAttestationScore(
   count: number,
-  cfg: ScoringConfig = scoringConfig
+  cfg?: ScoringConfig
 ): number {
+  const config = cfg || getDefaultScoringConfig()
   if (count <= 0) return 0
-  const score = (count / cfg.maxAttestationCount) * cfg.attestationScoreMax
-  return Math.min(cfg.attestationScoreMax, Math.round(score))
+  const score = (count / config.maxAttestationCount) * config.attestationScoreMax
+  return Math.min(config.attestationScoreMax, Math.round(score))
 }
 
 /** Compute a full TrustScore from an Identity record. */
 export function computeTrustScore(
   identity: Identity,
-  cfg: ScoringConfig = scoringConfig
+  cfg?: ScoringConfig
 ): TrustScore {
-  const bondScore = computeBondScore(identity.bondedAmount, cfg)
-  const durationScore = computeDurationScore(identity.bondStart, Date.now(), cfg)
-  const attestationScore = computeAttestationScore(identity.attestationCount, cfg)
+  const config = cfg || getDefaultScoringConfig()
+  const bondScore = computeBondScore(identity.bondedAmount, config)
+  const durationScore = computeDurationScore(identity.bondStart, Date.now(), config)
+  const attestationScore = computeAttestationScore(identity.attestationCount, config)
   const score = Math.min(100, bondScore + durationScore + attestationScore)
 
   return {
@@ -100,7 +139,7 @@ export function computeTrustScore(
     bondedAmount: identity.bondedAmount,
     bondStart: identity.bondStart,
     attestationCount: identity.attestationCount,
-    scoringModelVersion: cfg.scoringModelVersion,
+    scoringModelVersion: config.scoringModelVersion,
     ...(identity.agreedFields ? { agreedFields: identity.agreedFields } : {}),
   }
 }
@@ -108,39 +147,33 @@ export function computeTrustScore(
 /**
  * Look up an identity by address and return its computed trust score,
  * or null when no record exists.
- * Uses Redis cache and Postgres DB.
+ * Uses Redis cache and the provided identity repository.
  */
-export async function getTrustScore(address: string): Promise<TrustScore | null> {
+export async function getTrustScore(
+  address: string,
+  repo: TrustIdentityRepository
+): Promise<TrustScore | null> {
   const cacheKey = address.toLowerCase()
-  
+
   // 1. Try cache
   const cached = await cache.get<TrustScore>('trust', cacheKey)
-  if (cached) return cached
+  if (cached) {
+    trustScoreCacheHits.inc()
+    return cached
+  }
+  trustScoreCacheMisses.inc()
 
-  // 2. Try DB
-  const idResult = await pool.query(
-    `SELECT address, bonded_amount as "bondedAmount", 
-            bond_start as "bondStart"
-     FROM identities
-     WHERE address = $1`,
-    [address]
-  )
-
-  if (idResult.rows.length === 0) {
+  // 2. Fetch from repository
+  const identity = await repo.getIdentityForScoring(address)
+  if (!identity) {
     return null
   }
 
-  const row = idResult.rows[0]
-  const attResult = await pool.query(
-    'SELECT COUNT(*)::int as count FROM attestations WHERE subject_address = $1',
-    [address]
-  )
-  const attestationCount = parseInt(attResult.rows[0]?.count || '0', 10)
-  const record: IdentityRecord = { ...row, attestationCount }
-  const trustScore = computeTrustScoreFromRecord(record)
+  const trustScore = computeTrustScore(identity)
 
-  // 3. Save to cache (TTL 1 hour)
-  await cache.set('trust', cacheKey, trustScore, 3600)
+  // 3. Save to cache with configurable TTL
+  const cacheTtl = loadConfig().trustScoreCache.ttl
+  await cache.set('trust', cacheKey, trustScore, cacheTtl)
 
   return trustScore
 }

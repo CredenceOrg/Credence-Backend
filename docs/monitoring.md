@@ -72,14 +72,6 @@ export const httpRequestsTotal = new client.Counter({
   registers: [register]
 })
 
-export const httpRequestDuration = new client.Histogram({
-  name: 'http_request_duration_seconds',
-  help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route', 'status'],
-  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
-  registers: [register]
-})
-
 // Health Check Metrics
 export const healthCheckStatus = new client.Gauge({
   name: 'health_check_status',
@@ -794,6 +786,14 @@ open http://localhost:3001
 |--------|------|--------|-------------|
 | `health_check_status` | Gauge | dependency | Health status (1=up, 0=down) |
 | `health_check_duration_seconds` | Gauge | dependency | Health check duration |
+
+### Pool Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `pg_pool_total_count` | Gauge | pool | Total clients (active + idle) |
+| `pg_pool_idle_count` | Gauge | pool | Idle clients |
+| `pg_pool_waiting_count` | Gauge | pool | Queued requests waiting |
 
 ### Business Metrics
 

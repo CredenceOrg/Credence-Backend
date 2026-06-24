@@ -39,7 +39,10 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
             next_attempt_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             processed_at TIMESTAMPTZ,
-            error_message TEXT
+            error_message TEXT,
+            trace_id TEXT,
+            span_id TEXT,
+            tracestate TEXT
         );
     `)
 

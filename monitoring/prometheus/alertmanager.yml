@@ -1,0 +1,248 @@
+# AlertManager Configuration - Severity-Aware Routing Matrix
+# Routes alerts by severity level and service, with environment-specific receivers
+# Security: All sensitive receiver credentials come from environment variables
+
+global:
+  # Slack API token from ALERTMANAGER_SLACK_WEBHOOK env var
+  slack_api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+  # PagerDuty Integration Key from ALERTMANAGER_PAGERDUTY_KEY env var
+  pagerduty_url: https://events.pagerduty.com/v2/enqueue
+
+# Inhibition rules to reduce alert fatigue
+inhibit_rules:
+  # Suppress SEV3 and SEV2 when SEV1 is firing (avoid noise during outages)
+  - source_matchers:
+      - severity=SEV1
+    target_matchers:
+      - severity=~"SEV2|SEV3"
+    equal:
+      - service
+      - environment
+  # Suppress SEV3 when SEV2 is firing for the same service
+  - source_matchers:
+      - severity=SEV2
+    target_matchers:
+      - severity=SEV3
+    equal:
+      - service
+      - environment
+  # Don't page for dependency issues during planned maintenance
+  - source_matchers:
+      - alertname=MaintenanceWindow
+    target_matchers:
+      - severity=~"SEV1|SEV2"
+    equal:
+      - environment
+
+# Routes define alert handling based on labels
+routes:
+  # Catch-all root route for backward compatibility
+  - receiver: "null"
+    group_by: ["alertname", "cluster", "service", "environment"]
+    group_wait: 30s
+    group_interval: 5m
+    repeat_interval: 4h
+    continue: true
+
+    # ========== PRODUCTION ROUTES ==========
+    routes:
+      # SEV1 Alerts in Production: Page immediately (trust score issues, settlement drift)
+      - receiver: "pagerduty-prod-critical"
+        group_by: ["alertname", "service"]
+        group_wait: 5s # Fast escalation for critical issues
+        group_interval: 1m
+        repeat_interval: 1h
+        matchers:
+          - severity=SEV1
+          - environment=prod
+        continue: false
+        routes:
+          # Trust score errors - route to Platform team's on-call
+          - receiver: "pagerduty-prod-critical"
+            matchers:
+              - service=trust-score
+              - alertname=~"SuccessRateSLOViolation|ErrorBudgetBurnRateHigh"
+            group_wait: 5s
+            repeat_interval: 30m
+          # Settlement reconciliation drift - route to Finance team's on-call
+          - receiver: "slack-prod-settlement-team"
+            matchers:
+              - service=settlement
+            group_wait: 5s
+            repeat_interval: 30m
+
+      # SEV2 Alerts in Production: High priority ticket
+      - receiver: "slack-prod-alerts"
+        group_by: ["alertname", "service"]
+        group_wait: 2m
+        group_interval: 5m
+        repeat_interval: 2h
+        matchers:
+          - severity=SEV2
+          - environment=prod
+        continue: false
+
+      # SEV3 Alerts in Production: Low priority ticket only
+      - receiver: "slack-prod-low-priority"
+        group_by: ["alertname", "service"]
+        group_wait: 5m
+        group_interval: 15m
+        repeat_interval: 6h
+        matchers:
+          - severity=SEV3
+          - environment=prod
+        continue: false
+        routes:
+          # Export queue depth - ticket only, no page
+          - receiver: "slack-prod-low-priority"
+            matchers:
+              - alertname=ExportQueueDepth
+            group_wait: 10m
+            repeat_interval: 8h
+
+      # ========== STAGING ROUTES ==========
+      # SEV1 Alerts in Staging: High priority slack only (don't page)
+      - receiver: "slack-staging-alerts"
+        group_by: ["alertname", "service"]
+        group_wait: 1m
+        group_interval: 5m
+        repeat_interval: 4h
+        matchers:
+          - severity=SEV1
+          - environment=staging
+        continue: false
+
+      # SEV2 Alerts in Staging: Standard ticket
+      - receiver: "slack-staging-alerts"
+        group_by: ["alertname", "service"]
+        group_wait: 3m
+        group_interval: 10m
+        repeat_interval: 6h
+        matchers:
+          - severity=SEV2
+          - environment=staging
+        continue: false
+
+      # SEV3 Alerts in Staging: Low priority
+      - receiver: "slack-staging-low-priority"
+        group_by: ["alertname", "service"]
+        group_wait: 10m
+        group_interval: 30m
+        repeat_interval: 12h
+        matchers:
+          - severity=SEV3
+          - environment=staging
+        continue: false
+
+      # ========== DEV/TEST ROUTES ==========
+      # All alerts in dev - send to dev channel (batched)
+      - receiver: "slack-dev-alerts"
+        group_by: ["alertname", "service"]
+        group_wait: 5m
+        group_interval: 30m
+        repeat_interval: 12h
+        matchers:
+          - environment=~"dev|test"
+        continue: false
+
+# Receivers define where alerts are sent
+receivers:
+  # Null receiver - for alerts to be silenced
+  - name: "null"
+
+  # ========== PRODUCTION RECEIVERS ==========
+  # PagerDuty for critical production incidents
+  - name: "pagerduty-prod-critical"
+    pagerduty_configs:
+      - service_key: ${ALERTMANAGER_PAGERDUTY_SERVICE_KEY_PROD}
+        description: "{{ .GroupLabels.alertname }} - {{ .GroupLabels.service }}"
+        details:
+          firing: "{{ len .Alerts.Firing }}"
+          resolved: "{{ len .Alerts.Resolved }}"
+        client: "Credence AlertManager"
+        client_url: "{{ .ExternalURL }}"
+
+  # Slack production alerts channel
+  - name: "slack-prod-alerts"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#prod-alerts"
+        title: "🔴 Production Alert - {{ .GroupLabels.severity }}"
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Alert:* {{ .GroupLabels.alertname }}
+          *Environment:* {{ .CommonLabels.environment }}
+          {{ range .Alerts.Firing }}
+          • {{ .Annotations.summary }}: {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}danger{{ else }}good{{ end }}'
+        link_names: true
+
+  # Slack production settlement team (Finance)
+  - name: "slack-prod-settlement-team"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#prod-settlement-oncall"
+        title: "🔴 CRITICAL Settlement Issue - {{ .GroupLabels.alertname }}"
+        text: |
+          *Severity:* {{ .CommonLabels.severity }}
+          *Service:* {{ .GroupLabels.service }}
+          *Description:* {{ (index .Alerts 0).Annotations.description }}
+          *Runbook:* {{ (index .Alerts 0).Annotations.runbook_url }}
+          @settlement-on-call Please investigate immediately.
+        send_resolved: true
+        color: "danger"
+        link_names: true
+
+  # Slack low priority production alerts
+  - name: "slack-prod-low-priority"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#prod-maintenance"
+        title: "📌 {{ .GroupLabels.severity }} - {{ .GroupLabels.alertname }}"
+        text: |
+          *Service:* {{ .GroupLabels.service }}
+          *Status:* {{ .Status }}
+          {{ range .Alerts.Firing }}
+          • {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: '{{ if eq .Status "firing" }}warning{{ else }}good{{ end }}'
+
+  # ========== STAGING RECEIVERS ==========
+  - name: "slack-staging-alerts"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#staging-alerts"
+        title: "⚠️ Staging Alert - {{ .GroupLabels.severity }}"
+        text: |
+          *Alert:* {{ .GroupLabels.alertname }}
+          {{ range .Alerts.Firing }}
+          • {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: true
+        color: "warning"
+
+  - name: "slack-staging-low-priority"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#staging-maintenance"
+        title: "📌 Staging - {{ .GroupLabels.alertname }}"
+        text: |
+          {{ range .Alerts.Firing }}
+          {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: false
+
+  # ========== DEV/TEST RECEIVERS ==========
+  - name: "slack-dev-alerts"
+    slack_configs:
+      - api_url: ${ALERTMANAGER_SLACK_WEBHOOK}
+        channel: "#dev-alerts"
+        title: "🧪 Dev Alert - {{ .GroupLabels.alertname }}"
+        text: |
+          {{ range .Alerts.Firing }}
+          • {{ .Annotations.description }}
+          {{ end }}
+        send_resolved: false

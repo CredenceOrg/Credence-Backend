@@ -1,0 +1,84 @@
+// proto/credence/v1/bond.proto
+//
+// BondService — internal gRPC contract for querying bond status.
+//
+// PII policy:
+//   - `address` is a public blockchain address — classified PUBLIC.
+//   - No SENSITIVE fields in this file.
+
+syntax = "proto3";
+
+package credence.v1;
+
+import "credence/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// BondStatus mirrors the lifecycle states tracked by the REST API.
+// Never remove or renumber existing values — add new ones at the end.
+enum BondStatus {
+  BOND_STATUS_UNSPECIFIED = 0;
+  BOND_STATUS_ACTIVE      = 1;
+  BOND_STATUS_SLASHED     = 2;
+  BOND_STATUS_INACTIVE    = 3;
+  BOND_STATUS_UNBONDED    = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// Bond carries the full bond record for a single address.
+message Bond {
+  // Blockchain address.
+  string address = 1;
+
+  // Total amount currently bonded (decimal string, e.g. "1000.0000000").
+  string bonded_amount = 2;
+
+  // Timestamp when the bond was first created.  Absent when no bond exists.
+  google.protobuf.Timestamp bond_start = 3;
+
+  // Bond duration in seconds.  Zero means no fixed duration.
+  int64 bond_duration_seconds = 4;
+
+  // Amount that has been slashed from this bond (decimal string).
+  string slashed_amount = 5;
+
+  // Current lifecycle status.
+  BondStatus status = 6;
+
+  // Deprecated: use `status` instead.  Kept for wire compatibility.
+  // Field 7 — reserved for legacy `active` bool; do not reuse.
+  // reserved 7;
+  bool active = 7 [deprecated = true];
+}
+
+// GetBondRequest is the input to BondService.GetBond.
+message GetBondRequest {
+  // Address to look up.  Must be non-empty.
+  string address = 1;
+}
+
+// GetBondResponse wraps the result of BondService.GetBond.
+message GetBondResponse {
+  Bond bond = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// BondService exposes bond-status queries for internal service-to-service
+// communication.  Callers must present a valid shared-secret in the
+// `x-credence-internal-token` metadata header.
+service BondService {
+  // GetBond returns the current bond record for a single address.
+  // Returns NOT_FOUND when the address has no bond record.
+  rpc GetBond(GetBondRequest) returns (GetBondResponse);
+}

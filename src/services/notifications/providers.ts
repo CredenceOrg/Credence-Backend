@@ -17,7 +17,7 @@ export class HttpEmailProvider implements EmailProvider {
 
   async send(
     notification: EmailNotification,
-    options?: { timeout?: number }
+    options?: { timeout?: number; idempotencyKey?: string }
   ): Promise<{ id: string; statusCode: number }> {
     const timeout = options?.timeout ?? 5000
 
@@ -30,6 +30,9 @@ export class HttpEmailProvider implements EmailProvider {
         headers: {
           'Content-Type': 'application/json',
           [this.headerName]: this.apiKey,
+          ...(options?.idempotencyKey
+            ? { 'Idempotency-Key': options.idempotencyKey }
+            : {}),
         },
         body: JSON.stringify(this.buildPayload(notification)),
         signal: controller.signal,
@@ -159,13 +162,17 @@ export class MailgunProvider extends HttpEmailProvider {
  * Mock provider for testing (succeeds immediately).
  */
 export class MockEmailProvider implements EmailProvider {
-  name = 'mock'
+  name: string
   private messageCount = 0
   private failureMap = new Map<string, { failOnAttempt?: number; errorCode?: number }>()
 
+  constructor(name: string = 'mock') {
+    this.name = name
+  }
+
   async send(
     notification: EmailNotification,
-    options?: { timeout?: number }
+    options?: { timeout?: number; idempotencyKey?: string }
   ): Promise<{ id: string; statusCode: number }> {
     this.messageCount++
 
@@ -201,6 +208,13 @@ export class MockEmailProvider implements EmailProvider {
   reset(): void {
     this.messageCount = 0
     this.failureMap.clear()
+  }
+
+  /**
+   * Expose send count for tests.
+   */
+  getSendCount(): number {
+    return this.messageCount
   }
 }
 

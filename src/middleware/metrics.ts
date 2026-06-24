@@ -11,13 +11,23 @@
 
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
-import { registerLatencyMetrics } from '../observability/latencyMetrics.js'
+import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
+import { registerPoolMetrics } from '../observability/index.js'
+import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
+import { pool, workerPool } from '../db/pool.js'
 
 // Create a Registry to register metrics
 export const register = new client.Registry()
 
 // Register latency percentile metrics
 registerLatencyMetrics(register)
+
+// Register database connection pool metrics
+registerPoolMetrics(register, pool, workerPool)
+
+// Register circuit breaker metrics
+import { registerCircuitBreakerMetrics } from '../clients/circuitBreaker.js'
+registerCircuitBreakerMetrics(register)
 
 // Add default Node.js metrics (CPU, memory, event loop, etc.)
 client.collectDefaultMetrics({ 
@@ -33,14 +43,6 @@ export const httpRequestsTotal = new client.Counter({
   name: 'http_requests_total',
   help: 'Total number of HTTP requests',
   labelNames: ['method', 'route', 'status'],
-  registers: [register]
-})
-
-export const httpRequestDuration = new client.Histogram({
-  name: 'http_request_duration_seconds',
-  help: 'Duration of HTTP requests in seconds',
-  labelNames: ['method', 'route', 'status'],
-  buckets: [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1, 2, 5],
   registers: [register]
 })
 
@@ -108,6 +110,14 @@ export const bulkVerificationBatchSize = new client.Histogram({
   registers: [register]
 })
 
+export const bulkQueueWaitSeconds = new client.Histogram({
+  name: 'bulk_queue_wait_seconds',
+  help: 'Time jobs spend waiting in the bulk verification queue',
+  labelNames: ['org_id'],
+  buckets: [0.5, 1, 2, 5, 10, 30, 60, 300],
+  registers: [register]
+})
+
 export const identitySyncDuration = new client.Histogram({
   name: 'identity_sync_duration_seconds',
   help: 'Duration of identity state sync operations',
@@ -151,6 +161,23 @@ export const settlementDuplicatesDetected = new client.Counter({
   registers: [register]
 })
 
+export const settlementDriftTotal = new client.Counter({
+  name: 'settlement_drift_total',
+  help: 'Total number of settlement reconciliation drifts detected',
+  labelNames: ['finding_type'],
+  registers: [register]
+})
+
+// ============================================================================
+// Webhooks Metrics
+// ============================================================================
+
+export const webhookDlqSize = new client.Gauge({
+  name: 'webhook_dlq_size',
+  help: 'Number of messages in the webhook dead-letter queue',
+  registers: [register]
+})
+
 // ============================================================================
 // Middleware
 // ============================================================================
@@ -166,10 +193,13 @@ export const settlementDuplicatesDetected = new client.Counter({
  */
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
   const start = Date.now()
+  const hrStart = process.hrtime.bigint()
   
   res.on('finish', () => {
     const duration = (Date.now() - start) / 1000
-    const route = req.route?.path || req.path
+    const durationSeconds = Number(process.hrtime.bigint() - hrStart) / 1e9
+    const route = normalizeRoute(req.path, req.route?.path)
+    const statusClass = `${Math.floor(res.statusCode / 100)}xx`
     
     httpRequestsTotal.inc({
       method: req.method,
@@ -177,11 +207,17 @@ export function metricsMiddleware(req: Request, res: Response, next: NextFunctio
       status: res.statusCode
     })
     
-    httpRequestDuration.observe({
+    httpRequestDurationHistogram.observe({
       method: req.method,
       route,
-      status: res.statusCode
-    }, duration)
+      status_class: statusClass
+    }, durationSeconds)
+
+    httpRequestStatusTotal.inc({
+      method: req.method,
+      route,
+      status_class: statusClass
+    })
   })
   
   next()
@@ -314,4 +350,39 @@ export function recordStaleCacheRead(namespace: string) {
  */
 export function recordSettlementDuplicate() {
   settlementDuplicatesDetected.inc()
+}
+
+export function recordIdempotencyCheck(handlerType: string, result: 'duplicate' | 'executed' | 'error'): void {
+  idempotencyGuardChecks.inc({ handler_type: handlerType, result })
+  if (result === 'duplicate') {
+    idempotencyDuplicatesDetected.inc({ handler_type: handlerType })
+  }
+}
+
+/**
+ * Record settlement reconciliation drift
+ * 
+ * Usage:
+ * ```typescript
+ * import { recordSettlementDrift } from './middleware/metrics.js'
+ * 
+ * recordSettlementDrift('state_mismatch')
+ * ```
+ */
+export function recordSettlementDrift(findingType: 'state_mismatch' | 'missing_on_chain') {
+  settlementDriftTotal.inc({ finding_type: findingType })
+}
+
+/**
+ * Record webhook DLQ size
+ * 
+ * Usage:
+ * ```typescript
+ * import { recordWebhookDlqSize } from './middleware/metrics.js'
+ * 
+ * recordWebhookDlqSize(42)
+ * ```
+ */
+export function recordWebhookDlqSize(size: number) {
+  webhookDlqSize.set(size)
 }

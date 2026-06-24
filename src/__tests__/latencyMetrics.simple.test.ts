@@ -1,16 +1,16 @@
-import { describe, it, expect } from 'vitest'
-
-// Test route normalization logic directly without importing the full module
-function normalizeRoute(path: string, routePath?: string): string {
-  if (routePath) return routePath
-  
-  return path
-    .replace(/\/0x[a-fA-F0-9]+/g, '/:address')
-    .replace(/\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, '/:id')
-    .replace(/\/\d+/g, '/:id')
-}
+import { describe, it, expect, beforeEach } from 'vitest'
+import { 
+  normalizeRoute, 
+  httpRequestDurationHistogram, 
+  httpRequestStatusTotal 
+} from '../observability/latencyMetrics.js'
 
 describe('latencyMetrics - route normalization', () => {
+  beforeEach(() => {
+    httpRequestDurationHistogram.reset()
+    httpRequestStatusTotal.reset()
+  })
+
   describe('normalizeRoute', () => {
     it('uses Express route path when available', () => {
       const result = normalizeRoute('/api/trust/0x123abc', '/api/trust/:address')
@@ -20,6 +20,11 @@ describe('latencyMetrics - route normalization', () => {
     it('normalizes hex addresses in path', () => {
       const result = normalizeRoute('/api/trust/0x123abc')
       expect(result).toBe('/api/trust/:address')
+    })
+
+    it('normalizes Stellar G-addresses in path', () => {
+      const result = normalizeRoute('/api/bond/GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ')
+      expect(result).toBe('/api/bond/:address')
     })
 
     it('normalizes UUIDs in path', () => {
@@ -73,6 +78,35 @@ describe('latencyMetrics - route normalization', () => {
       const unique = new Set(normalized)
       
       expect(unique.size).toBe(1) // All normalize to /api/trust/:address
+    })
+  })
+
+  describe('SLA Metrics - Histograms and Counters', () => {
+    it('records latency in the correct buckets', async () => {
+      httpRequestDurationHistogram.observe({
+        method: 'GET',
+        route: '/api/trust/:address',
+        status_class: '2xx'
+      }, 0.200)
+
+      const result = await httpRequestDurationHistogram.get()
+      const bucket025 = result.values.find(v => v.labels.le === 0.25 && v.labels.route === '/api/trust/:address')
+      const bucket015 = result.values.find(v => v.labels.le === 0.15 && v.labels.route === '/api/trust/:address')
+
+      expect(bucket025?.value).toBe(1)
+      expect(bucket015?.value).toBe(0)
+    })
+
+    it('tracks status class counts', async () => {
+      httpRequestStatusTotal.inc({ method: 'GET', route: '/api/test', status_class: '2xx' })
+      httpRequestStatusTotal.inc({ method: 'GET', route: '/api/test', status_class: '4xx' })
+      
+      const result = await httpRequestStatusTotal.get()
+      const count2xx = result.values.find(v => v.labels.status_class === '2xx' && v.labels.route === '/api/test')
+      const count4xx = result.values.find(v => v.labels.status_class === '4xx' && v.labels.route === '/api/test')
+
+      expect(count2xx?.value).toBe(1)
+      expect(count4xx?.value).toBe(1)
     })
   })
 })

@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'crypto'
 
-export type KeyScope = 'read' | 'full'
+export type KeyScope = 'read' | 'full' | string   // extended to accept granular scope strings
 export type SubscriptionTier = 'free' | 'pro' | 'enterprise'
 
 export interface StoredApiKey {
@@ -9,6 +9,17 @@ export interface StoredApiKey {
   hashedKey: string
   /** First 8 chars after the "cr_" prefix — used for fast lookup */
   prefix: string
+  /**
+   * Granted scopes for this key.
+   *
+   * Legacy keys carry a single-element array with 'read' or 'full'.
+   * Granular keys carry one or more scope strings from ApiScope.
+   *
+   * The `scope` field (singular) is kept for backward compatibility and
+   * reflects the primary / most-privileged scope in the array.
+   */
+  scopes: string[]
+  /** @deprecated Use `scopes` instead. Kept for backward compatibility. */
   scope: KeyScope
   tier: SubscriptionTier
   ownerId: string
@@ -22,7 +33,9 @@ export interface CreateApiKeyResult {
   /** Raw key — only returned once at creation/rotation. Store securely. */
   key: string
   prefix: string
+  /** @deprecated Use `scopes` instead. */
   scope: KeyScope
+  scopes: string[]
   tier: SubscriptionTier
   createdAt: Date
 }
@@ -43,25 +56,31 @@ function extractPrefix(rawKey: string): string {
  * Generate and store a new API key.
  *
  * @param ownerId  Identifier of the key owner (user/org ID)
- * @param scope    Access scope: 'read' (default) or 'full'
+ * @param scope    Primary access scope: 'read' (default) or 'full', or a granular scope string
  * @param tier     Subscription tier controlling rate limits (default: 'free')
+ * @param scopes   Optional explicit list of granted scopes. When provided, overrides `scope`.
  * @returns        Key metadata including the raw key (shown once only)
  */
 export function generateApiKey(
   ownerId: string,
   scope: KeyScope = 'read',
   tier: SubscriptionTier = 'free',
+  scopes?: string[],
 ): CreateApiKeyResult {
   const random = randomBytes(32).toString('hex') // 64 hex chars
   const rawKey = `cr_${random}` // 67 chars total
   const prefix = extractPrefix(rawKey)
   const id = randomBytes(8).toString('hex')
 
+  const grantedScopes = scopes ?? [scope]
+  const primaryScope = grantedScopes[0] as KeyScope
+
   const stored: StoredApiKey = {
     id,
     hashedKey: hashKey(rawKey),
     prefix,
-    scope,
+    scope: primaryScope,
+    scopes: grantedScopes,
     tier,
     ownerId,
     createdAt: new Date(),
@@ -70,7 +89,15 @@ export function generateApiKey(
   }
 
   store.set(id, stored)
-  return { id, key: rawKey, prefix, scope, tier, createdAt: stored.createdAt }
+  return {
+    id,
+    key: rawKey,
+    prefix,
+    scope: primaryScope,
+    scopes: grantedScopes,
+    tier,
+    createdAt: stored.createdAt,
+  }
 }
 
 /**
@@ -116,7 +143,7 @@ export function rotateApiKey(id: string): CreateApiKeyResult | null {
   if (!existing || !existing.active) return null
 
   existing.active = false
-  return generateApiKey(existing.ownerId, existing.scope, existing.tier)
+  return generateApiKey(existing.ownerId, existing.scope, existing.tier, existing.scopes)
 }
 
 /**

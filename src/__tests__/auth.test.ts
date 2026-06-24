@@ -1,6 +1,8 @@
 import { Request, Response, NextFunction } from 'express'
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { requireApiKey, ApiScope, AuthenticatedRequest } from '../middleware/auth.js'
+import { _resetStore, generateApiKey } from '../services/apiKeys.js'
+import { userRepo } from '../repositories/userRepository.js'
 
 describe('Auth Middleware', () => {
   let mockRequest: Partial<Request>
@@ -8,6 +10,10 @@ describe('Auth Middleware', () => {
   let nextFunction: NextFunction
 
   beforeEach(() => {
+    _resetStore()
+    // Seed users for owner resolution
+    userRepo.upsert({ id: 'u-admin', role: 'super-admin', email: 'a@x.com', tenantId: 't-admin' })
+    userRepo.upsert({ id: 'u-verifier', role: 'verifier', email: 'v@x.com', tenantId: 't-ver' })
     mockRequest = {
       headers: {},
     }
@@ -87,7 +93,8 @@ describe('Auth Middleware', () => {
 
     describe('Valid API Keys', () => {
       it('should accept valid public API key for public endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-public-key-67890' }
+        const pub = generateApiKey('u-verifier', 'read')
+        mockRequest.headers = { 'x-api-key': pub.key }
         const middleware = requireApiKey(ApiScope.PUBLIC)
         middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
@@ -97,7 +104,8 @@ describe('Auth Middleware', () => {
       })
 
       it('should accept valid enterprise API key for public endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
+        const ent = generateApiKey('u-admin', 'full')
+        mockRequest.headers = { 'x-api-key': ent.key }
         const middleware = requireApiKey(ApiScope.PUBLIC)
         middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
@@ -106,7 +114,8 @@ describe('Auth Middleware', () => {
       })
 
       it('should accept valid enterprise API key for enterprise endpoint', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
+        const ent = generateApiKey('u-admin', 'full')
+        mockRequest.headers = { 'x-api-key': ent.key }
         const middleware = requireApiKey(ApiScope.ENTERPRISE)
         middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
@@ -115,14 +124,15 @@ describe('Auth Middleware', () => {
       })
 
       it('should attach API key metadata to request', () => {
-        mockRequest.headers = { 'x-api-key': 'test-enterprise-key-12345' }
+        const ent = generateApiKey('u-admin', 'full')
+        mockRequest.headers = { 'x-api-key': ent.key }
         const middleware = requireApiKey(ApiScope.ENTERPRISE)
         middleware(mockRequest as Request, mockResponse as Response, nextFunction)
 
         const authReq = mockRequest as AuthenticatedRequest
         expect(authReq.apiKey).toBeDefined()
-        expect(authReq.apiKey?.key).toBe('test-enterprise-key-12345')
-        expect(authReq.apiKey?.scope).toBe(ApiScope.ENTERPRISE)
+        expect(authReq.apiKey?.id).toBeTruthy()
+        expect(authReq.apiKey?.scope).toBe('full')
       })
 
       it('should attach correct scope for public key', () => {

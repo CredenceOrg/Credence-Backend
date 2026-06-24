@@ -91,7 +91,7 @@ export class AttestationRepository {
       limit = 20,
       cursor,
     }: { includeRevoked?: boolean; offset?: number; limit?: number; cursor?: string } = {},
-  ): { attestations: Attestation[]; total: number; hasNextPage: boolean; nextCursor?: string } {
+  ): { attestations: Attestation[]; hasNextPage: boolean; nextCursor?: string } {
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
 
     let results = this.store.filter((a) => a.subject === subject);
@@ -106,8 +106,6 @@ export class AttestationRepository {
       if (timeDiff !== 0) return timeDiff;
       return b.id.localeCompare(a.id);
     });
-
-    const total = results.length;
 
     if (cursor) {
       const decoded = decodeCursor(cursor);
@@ -132,7 +130,7 @@ export class AttestationRepository {
       nextCursor = encodeCursor(last.createdAt, last.id);
     }
 
-    return { attestations, total, hasNextPage, nextCursor };
+    return { attestations, hasNextPage, nextCursor };
   }
 
   /**

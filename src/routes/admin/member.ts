@@ -38,7 +38,7 @@ function createMemberService(): MemberService {
 }
 
 export function createMembersRouter(): Router {
-  const router = Router() 
+  const router = Router({ mergeParams: true }) 
   const memberService = createMemberService()
 
   // ── GET /api/orgs/:orgId/members ────────────────────────────────────
@@ -55,7 +55,7 @@ export function createMembersRouter(): Router {
    * @example
    * ```bash
    * curl -X GET 'http://localhost:3000/api/admin/orgs/org-1/members?limit=20' \
-   *   -H "Authorization: Bearer admin-key-12345"
+   *   -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
    * ```
    */
   router.get('/', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
@@ -119,7 +119,7 @@ export function createMembersRouter(): Router {
    * @example
    * ```bash
    * curl -X POST http://localhost:3000/api/admin/orgs/org-1/members \
-   *   -H "Authorization: Bearer admin-key-12345" \
+   *   -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
    *   -H "Content-Type: application/json" \
    *   -d '{"userId":"user-99","email":"alice@example.com","role":"member"}'
    * ```

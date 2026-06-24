@@ -8,6 +8,30 @@ export const IMPORT_PREVIEW_MAX_PARSE_MS = 5_000
 export const IMPORT_PREVIEW_MAX_ROW_ERRORS = 100
 export const IMPORT_PREVIEW_VALID_SAMPLE = 20
 export const IMPORT_PREVIEW_INVALID_SAMPLE = 20
+/** Maximum byte length of any single cell value. Cells exceeding this are rejected with a 400. */
+export const IMPORT_PREVIEW_MAX_CELL_BYTES = 1_024
+
+/**
+ * Characters that begin spreadsheet formula-injection sequences.
+ * Cells starting with these are sanitized in preview output by prefixing a tab
+ * so they render as plain text if the response is opened in a spreadsheet app.
+ */
+const FORMULA_INJECTION_PREFIXES = new Set(['=', '+', '-', '@', '\t', '\r'])
+
+/**
+ * Sanitize a cell value for safe inclusion in preview output.
+ * Cells that start with a formula-injection character are prefixed with a tab.
+ */
+function sanitizeCellValue(value: string): string {
+  if (value.length > 0 && FORMULA_INJECTION_PREFIXES.has(value[0])) {
+    return `\t${value}`
+  }
+  return value
+}
+
+function sanitizeCsvError(_err: unknown): string {
+  return 'The file could not be parsed as CSV.'
+}
 
 export interface ImportPreviewSummary {
   totalRowsScanned: number
@@ -51,10 +75,6 @@ export interface ImportPreviewErrorBody {
 export type ImportPreviewResult =
   | ImportPreviewSuccessBody
   | ImportPreviewErrorBody
-
-function sanitizeCsvError(_err: unknown): string {
-  return 'The file could not be parsed as CSV.'
-}
 
 export async function previewImportFile(
   buffer: Buffer,
@@ -149,10 +169,24 @@ export async function previewImportFile(
 
       scanned++
       const lineNum = dataRowCount + 1
-      const raw =
+      const rawCell =
         row[addressColIndex] !== undefined
           ? String(row[addressColIndex]).trim()
           : ''
+
+      // Reject oversized cells before any further processing
+      if (Buffer.byteLength(rawCell, 'utf8') > IMPORT_PREVIEW_MAX_CELL_BYTES) {
+        return {
+          success: false,
+          status: 400,
+          error: 'InvalidRequest',
+          code: 'CellTooLarge',
+          message: `Cell value on line ${lineNum} exceeds the maximum allowed size of ${IMPORT_PREVIEW_MAX_CELL_BYTES} bytes.`,
+          line: lineNum,
+        }
+      }
+
+      const raw = rawCell
       const messages: string[] = []
       const rowErrs: ImportPreviewRowError[] = []
 
@@ -182,14 +216,17 @@ export async function previewImportFile(
         if (invalidSample.length < IMPORT_PREVIEW_INVALID_SAMPLE) {
           invalidSample.push({
             line: lineNum,
-            data: { address: raw },
+            data: { address: sanitizeCellValue(raw) },
             errors: messages,
           })
         }
       } else {
         validRows++
         if (validSample.length < IMPORT_PREVIEW_VALID_SAMPLE) {
-          validSample.push({ line: lineNum, data: { address: raw } })
+          validSample.push({
+            line: lineNum,
+            data: { address: sanitizeCellValue(raw) },
+          })
         }
       }
     }

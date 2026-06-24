@@ -20,8 +20,15 @@ import type {
  * future PostgreSQL-backed implementation satisfy this interface.
  */
 export interface ApiKeyRepository {
-  /** Create and persist a new key; returns metadata including the raw key (shown once). */
-  create(ownerId: string, scope?: KeyScope, tier?: SubscriptionTier): CreateApiKeyResult
+  /**
+   * Create and persist a new key; returns metadata including the raw key (shown once).
+   *
+   * @param ownerId  Owner identifier
+   * @param scope    Primary scope (legacy; prefer `scopes`)
+   * @param tier     Subscription tier
+   * @param scopes   Explicit list of granted scopes. When provided, overrides `scope`.
+   */
+  create(ownerId: string, scope?: KeyScope, tier?: SubscriptionTier, scopes?: string[]): CreateApiKeyResult
 
   /** Look up a key record by its opaque ID, excluding the hash. Returns null when not found. */
   findById(id: string): Omit<StoredApiKey, 'hashedKey'> | null
@@ -31,7 +38,7 @@ export interface ApiKeyRepository {
 
   /**
    * Atomically revoke the key identified by `id` and issue a replacement with
-   * identical owner, scope, and tier.
+   * identical owner, scope(s), and tier.
    *
    * @returns New key metadata (raw key included — shown once), or null if the
    *          key was not found or is already revoked.
@@ -55,8 +62,8 @@ export interface ApiKeyRepository {
  * database-backed adapter is wired in.
  */
 export class InMemoryApiKeyRepository implements ApiKeyRepository {
-  create(ownerId: string, scope: KeyScope = 'read', tier: SubscriptionTier = 'free'): CreateApiKeyResult {
-    return generateApiKey(ownerId, scope, tier)
+  create(ownerId: string, scope: KeyScope = 'read', tier: SubscriptionTier = 'free', scopes?: string[]): CreateApiKeyResult {
+    return generateApiKey(ownerId, scope, tier, scopes)
   }
 
   findById(id: string): Omit<StoredApiKey, 'hashedKey'> | null {

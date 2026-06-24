@@ -1,17 +1,28 @@
-import { z } from 'zod'
-import { addressSchema } from './address.js'
+import { z } from "zod";
+import { addressSchema } from "./address.js";
 
 /**
  * Path params for GET /api/trust/:address
  */
 export const trustPathParamsSchema = z.object({
   address: addressSchema,
-})
+});
 
 /**
- * Optional query params for trust endpoint (e.g. for future pagination or filters)
+ * Query params for GET /api/trust/:address/explain
  */
-export const trustQuerySchema = z.object({}).strict()
+export const trustExplainQuerySchema = z.object({
+  snapshotId: z.preprocess((value) => {
+    if (typeof value === "string") return Number(value);
+    return value;
+  }, z.number().int().positive()),
+});
 
-export type TrustPathParams = z.infer<typeof trustPathParamsSchema>
-export type TrustQuery = z.infer<typeof trustQuerySchema>
+/**
+ * Optional query params for GET /api/trust/:address
+ */
+export const trustQuerySchema = z.object({}).strict();
+
+export type TrustPathParams = z.infer<typeof trustPathParamsSchema>;
+export type TrustQuery = z.infer<typeof trustQuerySchema>;
+export type TrustExplainQuery = z.infer<typeof trustExplainQuerySchema>;

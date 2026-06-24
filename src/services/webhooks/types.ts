@@ -21,12 +21,20 @@ export interface WebhookConfig {
   secretUpdatedAt: Date
   /** Whether this webhook is active. */
   active: boolean
-  /** Previous secret kept alive during safe-rollout grace period. */
-  previousSecret?: string
   /** ISO timestamp when the secret was last rotated. */
   secretRotatedAt?: string
   /** ISO timestamp after which previousSecret is no longer valid. */
   previousSecretExpiresAt?: string
+  /** Optional per-webhook delivery retry attempt cap. */
+  maxAttempts?: number
+  /** Optional per-webhook delivery timeout in milliseconds. */
+  timeoutMs?: number
+  /** Optional mTLS client certificate (PEM) presented to the endpoint. */
+  clientCertPem?: string
+  /** Optional KMS reference for the mTLS client private key. */
+  clientKeyKmsRef?: string
+  /** Optional SHA-256 pin of the expected server certificate. */
+  pinnedServerCertSha256?: string
 }
 
 /**
@@ -79,6 +87,8 @@ export interface WebhookDeliveryResult {
   attempts: number
   /** First 500 chars of response body on failure. */
   responseBodySnippet?: string
+  /** Error code for mTLS-specific failures. */
+  errorCode?: string
 }
 
 /**

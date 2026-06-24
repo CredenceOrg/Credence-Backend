@@ -1,5 +1,111 @@
 import type { Queryable } from '../repositories/queryable.js'
-import type { OutboxEvent, CreateOutboxEvent, OutboxEventStatus, OutboxCleanupConfig } from './types.js'
+import type {
+  OutboxEvent,
+  CreateOutboxEvent,
+  OutboxEventStatus,
+  OutboxCleanupConfig,
+  OutboxQuarantineEntry,
+  OutboxQuarantineReason,
+} from './types.js'
+
+type OutboxEventRow = {
+  id: string
+  aggregate_type: string
+  aggregate_id: string
+  event_type: string
+  payload: string | Record<string, unknown>
+  status: OutboxEventStatus
+  retry_count: number
+  max_retries: number
+  created_at: string
+  processed_at: string | null
+  error_message: string | null
+  consumer_id?: string | null
+  lease_expires_at?: string | null
+  trace_id?: string | null
+  span_id?: string | null
+  tracestate?: string | null
+}
+
+type OutboxQuarantineRow = {
+  id: string
+  original_event_id: string
+  aggregate_type: string
+  aggregate_id: string
+  event_type: string
+  payload: string | Record<string, unknown> | null
+  reason: OutboxQuarantineReason
+  error_message: string
+  retry_count: number
+  max_retries: number
+  quarantined_at: string
+  reinjected_at: string | null
+  reinjected_by: string | null
+}
+
+function mapOutboxEvent(row: OutboxEventRow): OutboxEvent {
+  let payload: Record<string, unknown> = {}
+  let rawPayload: string | undefined
+  let payloadParseError: string | undefined
+
+  if (typeof row.payload === 'string') {
+    rawPayload = row.payload
+    try {
+      const parsed = JSON.parse(row.payload) as unknown
+      payload =
+        parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
+          ? (parsed as Record<string, unknown>)
+          : {}
+      if (payload !== parsed) {
+        payloadParseError = 'Payload JSON must be an object'
+      }
+    } catch (error) {
+      payloadParseError = error instanceof Error ? error.message : String(error)
+    }
+  } else {
+    payload = row.payload
+    rawPayload = JSON.stringify(row.payload)
+  }
+
+  return {
+    id: BigInt(row.id),
+    aggregateType: row.aggregate_type,
+    aggregateId: row.aggregate_id,
+    eventType: row.event_type,
+    payload,
+    rawPayload,
+    payloadParseError,
+    status: row.status,
+    retryCount: row.retry_count,
+    maxRetries: row.max_retries,
+    consumerId: row.consumer_id,
+    leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
+    createdAt: new Date(row.created_at),
+    processedAt: row.processed_at ? new Date(row.processed_at) : null,
+    errorMessage: row.error_message,
+    traceId: row.trace_id,
+    spanId: row.span_id,
+    tracestate: row.tracestate,
+  }
+}
+
+function mapQuarantineEntry(row: OutboxQuarantineRow): OutboxQuarantineEntry {
+  return {
+    id: BigInt(row.id),
+    originalEventId: BigInt(row.original_event_id),
+    aggregateType: row.aggregate_type,
+    aggregateId: row.aggregate_id,
+    eventType: row.event_type,
+    payload: row.payload,
+    reason: row.reason,
+    errorMessage: row.error_message,
+    retryCount: row.retry_count,
+    maxRetries: row.max_retries,
+    quarantinedAt: new Date(row.quarantined_at),
+    reinjectedAt: row.reinjected_at ? new Date(row.reinjected_at) : null,
+    reinjectedBy: row.reinjected_by,
+  }
+}
 
 /**
  * Repository for transactional outbox events.
@@ -12,8 +118,8 @@ export class OutboxRepository {
    */
   async create(db: Queryable, event: CreateOutboxEvent): Promise<bigint> {
     const result = await db.query<{ id: string }>(
-      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries)
-       VALUES ($1, $2, $3, $4, 'pending', $5)
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries, trace_id, span_id, tracestate)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
        RETURNING id`,
       [
         event.aggregateType,
@@ -21,6 +127,9 @@ export class OutboxRepository {
         event.eventType,
         JSON.stringify(event.payload),
         event.maxRetries ?? 5,
+        event.traceId,
+        event.spanId,
+        event.tracestate,
       ]
     )
     return BigInt(result.rows[0].id)
@@ -59,6 +168,9 @@ export class OutboxRepository {
         error_message: string | null
         consumer_id: string | null
         lease_expires_at: string | null
+        trace_id: string | null
+        span_id: string | null
+        tracestate: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing',
@@ -74,25 +186,11 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   consumer_id, lease_expires_at`,
+                   consumer_id, lease_expires_at, trace_id, span_id, tracestate`,
         [limit, consumerId, leaseSeconds.toString()]
       )
 
-      return result.rows.map(row => ({
-        id: BigInt(row.id),
-        aggregateType: row.aggregate_type,
-        aggregateId: row.aggregate_id,
-        eventType: row.event_type,
-        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-        status: row.status,
-        retryCount: row.retry_count,
-        maxRetries: row.max_retries,
-        consumerId: row.consumer_id,
-        leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
-        createdAt: new Date(row.created_at),
-        processedAt: row.processed_at ? new Date(row.processed_at) : null,
-        errorMessage: row.error_message,
-      }))
+      return result.rows.map(mapOutboxEvent)
     } catch (error) {
       // Fallback for pg-mem (doesn't support SKIP LOCKED)
       const result = await db.query<{
@@ -109,6 +207,9 @@ export class OutboxRepository {
         error_message: string | null
         consumer_id: string | null
         lease_expires_at: string | null
+        trace_id: string | null
+        span_id: string | null
+        tracestate: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing',
@@ -123,25 +224,11 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   consumer_id, lease_expires_at`,
+                   consumer_id, lease_expires_at, trace_id, span_id, tracestate`,
         [limit, consumerId, leaseSeconds.toString()]
       )
 
-      return result.rows.map(row => ({
-        id: BigInt(row.id),
-        aggregateType: row.aggregate_type,
-        aggregateId: row.aggregate_id,
-        eventType: row.event_type,
-        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-        status: row.status,
-        retryCount: row.retry_count,
-        maxRetries: row.max_retries,
-        consumerId: row.consumer_id,
-        leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
-        createdAt: new Date(row.created_at),
-        processedAt: row.processed_at ? new Date(row.processed_at) : null,
-        errorMessage: row.error_message,
-      }))
+      return result.rows.map(mapOutboxEvent)
     }
   }
 
@@ -206,10 +293,13 @@ export class OutboxRepository {
       error_message: string | null
       consumer_id: string | null
       lease_expires_at: string | null
+      trace_id: string | null
+      span_id: string | null
+      tracestate: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate
        FROM event_outbox
        WHERE consumer_id = $1 AND status = 'processing'
        ORDER BY created_at ASC
@@ -217,21 +307,7 @@ export class OutboxRepository {
       [consumerId, limit]
     )
 
-    return result.rows.map(row => ({
-      id: BigInt(row.id),
-      aggregateType: row.aggregate_type,
-      aggregateId: row.aggregate_id,
-      eventType: row.event_type,
-      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-      status: row.status,
-      retryCount: row.retry_count,
-      maxRetries: row.max_retries,
-      consumerId: row.consumer_id,
-      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
-      createdAt: new Date(row.created_at),
-      processedAt: row.processed_at ? new Date(row.processed_at) : null,
-      errorMessage: row.error_message,
-    }))
+    return result.rows.map(mapOutboxEvent)
   }
 
   /**
@@ -253,6 +329,9 @@ export class OutboxRepository {
         created_at: string
         processed_at: string | null
         error_message: string | null
+        trace_id: string | null
+        span_id: string | null
+        tracestate: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -264,23 +343,12 @@ export class OutboxRepository {
            FOR UPDATE SKIP LOCKED
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
-                   retry_count, max_retries, created_at, processed_at, error_message`,
+                   retry_count, max_retries, created_at, processed_at, error_message,
+                   trace_id, span_id, tracestate`,
         [limit]
       )
 
-      return result.rows.map(row => ({
-        id: BigInt(row.id),
-        aggregateType: row.aggregate_type,
-        aggregateId: row.aggregate_id,
-        eventType: row.event_type,
-        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-        status: row.status,
-        retryCount: row.retry_count,
-        maxRetries: row.max_retries,
-        createdAt: new Date(row.created_at),
-        processedAt: row.processed_at ? new Date(row.processed_at) : null,
-        errorMessage: row.error_message,
-      }))
+      return result.rows.map(mapOutboxEvent)
     } catch (error) {
       // Fallback for pg-mem
       const result = await db.query<{
@@ -295,6 +363,9 @@ export class OutboxRepository {
         created_at: string
         processed_at: string | null
         error_message: string | null
+        trace_id: string | null
+        span_id: string | null
+        tracestate: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -305,23 +376,12 @@ export class OutboxRepository {
            LIMIT $1
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
-                   retry_count, max_retries, created_at, processed_at, error_message`,
+                   retry_count, max_retries, created_at, processed_at, error_message,
+                   trace_id, span_id, tracestate`,
         [limit]
       )
 
-      return result.rows.map(row => ({
-        id: BigInt(row.id),
-        aggregateType: row.aggregate_type,
-        aggregateId: row.aggregate_id,
-        eventType: row.event_type,
-        payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-        status: row.status,
-        retryCount: row.retry_count,
-        maxRetries: row.max_retries,
-        createdAt: new Date(row.created_at),
-        processedAt: row.processed_at ? new Date(row.processed_at) : null,
-        errorMessage: row.error_message,
-      }))
+      return result.rows.map(mapOutboxEvent)
     }
   }
 
@@ -401,10 +461,13 @@ export class OutboxRepository {
       error_message: string | null
       consumer_id: string | null
       lease_expires_at: string | null
+      trace_id: string | null
+      span_id: string | null
+      tracestate: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate
        FROM event_outbox
        WHERE aggregate_type = $1 AND aggregate_id = $2
        ORDER BY created_at DESC
@@ -412,21 +475,165 @@ export class OutboxRepository {
       [aggregateType, aggregateId, limit]
     )
 
-    return result.rows.map(row => ({
-      id: BigInt(row.id),
-      aggregateType: row.aggregate_type,
-      aggregateId: row.aggregate_id,
-      eventType: row.event_type,
-      payload: typeof row.payload === 'string' ? JSON.parse(row.payload) : row.payload,
-      status: row.status,
-      retryCount: row.retry_count,
-      maxRetries: row.max_retries,
-      consumerId: row.consumer_id,
-      leaseExpiresAt: row.lease_expires_at ? new Date(row.lease_expires_at) : null,
-      createdAt: new Date(row.created_at),
-      processedAt: row.processed_at ? new Date(row.processed_at) : null,
-      errorMessage: row.error_message,
-    }))
+    return result.rows.map(mapOutboxEvent)
+  }
+
+  async quarantine(
+    db: Queryable,
+    event: OutboxEvent,
+    reason: OutboxQuarantineReason,
+    errorMessage: string
+  ): Promise<void> {
+    try {
+      await db.query(
+        `WITH deleted AS (
+           DELETE FROM event_outbox
+           WHERE id = $1
+           RETURNING id, aggregate_type, aggregate_id, event_type, payload, retry_count, max_retries
+         )
+         INSERT INTO outbox_quarantine (
+           original_event_id,
+           aggregate_type,
+           aggregate_id,
+           event_type,
+           payload,
+           reason,
+           error_message,
+           retry_count,
+           max_retries
+         )
+         SELECT id, aggregate_type, aggregate_id, event_type, payload::text, $2, $3, retry_count, max_retries
+         FROM deleted
+         ON CONFLICT (original_event_id) DO NOTHING`,
+        [event.id.toString(), reason, errorMessage]
+      )
+    } catch (error) {
+      // Fallback for pg-mem which doesn't support complex CTEs containing DELETE
+      const deleteResult = await db.query<{
+        id: string
+        aggregate_type: string
+        aggregate_id: string
+        event_type: string
+        payload: string | Record<string, unknown>
+        retry_count: number
+        max_retries: number
+      }>(
+        `DELETE FROM event_outbox
+         WHERE id = $1
+         RETURNING id, aggregate_type, aggregate_id, event_type, payload, retry_count, max_retries`,
+        [event.id.toString()]
+      )
+
+      if (deleteResult.rows.length > 0) {
+        const deleted = deleteResult.rows[0]
+        const payloadStr = typeof deleted.payload === 'string'
+          ? deleted.payload
+          : JSON.stringify(deleted.payload)
+
+        await db.query(
+          `INSERT INTO outbox_quarantine (
+             original_event_id,
+             aggregate_type,
+             aggregate_id,
+             event_type,
+             payload,
+             reason,
+             error_message,
+             retry_count,
+             max_retries
+           )
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+           ON CONFLICT (original_event_id) DO NOTHING`,
+          [
+            deleted.id,
+            deleted.aggregate_type,
+            deleted.aggregate_id,
+            deleted.event_type,
+            payloadStr,
+            reason,
+            errorMessage,
+            deleted.retry_count,
+            deleted.max_retries,
+          ]
+        )
+      }
+    }
+  }
+
+  async listQuarantine(
+    db: Queryable,
+    limit: number,
+    offset: number,
+    reason?: OutboxQuarantineReason
+  ): Promise<{ entries: OutboxQuarantineEntry[]; total: number }> {
+    const params: unknown[] = []
+    const where: string[] = ['reinjected_at IS NULL']
+    if (reason) {
+      params.push(reason)
+      where.push(`reason = $${params.length}`)
+    }
+
+    params.push(limit)
+    const limitIdx = params.length
+    params.push(offset)
+    const offsetIdx = params.length
+    const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
+
+    const result = await db.query<OutboxQuarantineRow & { total_count: string }>(
+      `SELECT id, original_event_id, aggregate_type, aggregate_id, event_type, payload,
+              reason, error_message, retry_count, max_retries, quarantined_at,
+              reinjected_at, reinjected_by, COUNT(*) OVER() AS total_count
+       FROM outbox_quarantine
+       ${whereSql}
+       ORDER BY quarantined_at DESC, id DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params
+    )
+
+    return {
+      entries: result.rows.map(mapQuarantineEntry),
+      total: Number(result.rows[0]?.total_count ?? 0),
+    }
+  }
+
+  async reinjectQuarantined(
+    db: Queryable,
+    quarantineId: bigint,
+    fixedPayload: Record<string, unknown>,
+    reinjectedBy: string
+  ): Promise<bigint | null> {
+    const result = await db.query<{ id: string }>(
+      `WITH source AS (
+         SELECT *
+         FROM outbox_quarantine
+         WHERE id = $1 AND reinjected_at IS NULL
+         FOR UPDATE
+       ),
+       inserted AS (
+         INSERT INTO event_outbox (
+           aggregate_type,
+           aggregate_id,
+           event_type,
+           payload,
+           status,
+           retry_count,
+           max_retries
+         )
+         SELECT aggregate_type, aggregate_id, event_type, $2, 'pending', 0, max_retries
+         FROM source
+         RETURNING id
+       ),
+       marked AS (
+         UPDATE outbox_quarantine
+         SET reinjected_at = NOW(), reinjected_by = $3
+         WHERE id = $1 AND EXISTS (SELECT 1 FROM inserted)
+       )
+       SELECT id FROM inserted`,
+      [quarantineId.toString(), JSON.stringify(fixedPayload), reinjectedBy]
+    )
+
+    const id = result.rows[0]?.id
+    return id ? BigInt(id) : null
   }
 
   /**
@@ -454,6 +661,7 @@ export class OutboxRepository {
     processing: number
     published: number
     failed: number
+    dead_letter: number
   }> {
     const result = await db.query<{ status: OutboxEventStatus; count: string }>(
       `SELECT status, COUNT(*) as count
@@ -461,7 +669,13 @@ export class OutboxRepository {
        GROUP BY status`
     )
 
-    const stats = { pending: 0, processing: 0, published: 0, failed: 0 }
+    const stats: Record<OutboxEventStatus, number> = {
+      pending: 0,
+      processing: 0,
+      published: 0,
+      failed: 0,
+      dead_letter: 0,
+    }
     for (const row of result.rows) {
       stats[row.status] = parseInt(row.count, 10)
     }

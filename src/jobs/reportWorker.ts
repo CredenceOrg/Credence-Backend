@@ -2,7 +2,7 @@ import { ReportJobStatus } from './types.js'
 import { ReportRepository } from '../db/repositories/reportRepository.js'
 import { ReportStorageService } from '../services/reportStorage.js'
 import { invalidateCache } from '../cache/invalidation.js'
-import { pool } from '../db/pool.js'
+import { workerPool } from '../db/pool.js'
 
 /**
  * Report worker that generates report artifacts as a streaming AsyncIterable
@@ -84,7 +84,7 @@ export class ReportWorker {
  * Factory: creates a ReportWorker wired to the default pool and storage.
  */
 export function createReportWorker(storage?: ReportStorageService): ReportWorker {
-  const repo = new ReportRepository(pool)
+  const repo = new ReportRepository(workerPool)
   const svc = storage ?? new ReportStorageService()
   return new ReportWorker(repo, svc)
 }

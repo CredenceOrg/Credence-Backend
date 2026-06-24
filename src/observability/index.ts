@@ -4,7 +4,8 @@
 
 export {
   normalizeRoute,
-  httpLatencyPercentiles,
+  httpRequestDurationHistogram,
+  httpRequestStatusTotal,
   registerLatencyMetrics,
 } from './latencyMetrics.js'
 
@@ -21,3 +22,21 @@ export {
   createSlowOperationEvent,
   createSuccessEvent,
 } from './timeoutMetrics.js'
+
+export { registerPoolMetrics } from './poolMetrics.js'
+export {
+  incrementOutboxDeadLetter,
+  incrementOutboxPublished,
+  incrementOutboxFailed,
+  setOutboxPendingGauge,
+  incrementOutboxLeaseRenew,
+  incrementOutboxQuarantine,
+} from './outboxMetrics.js'
+
+export {
+  syntheticProbeSuccessTotal,
+  syntheticProbeFailureTotal,
+  dbTxnDurationSeconds,
+  dbTxnSavepoints,
+  registerSyntheticMetrics,
+} from './customMetrics.js'

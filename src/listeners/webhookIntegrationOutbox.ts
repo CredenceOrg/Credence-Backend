@@ -3,12 +3,14 @@ import type { IdentityState } from './types.js'
 import type { WebhookEventType } from '../services/webhooks/index.js'
 import { detectEventType } from './webhookDetection.js'
 import { outboxEmitter } from '../db/outbox/emitter.js'
+import { detectEventType } from './webhookEventDetection.js'
 
+export { detectEventType } from './webhookEventDetection.js'
 
 /**
  * Emit webhook event to outbox for identity state change.
  * Call this within the same transaction as the state update.
- * 
+ *
  * @param db - Database connection or transaction client
  * @param oldState - Previous identity state (null if new)
  * @param newState - New identity state
@@ -19,7 +21,7 @@ export async function emitWebhookForStateChange(
   newState: IdentityState
 ): Promise<void> {
   const eventType = detectEventType(oldState, newState)
-  
+
   if (eventType) {
     await outboxEmitter.emit(db, {
       aggregateType: 'identity',

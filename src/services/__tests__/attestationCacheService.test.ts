@@ -12,7 +12,8 @@ vi.mock('../../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),
     set: vi.fn(),
-    delete: vi.fn()
+    delete: vi.fn(),
+    clearNamespace: vi.fn()
   }
 }))
 
@@ -167,6 +168,7 @@ describe('AttestationCacheService', () => {
         'attestation',
         'bond:10'
       )
+      expect(cache.clearNamespace).toHaveBeenCalledWith('attestation')
       
       expect(result).toEqual(mockAttestation)
     })

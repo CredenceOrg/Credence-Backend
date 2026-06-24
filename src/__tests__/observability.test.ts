@@ -1,26 +1,42 @@
 import { describe, it, expect, vi } from 'vitest'
 
 // Mock prom-client BEFORE importing modules that use it
-vi.mock('prom-client', () => ({
-  default: {
-    Summary: class MockSummary {
-      constructor(public config: any) {}
-      observe(labels: any, value: number) {}
-      reset() {}
-      get() { return { values: [] } }
-    },
+vi.mock('prom-client', () => {
+  class MockMetric {
+    constructor(public config: any) {}
+    observe() {}
+    inc() {}
+    dec() {}
+    set() {}
+    reset() {}
+    get() { return { values: [] } }
+  }
+
+  const mock = {
+    Summary: MockMetric,
+    Histogram: MockMetric,
+    Counter: MockMetric,
+    Gauge: MockMetric,
     Registry: class MockRegistry {
+      registerMetric(metric: any) {}
+    },
+    register: {
       registerMetric(metric: any) {}
     }
   }
-}))
+
+  return {
+    ...mock,
+    default: mock
+  }
+})
 
 import * as observability from '../observability/index'
 
 describe('observability module exports', () => {
   it('exports latency metrics utilities', () => {
     expect(observability.normalizeRoute).toBeDefined()
-    expect(observability.httpLatencyPercentiles).toBeDefined()
+    expect(observability.httpRequestDurationHistogram).toBeDefined()
     expect(observability.registerLatencyMetrics).toBeDefined()
   })
 

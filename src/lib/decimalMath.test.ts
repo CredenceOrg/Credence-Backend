@@ -6,9 +6,15 @@
  */
 
 import { describe, it, expect } from 'vitest'
+import fc from 'fast-check'
 import {
   roundToScale,
   multiplyDecimals,
+  addDecimals,
+  subtractDecimals,
+  divideDecimals,
+  compareDecimals,
+  DivisionByZeroError,
   RoundingMode,
   DEFAULT_ROUNDING_MODE,
 } from './decimalMath.js'
@@ -214,6 +220,248 @@ describe('decimalMath', () => {
     it('preserves trailing zeros in fractional scale', () => {
       // "1.0" has fracStr length 1, "2.0" has fracStr length 1 → scale 2
       expect(multiplyDecimals('1.0', '2.0')).toBe('2.00')
+    })
+  })
+
+  describe('addDecimals', () => {
+    describe('exact addition table', () => {
+      const cases: Array<[string, string, string]> = [
+        ['10.50', '2.25', '12.75'],
+        ['0.1', '0.2', '0.3'],
+        ['1', '1', '2'],
+        ['0', '0', '0'],
+        ['100', '0.01', '100.01'],
+        // Mismatched scales
+        ['1.1', '2.22', '3.32'],
+        ['1', '0.001', '1.001'],
+        // Negative operands
+        ['-5', '3', '-2'],
+        ['5', '-3', '2'],
+        ['-5', '-3', '-8'],
+        // Crosses zero — must not produce "-0"
+        ['-3', '3', '0'],
+        ['3', '-3', '0'],
+        ['-0.5', '0.5', '0.0'],
+      ]
+
+      it.each(cases)('addDecimals(%s, %s) → %s', (a, b, expected) => {
+        expect(addDecimals(a, b)).toBe(expected)
+      })
+    })
+  })
+
+  describe('subtractDecimals', () => {
+    describe('exact subtraction table', () => {
+      const cases: Array<[string, string, string]> = [
+        ['10.50', '2.25', '8.25'],
+        ['1', '1', '0'],
+        ['2', '5', '-3'],
+        ['0', '0', '0'],
+        ['100.01', '0.01', '100.00'],
+        // Mismatched scales
+        ['3.32', '1.1', '2.22'],
+        ['1.001', '1', '0.001'],
+        // Negative operands
+        ['-5', '3', '-8'],
+        ['5', '-3', '8'],
+        ['-5', '-3', '-2'],
+        // Crosses zero — must not produce "-0"
+        ['5', '5', '0'],
+        ['-2.5', '-2.5', '0.0'],
+      ]
+
+      it.each(cases)('subtractDecimals(%s, %s) → %s', (a, b, expected) => {
+        expect(subtractDecimals(a, b)).toBe(expected)
+      })
+    })
+  })
+
+  describe('compareDecimals', () => {
+    const cases: Array<[string, string, -1 | 0 | 1]> = [
+      ['1', '1', 0],
+      ['1.50', '1.5', 0],   // trailing zeros don't matter
+      ['0', '-0.0', 0],     // signed zero is still zero
+      ['1', '2', -1],
+      ['-1', '1', -1],
+      ['0.30', '0.1', 1],
+      ['2', '1', 1],
+      ['-1', '-2', 1],
+      ['-2', '-1', -1],
+    ]
+
+    it.each(cases)('compareDecimals(%s, %s) → %i', (a, b, expected) => {
+      expect(compareDecimals(a, b)).toBe(expected)
+    })
+  })
+
+  describe('divideDecimals', () => {
+    describe('exact and rounded division table (HALF_UP default)', () => {
+      const cases: Array<[string, string, number, string]> = [
+        ['10', '4', 2, '2.50'],
+        ['10', '3', 2, '3.33'],
+        ['1', '3', 6, '0.333333'],      // repeating decimal
+        ['2', '3', 6, '0.666667'],      // repeating decimal, rounds up
+        ['1', '4', 0, '0'],             // 0.25 rounds down to 0 at scale 0
+        ['3', '4', 0, '1'],             // 0.75 rounds up to 1 at scale 0
+        ['100', '10', 2, '10.00'],
+        ['0', '5', 2, '0.00'],
+        ['7', '2', 0, '4'],             // 3.5 rounds up (HALF_UP)
+      ]
+
+      it.each(cases)('divideDecimals(%s, %s, %i) → %s', (a, b, scale, expected) => {
+        expect(divideDecimals(a, b, scale)).toBe(expected)
+      })
+    })
+
+    describe('rounding modes', () => {
+      const cases: Array<[string, string, number, RoundingMode, string]> = [
+        ['10', '3', 2, RoundingMode.DOWN, '3.33'],
+        ['10', '3', 2, RoundingMode.UP, '3.34'],
+        ['7', '2', 0, RoundingMode.HALF_DOWN, '3'],     // 3.5 rounds down
+        ['7', '2', 0, RoundingMode.HALF_EVEN, '4'],     // 3.5 → nearest even (4)
+        ['9', '2', 0, RoundingMode.HALF_EVEN, '4'],     // 4.5 → nearest even (4)
+        ['1', '3', 0, RoundingMode.DOWN, '0'],
+      ]
+
+      it.each(cases)(
+        'divideDecimals(%s, %s, %i, %s) → %s',
+        (a, b, scale, mode, expected) => {
+          expect(divideDecimals(a, b, scale, mode)).toBe(expected)
+        },
+      )
+    })
+
+    describe('sign handling', () => {
+      const cases: Array<[string, string, number, string]> = [
+        ['-10', '4', 2, '-2.50'],
+        ['10', '-4', 2, '-2.50'],
+        ['-10', '-4', 2, '2.50'],
+        ['-1', '4', 2, '-0.25'],
+        // Rounds to exactly zero — must not produce "-0"
+        ['-1', '1000000', 2, '0.00'],
+      ]
+
+      it.each(cases)('divideDecimals(%s, %s, %i) → %s', (a, b, scale, expected) => {
+        expect(divideDecimals(a, b, scale)).toBe(expected)
+      })
+    })
+
+    describe('mismatched input scales', () => {
+      it('handles a divisor with more fractional digits than the dividend', () => {
+        expect(divideDecimals('10', '2.5', 2)).toBe('4.00')
+      })
+
+      it('handles a dividend with more fractional digits than the divisor', () => {
+        expect(divideDecimals('10.5', '5', 2)).toBe('2.10')
+      })
+    })
+
+    describe('error handling', () => {
+      it('throws DivisionByZeroError when dividing by "0"', () => {
+        expect(() => divideDecimals('1', '0', 2)).toThrow(DivisionByZeroError)
+      })
+
+      it('throws DivisionByZeroError when dividing by "0.00"', () => {
+        expect(() => divideDecimals('1', '0.00', 2)).toThrow(DivisionByZeroError)
+      })
+
+      it('throws DivisionByZeroError when dividing by "-0"', () => {
+        expect(() => divideDecimals('1', '-0', 2)).toThrow(DivisionByZeroError)
+      })
+
+      it('names the error "DivisionByZeroError"', () => {
+        try {
+          divideDecimals('1', '0', 2)
+          expect.unreachable()
+        } catch (err) {
+          expect((err as Error).name).toBe('DivisionByZeroError')
+          expect((err as Error).message).toContain('1')
+          expect((err as Error).message).toContain('0')
+        }
+      })
+
+      it('throws for negative scale', () => {
+        expect(() => divideDecimals('1', '2', -1)).toThrow()
+      })
+
+      it('throws for non-integer scale', () => {
+        expect(() => divideDecimals('1', '2', 1.5 as unknown as number)).toThrow()
+      })
+    })
+  })
+
+  describe('property-based invariants', () => {
+    // Generates decimal strings like "123.45", "-7", "0.001" with up to 4
+    // fractional digits and magnitudes small enough to keep fast-check
+    // shrinking fast while still exercising sign and scale combinations.
+    const decimalStringArb = fc
+      .tuple(
+        fc.boolean(), // negative
+        fc.integer({ min: 0, max: 999_999 }), // integer part
+        fc.integer({ min: 0, max: 4 }), // fractional digit count
+        fc.integer({ min: 0, max: 9999 }), // fractional digits value
+      )
+      .map(([negative, intPart, fracLen, fracVal]) => {
+        const fracStr = fracVal.toString().padStart(4, '0').slice(0, fracLen)
+        const magnitude = fracLen > 0 ? `${intPart}.${fracStr}` : `${intPart}`
+        const isZero = intPart === 0 && (fracLen === 0 || fracVal === 0)
+        return negative && !isZero ? `-${magnitude}` : magnitude
+      })
+
+    // Nonzero decimal strings, for use as a divisor.
+    const nonZeroDecimalStringArb = decimalStringArb.filter(
+      (s) => compareDecimals(s, '0') !== 0,
+    )
+
+    it('(a + b) - b === a for arbitrary decimal strings', () => {
+      fc.assert(
+        fc.property(decimalStringArb, decimalStringArb, (a, b) => {
+          const roundTripped = subtractDecimals(addDecimals(a, b), b)
+          expect(compareDecimals(roundTripped, a)).toBe(0)
+        }),
+      )
+    })
+
+    it('addDecimals is commutative', () => {
+      fc.assert(
+        fc.property(decimalStringArb, decimalStringArb, (a, b) => {
+          expect(addDecimals(a, b)).toBe(addDecimals(b, a))
+        }),
+      )
+    })
+
+    it('divide (DOWN) then multiply back stays within one unit of the divisor', () => {
+      // DOWN truncates toward zero, so the reconstruction error is bounded by
+      // exactly one unit-in-the-last-place of the quotient, scaled by |b|:
+      // |a - quotient*b| < |b| * 10^-scale.
+      fc.assert(
+        fc.property(
+          decimalStringArb,
+          nonZeroDecimalStringArb,
+          fc.integer({ min: 0, max: 6 }),
+          (a, b, scale) => {
+            const quotient = divideDecimals(a, b, scale, RoundingMode.DOWN)
+            const reconstructed = multiplyDecimals(quotient, b)
+            const diff = subtractDecimals(a, reconstructed)
+            const absDiff = diff.startsWith('-') ? diff.slice(1) : diff
+            const absB = b.startsWith('-') ? b.slice(1) : b
+            const epsilon = scale === 0 ? '1' : `0.${'0'.repeat(scale - 1)}1`
+            const bound = multiplyDecimals(absB, epsilon)
+
+            expect(compareDecimals(absDiff, bound)).not.toBe(1)
+          },
+        ),
+      )
+    })
+
+    it('compareDecimals matches the sign of subtractDecimals(a, b)', () => {
+      fc.assert(
+        fc.property(decimalStringArb, decimalStringArb, (a, b) => {
+          const cmp = compareDecimals(a, b)
+          const diffSign = compareDecimals(subtractDecimals(a, b), '0')
+          expect(cmp).toBe(diffSign)
+        }),
+      )
     })
   })
 })

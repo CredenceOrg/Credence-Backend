@@ -26,28 +26,40 @@ export function normalizeRoute(path: string, routePath?: string): string {
   // Fallback normalization for unmatched routes
   return path
     .replace(/\/0x[a-fA-F0-9]+/g, '/:address')
+    .replace(/\/G[A-Z2-7]{55}/g, '/:address')
     .replace(/\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, '/:id')
     .replace(/\/\d+/g, '/:id')
 }
 
 /**
- * HTTP request latency percentiles (p50, p95, p99).
- * 
- * Labels: method, route, status
- * Cardinality: ~10 methods × ~50 routes × ~10 status codes = ~5,000 series
+ * HTTP request latency histogram for SLA tracking (p50, p95, p99).
+ * Histograms allow for aggregation across multiple instances.
+ *
+ * Buckets are tuned for API latency: 5ms to 10s with high resolution
+ * around the 250ms SLO target.
  */
-export const httpLatencyPercentiles = new client.Summary({
-  name: 'http_request_duration_percentiles_seconds',
-  help: 'HTTP request latency percentiles (p50, p95, p99)',
-  labelNames: ['method', 'route', 'status'],
-  percentiles: [0.5, 0.95, 0.99],
-  maxAgeSeconds: 600,
-  ageBuckets: 5,
+export const httpRequestDurationHistogram = new client.Histogram({
+  name: 'http_request_duration_seconds',
+  help: 'HTTP request latency in seconds',
+  labelNames: ['method', 'route', 'status_class'],
+  buckets: [
+    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 7.5, 10
+  ],
 })
 
 /**
- * Registers the latency percentile metrics with the provided registry.
+ * Counter for requests by status class to track error rates in SLOs.
+ */
+export const httpRequestStatusTotal = new client.Counter({
+  name: 'http_requests_status_total',
+  help: 'Total number of HTTP requests by status class',
+  labelNames: ['method', 'route', 'status_class'],
+})
+
+/**
+ * Registers the latency metrics with the provided registry.
  */
 export function registerLatencyMetrics(registry: client.Registry): void {
-  registry.registerMetric(httpLatencyPercentiles)
+  registry.registerMetric(httpRequestDurationHistogram)
+  registry.registerMetric(httpRequestStatusTotal)
 }

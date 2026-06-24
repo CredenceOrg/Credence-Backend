@@ -1,6 +1,8 @@
 import { randomBytes } from 'crypto'
 import { MOCK_USERS } from '../../middleware/auth.js'
 import { AuditLogService, AuditAction, auditLogService } from '../audit/index.js'
+import { pool } from '../../db/pool.js'
+import { ImpersonationTokenRepository } from '../../repositories/impersonationTokenRepository.js'
 import type {
   ImpersonationToken,
   IssueImpersonationTokenRequest,
@@ -13,17 +15,13 @@ export type { ImpersonationToken, IssueImpersonationTokenRequest, IssueImpersona
 const DEFAULT_TTL_SECONDS = 900
 const MAX_TTL_SECONDS = 3600
 
-/**
- * In-memory store for active impersonation tokens.
- * Replace with a DB-backed store (with TTL index) in production.
- */
-const tokenStore = new Map<string, ImpersonationToken>()
-
 export class ImpersonationService {
   private auditLog: AuditLogService
+  private repo: ImpersonationTokenRepository
 
-  constructor(auditLog: AuditLogService) {
+  constructor(auditLog: AuditLogService, repo: ImpersonationTokenRepository) {
     this.auditLog = auditLog
+    this.repo = repo
   }
 
   /**
@@ -36,13 +34,13 @@ export class ImpersonationService {
    * - `reason` is mandatory and non-empty.
    * - TTL is capped at MAX_TTL_SECONDS.
    */
-  issueToken(
+  async issueToken(
     adminId: string,
     adminEmail: string,
     tenantId: string,
     request: IssueImpersonationTokenRequest,
     ipAddress?: string,
-  ): IssueImpersonationTokenResponse {
+  ): Promise<IssueImpersonationTokenResponse> {
     const { targetUserId, reason, ttlSeconds } = request
 
     if (!reason || reason.trim().length === 0) {
@@ -95,7 +93,7 @@ export class ImpersonationService {
       revoked: false,
     }
 
-    tokenStore.set(tokenId, record)
+    await this.repo.create(record)
 
     void this.auditLog.logAction(
       tenantId,
@@ -122,14 +120,14 @@ export class ImpersonationService {
   /**
    * Revoke an impersonation token before it expires.
    */
-  revokeToken(
+  async revokeToken(
     adminId: string,
     adminEmail: string,
     tenantId: string,
     tokenId: string,
     ipAddress?: string,
-  ): void {
-    const record = tokenStore.get(tokenId)
+  ): Promise<void> {
+    const record = await this.repo.findById(tokenId)
 
     if (!record) {
       throw new Error(`Token not found: ${tokenId}`)
@@ -139,9 +137,7 @@ export class ImpersonationService {
       throw new Error(`Token already revoked: ${tokenId}`)
     }
 
-    record.revoked = true
-    record.revokedAt = new Date().toISOString()
-    record.revokedBy = adminId
+    await this.repo.revoke(tokenId, adminId)
 
     void this.auditLog.logAction(
       tenantId,
@@ -165,19 +161,25 @@ export class ImpersonationService {
    * Validate a token and return the record it represents.
    * Returns null if the token is missing, expired, or revoked.
    */
-  validateToken(tokenId: string): ImpersonationToken | null {
-    const record = tokenStore.get(tokenId)
-    if (!record) return null
-    if (record.revoked) return null
-    if (new Date() > new Date(record.expiresAt)) return null
+  /** Validates and returns the token if valid */
+  async validateToken(tokenId: string): Promise<ImpersonationToken | null> {
+    const record = await this.repo.findValid(tokenId)
     return record
   }
 
+  /** Run background sweep of expired tokens */
+  async cleanupExpiredTokens(): Promise<number> {
+    return await this.repo.deleteExpired()
+  }
+
   /** For testing only — clears all stored tokens. */
-  _reset(): void {
-    tokenStore.clear()
+  async _reset(): Promise<void> {
+    await this.repo._reset()
   }
 }
 
 /** Singleton instance shared across the app. */
-export const impersonationService = new ImpersonationService(auditLogService)
+export const impersonationService = new ImpersonationService(
+  auditLogService,
+  new ImpersonationTokenRepository(pool)
+)

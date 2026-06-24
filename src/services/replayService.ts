@@ -48,22 +48,23 @@ export class ReplayService {
    */
   async getFailedEvent(id: string): Promise<FailedInboundEvent | null> {
     const cached = await cache.get<FailedInboundEvent>('failed_event', id)
-    
+
     if (cached) {
       return cached
     }
-    
+
     const event = await this.repository.findById(id)
     if (event) {
       await cache.set('failed_event', id, event, FAILED_EVENT_CACHE_TTL)
     }
-    
+
     return event
   }
 
   /**
    * Replay a failed event by ID.
    * Ensures idempotency by checking status and using AuditLogService.
+   * Increments retry_count on each attempt.
    */
   async replayEvent(
     id: string,
@@ -88,9 +89,10 @@ export class ReplayService {
 
     try {
       await handler.handle(event.eventData)
-      
+
       await this.repository.updateStatus(id, 'replayed')
-      
+      await this.repository.incrementRetryCount(id)
+
       // Invalidate cache after status update
       const updatedEvent = await this.repository.findById(id)
       if (updatedEvent) {
@@ -104,7 +106,7 @@ export class ReplayService {
         tenantId,
         adminId,
         adminEmail,
-        'REPLAY_EVENT' as any, // Should add to AuditAction enum
+        'REPLAY_EVENT' as any,
         id,
         'system',
         { eventType: event.eventType, status: 'success' },
@@ -116,7 +118,9 @@ export class ReplayService {
       return { success: true, message: 'Event successfully replayed' }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      
+
+      await this.repository.incrementRetryCount(id)
+
       auditLogService.logAction(
         tenantId,
         adminId,

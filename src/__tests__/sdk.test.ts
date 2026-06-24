@@ -1,6 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { CredenceClient } from '../sdk/client.js'
-import { CredenceApiError } from '../sdk/types.js'
+import {
+  CredenceError,
+  ForbiddenCredenceError,
+  InternalServerErrorCredenceError,
+  NotFoundCredenceError,
+  SdkInvalidJsonCredenceError,
+  SdkNetworkErrorCredenceError,
+  SdkRequestTimeoutCredenceError,
+  SdkUnmappedHttpCredenceError,
+} from '../sdk/errors.generated.js'
 
 function mockFetch(body: unknown, init?: { status?: number; statusText?: string; headers?: Record<string, string> }) {
   const status = init?.status ?? 200
@@ -153,7 +162,7 @@ describe('CredenceClient', () => {
 
       const call = vi.mocked(fetch).mock.calls[0]
       const opts = call[1] as RequestInit
-      expect((opts.headers as Record<string, string>)['Authorization']).toBe('Bearer my-secret-key')
+      expect((opts.headers as Record<string, string>).Authorization).toBe('Bearer my-secret-key')
     })
 
     it('omits Authorization header when apiKey is not set', async () => {
@@ -163,53 +172,79 @@ describe('CredenceClient', () => {
 
       const call = vi.mocked(fetch).mock.calls[0]
       const opts = call[1] as RequestInit
-      expect((opts.headers as Record<string, string>)['Authorization']).toBeUndefined()
+      expect((opts.headers as Record<string, string>).Authorization).toBeUndefined()
     })
   })
 
   describe('error handling', () => {
-    it('throws CredenceApiError on HTTP 404', async () => {
-      vi.stubGlobal('fetch', mockFetch('Not Found', { status: 404, statusText: 'Not Found' }))
+    it('throws NotFoundCredenceError for structured 404 envelopes', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({ error: 'Identity not found', code: 'not_found' }, { status: 404, statusText: 'Not Found' }),
+      )
 
-      await expect(client.getTrustScore('0xbad')).rejects.toThrow(CredenceApiError)
-      await expect(client.getTrustScore('0xbad')).rejects.toThrow('HTTP 404: Not Found')
+      await expect(client.getTrustScore('0xbad')).rejects.toThrow(NotFoundCredenceError)
+      try {
+        await client.getTrustScore('0xbad')
+      } catch (err) {
+        expect(err).toBeInstanceOf(CredenceError)
+        const credenceErr = err as NotFoundCredenceError
+        expect(credenceErr.code).toBe('not_found')
+        expect(credenceErr.status).toBe(404)
+        expect(credenceErr.message).toBe('Identity not found')
+      }
     })
 
-    it('throws CredenceApiError on HTTP 500', async () => {
-      vi.stubGlobal('fetch', mockFetch('Internal Server Error', { status: 500, statusText: 'Internal Server Error' }))
+    it('throws InternalServerErrorCredenceError for structured 500 envelopes', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(
+          { error: 'Unexpected failure', code: 'internal_server_error' },
+          { status: 500, statusText: 'Internal Server Error' },
+        ),
+      )
 
       try {
         await client.getBondStatus('0xfail')
         expect.unreachable('should have thrown')
       } catch (err) {
-        expect(err).toBeInstanceOf(CredenceApiError)
-        const apiErr = err as CredenceApiError
-        expect(apiErr.status).toBe(500)
-        expect(apiErr.body).toBe('Internal Server Error')
+        expect(err).toBeInstanceOf(InternalServerErrorCredenceError)
+        const credenceErr = err as InternalServerErrorCredenceError
+        expect(credenceErr.status).toBe(500)
+        expect(credenceErr.code).toBe('internal_server_error')
       }
     })
 
-    it('throws CredenceApiError on invalid JSON response', async () => {
+    it('throws SdkUnmappedHttpCredenceError for unstructured HTTP errors', async () => {
+      vi.stubGlobal('fetch', mockFetch('Not Found', { status: 404, statusText: 'Not Found' }))
+
+      await expect(client.getTrustScore('0xbad')).rejects.toThrow(SdkUnmappedHttpCredenceError)
+      await expect(client.getTrustScore('0xbad')).rejects.toThrow('HTTP 404: Not Found')
+    })
+
+    it('throws SdkInvalidJsonCredenceError on invalid JSON response', async () => {
       vi.stubGlobal('fetch', mockFetch('this is not json'))
 
+      await expect(client.getAttestations('0x1')).rejects.toThrow(SdkInvalidJsonCredenceError)
       await expect(client.getAttestations('0x1')).rejects.toThrow('Invalid JSON response')
     })
 
-    it('throws CredenceApiError on network error', async () => {
+    it('throws SdkNetworkErrorCredenceError on network error', async () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('fetch failed')))
 
-      await expect(client.getTrustScore('0x1')).rejects.toThrow(CredenceApiError)
+      await expect(client.getTrustScore('0x1')).rejects.toThrow(SdkNetworkErrorCredenceError)
       await expect(client.getTrustScore('0x1')).rejects.toThrow('Network error: fetch failed')
     })
 
-    it('throws CredenceApiError on timeout (AbortError)', async () => {
+    it('throws SdkRequestTimeoutCredenceError on timeout (AbortError)', async () => {
       const abortError = new DOMException('The operation was aborted', 'AbortError')
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortError))
 
+      await expect(client.getVerificationProof('0x1')).rejects.toThrow(SdkRequestTimeoutCredenceError)
       await expect(client.getVerificationProof('0x1')).rejects.toThrow('Request timed out')
     })
 
-    it('throws CredenceApiError on timeout (Error with AbortError name)', async () => {
+    it('throws SdkRequestTimeoutCredenceError on timeout (Error with AbortError name)', async () => {
       const abortError = new Error('The operation was aborted')
       abortError.name = 'AbortError'
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(abortError))
@@ -217,18 +252,76 @@ describe('CredenceClient', () => {
       await expect(client.getVerificationProof('0x1')).rejects.toThrow('Request timed out')
     })
 
-    it('includes status and body on CredenceApiError', async () => {
-      vi.stubGlobal('fetch', mockFetch('{"error":"forbidden"}', { status: 403, statusText: 'Forbidden' }))
+    it('maps structured forbidden envelopes to ForbiddenCredenceError', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({ error: 'Forbidden access', code: 'forbidden' }, { status: 403, statusText: 'Forbidden' }),
+      )
 
       try {
         await client.getTrustScore('0x1')
         expect.unreachable('should have thrown')
       } catch (err) {
-        const apiErr = err as CredenceApiError
-        expect(apiErr.name).toBe('CredenceApiError')
-        expect(apiErr.status).toBe(403)
-        expect(apiErr.body).toBe('{"error":"forbidden"}')
+        expect(err).toBeInstanceOf(ForbiddenCredenceError)
+        const credenceErr = err as ForbiddenCredenceError
+        expect(credenceErr.code).toBe('forbidden')
+        expect(credenceErr.status).toBe(403)
+        expect(credenceErr.rawBody).toContain('forbidden')
       }
+    })
+
+    it('maps structured rate-limit envelopes from getAttestations', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch(
+          { error: 'Rate limit exceeded. Try again later.', code: 'rate_limit_exceeded', details: { retryAfter: 30 } },
+          { status: 429, statusText: 'Too Many Requests' },
+        ),
+      )
+
+      try {
+        await client.getAttestations('0x1')
+        expect.unreachable('should have thrown')
+      } catch (err) {
+        expect(err).toMatchObject({
+          code: 'rate_limit_exceeded',
+          status: 429,
+          details: { retryAfter: 30 },
+        })
+      }
+    })
+
+    it('maps structured not-found envelopes from getVerificationProof', async () => {
+      vi.stubGlobal(
+        'fetch',
+        mockFetch({ error: 'Proof not found', code: 'not_found' }, { status: 404, statusText: 'Not Found' }),
+      )
+
+      await expect(client.getVerificationProof('0x1')).rejects.toMatchObject({
+        code: 'not_found',
+        status: 404,
+        message: 'Proof not found',
+      })
+    })
+
+    it('throws SdkRequestTimeoutCredenceError when the configured timeout elapses', async () => {
+      vi.useFakeTimers()
+      const slowClient = new CredenceClient({ baseUrl, timeout: 1_000 })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockImplementation((_url, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener('abort', () => {
+              reject(new DOMException('The operation was aborted', 'AbortError'))
+            })
+          }),
+        ),
+      )
+
+      const pending = expect(slowClient.getTrustScore('0x1')).rejects.toThrow(SdkRequestTimeoutCredenceError)
+      await vi.advanceTimersByTimeAsync(1_000)
+      await pending
+      vi.useRealTimers()
     })
 
     it('handles non-Error thrown values during fetch', async () => {

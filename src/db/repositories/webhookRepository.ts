@@ -45,15 +45,44 @@ export class PostgresWebhookRepository implements WebhookStore {
     );
   }
 
+
+  async rotateSecret(
+    id: string,
+    newSecret: string,
+    previousSecret: string,
+    previousSecretExpiresAt: string,
+  ): Promise<WebhookConfig> {
+    const { rows } = await this.pool.query(
+      `UPDATE webhook_configs
+       SET secret = $2,
+           previous_secret = $3,
+           previous_secret_expires_at = $4,
+           secret_updated_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, newSecret, previousSecret, previousSecretExpiresAt]
+    );
+
+    if (rows.length === 0) {
+      throw new Error(`Webhook not found: ${id}`);
+    }
+
+    return this.mapToConfig(rows[0]);
+  }
+
   private mapToConfig(row: any): WebhookConfig {
     return {
       id: row.id,
       url: row.url,
       secret: row.secret,
       previousSecret: row.previous_secret || undefined,
+      previousSecretExpiresAt: row.previous_secret_expires_at || undefined,
       secretUpdatedAt: new Date(row.secret_updated_at),
       active: row.active,
       events: row.events as WebhookEventType[],
+      maxAttempts: row.max_attempts ?? undefined,
+      timeoutMs: row.timeout_ms ?? undefined,
     };
   }
 }

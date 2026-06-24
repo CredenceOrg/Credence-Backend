@@ -5,6 +5,7 @@ import {
   requireAdminRole,
   UserRole,
 } from "../../middleware/auth.js";
+import erasureProofRouter from './erasureProof.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
@@ -19,6 +20,8 @@ import type {
 } from "../../services/admin/types.js";
 import type { IssueImpersonationTokenRequest } from "../../services/impersonation/types.js";
 import { ReplayService } from "../../services/replayService.js";
+import { withReplaySnapshot } from "../../db/transaction.js";
+import { RequestSnapshotsRepository } from "../../db/repositories/requestSnapshotsRepository.js";
 import { FailedInboundEventsRepository } from "../../db/repositories/failedInboundEventsRepository.js";
 import { registerAllReplayHandlers } from "../../services/replayHandlers.js";
 import { IdentityRepository } from "../../db/repositories/identityRepository.js";
@@ -147,7 +150,7 @@ export function createAdminRouter(): Router {
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -162,7 +165,7 @@ export function createAdminRouter(): Router {
         return
       }
 
-      const issued = impersonationService.issueToken(
+      const issued = await impersonationService.issueToken(
         user.id,
         user.email,
         user.tenantId,
@@ -191,7 +194,7 @@ export function createAdminRouter(): Router {
    *
    * Revoke an active impersonation token.
    */
-  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     const authReq = req as AuthenticatedRequest
     const user = authReq.user!
     const { tokenId } = req.params
@@ -202,7 +205,7 @@ export function createAdminRouter(): Router {
     }
 
     try {
-      impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
+      await impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
       res.status(200).json({ success: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
@@ -222,7 +225,7 @@ export function createAdminRouter(): Router {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
 
-      const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
+      const { limit, cursor } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
 
       // Build filter object from query params
       const filters: any = {}
@@ -236,13 +239,16 @@ export function createAdminRouter(): Router {
       if (req.query.from) filters.from = req.query.from
       if (req.query.to) filters.to = req.query.to
 
-      const result = await adminService.getAuditLogs(user.id, user.email, filters, limit, offset, user)
+      const result = await adminService.getAuditLogs(user.id, user.email, filters, limit, cursor ?? undefined, user)
+
+      // Use buildCursorPaginationMeta from lib/pagination
+      const { buildCursorPaginationMeta } = await import('../../lib/pagination.js')
 
       res.status(200).json({
         success: true,
         data: {
-          ...result,
-          ...buildPaginationMeta(result.total, page, limit),
+          logs: result.logs,
+          ...buildCursorPaginationMeta(result.hasNextPage, limit, result.nextCursor),
         },
       })
     } catch (error) {
@@ -373,6 +379,47 @@ export function createAdminRouter(): Router {
       res.status(400).json({ error: 'ReplayFailed', message: error.message })
     }
   })
+
+  /**
+   * POST /api/admin/replay
+   * Replays a request by requestId against captured snapshot and returns diff.
+   */
+  router.post('/replay', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+    try {
+      const { requestId } = req.body as { requestId: string };
+      if (!requestId) {
+        throw new ValidationError('Missing requestId');
+      }
+      const diff = await withReplaySnapshot(pool, async (client, snapshot) => {
+        const identityRepo = new IdentityRepository(client);
+        const bondsRepo = new BondsRepository(client);
+        const currentIdentities = await identityRepo.findAll();
+        const currentBonds = await bondsRepo.findAll();
+        const computeDiff = (current: any, previous: any) => {
+          const diffResult: any = { added: [], removed: [], changed: [] };
+          const currentMap = new Map(current.map((item: any) => [item.id, item]));
+          const prevMap = new Map(previous.map((item: any) => [item.id, item]));
+          for (const [id, cur] of currentMap) {
+            if (!prevMap.has(id)) diffResult.added.push(cur);
+            else if (JSON.stringify(cur) !== JSON.stringify(prevMap.get(id))) diffResult.changed.push({ before: prevMap.get(id), after: cur });
+          }
+          for (const [id, prev] of prevMap) {
+            if (!currentMap.has(id)) diffResult.removed.push(prev);
+          }
+          return diffResult;
+        };
+        const identitiesDiff = computeDiff(currentIdentities, snapshot.identities);
+        const bondsDiff = computeDiff(currentBonds, snapshot.bonds);
+        return { identities: identitiesDiff, bonds: bondsDiff };
+      }, requestId);
+      res.status(200).json({ success: true, data: diff });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Mount erasure-proof sub-routes
+  router.use(erasureProofRouter)
 
   return router
 }

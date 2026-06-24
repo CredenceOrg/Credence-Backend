@@ -2,7 +2,7 @@
  * Tests for config-driven reputation service
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeAll } from 'vitest'
 import {
   computeBondScore,
   computeDurationScore,
@@ -10,6 +10,13 @@ import {
   getScoringConfig,
   type ScoringConfig,
 } from './reputationService.js'
+
+// Set up minimal environment for tests
+beforeAll(() => {
+  process.env.DB_URL = 'postgresql://test:test@localhost:5432/test'
+  process.env.REDIS_URL = 'redis://localhost:6379'
+  process.env.JWT_SECRET = 'test-secret-at-least-32-characters-long'
+})
 
 describe('reputationService with config', () => {
   describe('getScoringConfig', () => {
