@@ -287,10 +287,15 @@ export async function drainWsConnections(
       }
     }
 
-    // Wait for all clients to close
+    // Wait for all clients to close.
+    // Capture total before attaching listeners: the ws library removes each
+    // client from wss.clients when its 'close' event fires, so comparing
+    // against wss.clients.size inside the listener always reads a shrinking
+    // value and the equality check would never be reached for N > 0.
+    const total = wss.clients.size;
     let closed = 0;
     const checkAllClosed = () => {
-      if (closed === wss.clients.size) {
+      if (closed >= total) {
         clearTimeout(timeoutHandle);
         resolve();
       }
