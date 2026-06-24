@@ -1,6 +1,8 @@
 import { Router, type Request, type Response } from 'express'
 import type { BondService } from '../services/bond/index.js'
 import { deriveBondPaymentStatus } from '../services/bond/index.js'
+import { requireApiKey, requireScope } from '../middleware/apiKey.js'
+import { ApiKeyScope } from '../services/apiKeys.js'
 
 /**
  * Builds the bond status router.
@@ -18,37 +20,43 @@ export function createBondRouter(bondService: BondService): Router {
    *
    * Returns the bond status for an Ethereum address.
    * Validates address format and returns appropriate error responses.
+   * Requires bond:read scope.
    */
-  router.get('/:address', (req: Request, res: Response) => {
-    const { address } = req.params
+  router.get(
+    '/:address',
+    requireApiKey(),
+    requireScope(ApiKeyScope.BOND_READ),
+    (req: Request, res: Response) => {
+      const { address } = req.params
 
-    if (!bondService.isValidAddress(address)) {
-      res.status(400).json({
-        error:
-          'Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.',
+      if (!bondService.isValidAddress(address)) {
+        res.status(400).json({
+          error:
+            'Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters.',
+        })
+        return
+      }
+
+      const bond = bondService.getBondStatus(address)
+
+      if (!bond) {
+        res.status(404).json({
+          error: `No bond record found for address ${address.toLowerCase()}.`,
+        })
+        return
+      }
+
+      res.status(200).json({
+        address: bond.address,
+        bondedAmount: bond.bondedAmount,
+        bondStart: bond.bondStart,
+        bondDuration: bond.bondDuration,
+        active: bond.active, // deprecated: use `status` instead
+        slashedAmount: bond.slashedAmount,
+        status: deriveBondPaymentStatus(bond),
       })
-      return
     }
-
-    const bond = bondService.getBondStatus(address)
-
-    if (!bond) {
-      res.status(404).json({
-        error: `No bond record found for address ${address.toLowerCase()}.`,
-      })
-      return
-    }
-
-    res.status(200).json({
-      address: bond.address,
-      bondedAmount: bond.bondedAmount,
-      bondStart: bond.bondStart,
-      bondDuration: bond.bondDuration,
-      active: bond.active, // deprecated: use `status` instead
-      slashedAmount: bond.slashedAmount,
-      status: deriveBondPaymentStatus(bond),
-    })
-  })
+  )
 
   return router
 }

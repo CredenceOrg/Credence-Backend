@@ -13,6 +13,8 @@ import type {
   AttestationListResponse,
 } from '../types/attestation.js';
 import { AppError, ErrorCode, ValidationError, NotFoundError } from '../lib/errors.js';
+import { requireApiKey, requireScope } from '../middleware/apiKey.js';
+import { ApiKeyScope } from '../services/apiKeys.js';
 
 /**
  * Create and return an Express {@link Router} wired to the given
@@ -86,21 +88,26 @@ export function createAttestationRouter(repo: AttestationRepository): Router {
   });
 
   // ── POST /api/attestations ───────────────────────────────────────────
-  router.post('/', (req: Request, res: Response, next): void => {
-    try {
-      const { subject, verifier, weight, claim } = req.body as {
-        subject: string;
-        verifier: string;
-        weight: number;
-        claim: string;
-      };
+  router.post(
+    '/',
+    requireApiKey(),
+    requireScope(ApiKeyScope.ATTESTATION_WRITE),
+    (req: Request, res: Response, next): void => {
+      try {
+        const { subject, verifier, weight, claim } = req.body as {
+          subject: string;
+          verifier: string;
+          weight: number;
+          claim: string;
+        };
 
-      const attestation = repo.create({ subject, verifier, weight, claim });
-      res.status(201).json(attestation);
-    } catch (err) {
-      next(err);
+        const attestation = repo.create({ subject, verifier, weight, claim });
+        res.status(201).json(attestation);
+      } catch (err) {
+        next(err);
+      }
     }
-  });
+  );
 
   // ── DELETE /api/attestations/:id ─────────────────────────────────────
   router.delete('/:id', (req: Request, res: Response, next): void => {
