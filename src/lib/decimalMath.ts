@@ -231,6 +231,58 @@ export function roundToScale(
 }
 
 /**
+ * Compare two decimal strings exactly using BigInt-scaled integer arithmetic.
+ *
+ * IEEE 754 floating-point loses precision beyond ~15 significant digits, so
+ * Number() comparisons on wallet balances can silently permit overdrafts at
+ * scale. This function never converts to float.
+ *
+ * @returns -1 if a < b, 0 if a === b, 1 if a > b.
+ *
+ * @example
+ * compareDecimals("10.50", "10.5")                     // 0
+ * compareDecimals("10000000000000001", "10000000000000002") // -1
+ * compareDecimals("0.000000002", "0.000000001")         // 1
+ */
+export function compareDecimals(a: string, b: string): -1 | 0 | 1 {
+  const pa = parseDecimalString(a)
+  const pb = parseDecimalString(b)
+
+  const scale = Math.max(pa.fracStr.length, pb.fracStr.length)
+  // Pad both to the same scale so BigInt magnitudes are directly comparable.
+  const aInt = BigInt((pa.intStr || '0') + pa.fracStr.padEnd(scale, '0'))
+  const bInt = BigInt((pb.intStr || '0') + pb.fracStr.padEnd(scale, '0'))
+
+  if (pa.negative === pb.negative) {
+    const cmp = aInt > bInt ? 1 : aInt < bInt ? -1 : 0
+    return (pa.negative ? -cmp : cmp) as -1 | 0 | 1
+  }
+  // Different signs — negative is always less, unless both magnitudes are zero.
+  if (aInt === 0n && bInt === 0n) return 0
+  return pa.negative ? -1 : 1
+}
+
+/**
+ * Return true iff value is a valid decimal string representing a number
+ * strictly greater than zero (positive, non-zero, non-negative).
+ *
+ * @example
+ * isValidPositiveDecimal("0.000000001") // true
+ * isValidPositiveDecimal("0")           // false
+ * isValidPositiveDecimal("-1")          // false
+ * isValidPositiveDecimal("abc")         // false
+ */
+export function isValidPositiveDecimal(value: string): boolean {
+  try {
+    const { negative, intStr, fracStr } = parseDecimalString(value)
+    if (negative) return false
+    return BigInt((intStr || '0') + (fracStr || '')) > 0n
+  } catch {
+    return false
+  }
+}
+
+/**
  * Multiply two decimal strings exactly, returning a decimal string.
  *
  * No rounding is applied. The result scale equals the sum of the two
