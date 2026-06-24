@@ -46,6 +46,7 @@ export class MemberService {
    * Allowed after a previous membership was soft-deleted.
    */
   async inviteMember(
+    tenantId: string,
     adminId: string,
     adminEmail: string,
     request: InviteMemberRequest,
@@ -55,6 +56,7 @@ export class MemberService {
     const existing = await this.repo.findActiveByOrgAndUser(orgId, userId)
     if (existing) {
       this.auditLog.logAction(
+        tenantId,
         adminId, adminEmail,
         AuditAction.INVITE_MEMBER,
         userId, email,
@@ -68,6 +70,7 @@ export class MemberService {
     const member = await this.repo.insert(orgId, userId, email, role as MemberRole)
 
     this.auditLog.logAction(
+      tenantId,
       adminId, adminEmail,
       AuditAction.INVITE_MEMBER,
       userId, email,
@@ -90,6 +93,7 @@ export class MemberService {
    * soft-deleted rows.
    */
   async listMembers(
+    tenantId: string,
     adminId: string,
     adminEmail: string,
     orgId: string,
@@ -101,6 +105,7 @@ export class MemberService {
     const offset = pagination.offset ?? 0
 
     this.auditLog.logAction(
+      tenantId,
       adminId, adminEmail,
       AuditAction.LIST_MEMBERS,
       adminId, adminEmail,
@@ -122,6 +127,7 @@ export class MemberService {
   // ── Update role ───────────────────────────────────────────────────────────
 
   async updateMemberRole(
+    tenantId: string,
     adminId: string,
     adminEmail: string,
     request: UpdateMemberRoleRequest,
@@ -138,6 +144,7 @@ export class MemberService {
     if (!updated) throw new Error('Failed to update member role')
 
     this.auditLog.logAction(
+      tenantId,
       adminId, adminEmail,
       AuditAction.UPDATE_MEMBER_ROLE,
       existing.userId, existing.email,
@@ -159,6 +166,7 @@ export class MemberService {
    * The row is retained for audit history and can be restored.
    */
   async deleteMember(
+    tenantId: string,
     adminId: string,
     adminEmail: string,
     request: DeleteMemberRequest,
@@ -168,6 +176,7 @@ export class MemberService {
     const existing = await this.repo.findActiveById(memberId)
     if (!existing) {
       this.auditLog.logAction(
+        tenantId,
         adminId, adminEmail,
         AuditAction.DELETE_MEMBER,
         memberId, 'unknown',
@@ -182,6 +191,7 @@ export class MemberService {
     if (!deleted) throw new Error('Soft-delete failed unexpectedly')
 
     this.auditLog.logAction(
+      tenantId,
       adminId, adminEmail,
       AuditAction.DELETE_MEMBER,
       existing.userId, existing.email,
@@ -200,6 +210,7 @@ export class MemberService {
    * Blocked if another active membership exists for the same (org, user) pair.
    */
   async restoreMember(
+    tenantId: string,
     adminId: string,
     adminEmail: string,
     request: RestoreMemberRequest,
@@ -215,6 +226,7 @@ export class MemberService {
     const conflict = await this.repo.findActiveByOrgAndUser(existing.orgId, existing.userId)
     if (conflict) {
       this.auditLog.logAction(
+        tenantId,
         adminId, adminEmail,
         AuditAction.RESTORE_MEMBER,
         existing.userId, existing.email,
@@ -231,6 +243,7 @@ export class MemberService {
     if (!restored) throw new Error('Restore failed unexpectedly')
 
     this.auditLog.logAction(
+      tenantId,
       adminId, adminEmail,
       AuditAction.RESTORE_MEMBER,
       existing.userId, existing.email,

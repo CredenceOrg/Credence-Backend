@@ -1,0 +1,112 @@
+// proto/credence/v1/attestation.proto
+//
+// AttestationService — internal gRPC contract for querying and creating
+// attestations.
+//
+// PII policy:
+//   - `attester_address` and `subject_address` are public blockchain
+//     addresses — classified PUBLIC.
+//   - `note` may contain free-form text supplied by the attester.  Treat as
+//     SENSITIVE because it could contain PII embedded by callers.
+
+syntax = "proto3";
+
+package credence.v1;
+
+import "credence/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// Attestation represents a single third-party verification record.
+message Attestation {
+  // Unique database identifier.
+  int64 id = 1;
+
+  // Foreign key to the bond that backs this attestation.
+  int64 bond_id = 2;
+
+  // Address of the entity issuing the attestation.
+  string attester_address = 3;
+
+  // Address of the entity being attested.
+  string subject_address = 4;
+
+  // Trust score assigned by the attester, in the range [0, 100].
+  uint32 score = 5;
+
+  // Optional free-form note.  May contain PII — treat as SENSITIVE.
+  // Field 6 — do not reuse.
+  string note = 6;
+
+  // Timestamp when the attestation was created.
+  google.protobuf.Timestamp created_at = 7;
+}
+
+// ListAttestationsRequest is the input to AttestationService.ListAttestations.
+message ListAttestationsRequest {
+  // Subject address to filter by.  Must be non-empty.
+  string subject_address = 1;
+
+  // Pagination parameters.
+  PageRequest page = 2;
+}
+
+// ListAttestationsResponse wraps the paginated result set.
+message ListAttestationsResponse {
+  // Subject address echoed from the request.
+  string subject_address = 1;
+
+  // Attestations for the requested page.
+  repeated Attestation attestations = 2;
+
+  // Pagination metadata.
+  PageResponse page = 3;
+}
+
+// CreateAttestationRequest is the input to AttestationService.CreateAttestation.
+message CreateAttestationRequest {
+  // Bond ID that backs this attestation.
+  int64 bond_id = 1;
+
+  // Address of the attesting entity.
+  string attester_address = 2;
+
+  // Address of the subject being attested.
+  string subject_address = 3;
+
+  // Optional key for the attestation value (max 128 chars).
+  string key = 4;
+
+  // Attestation value (max 2048 chars).
+  string value = 5;
+
+  // Trust score assigned by the attester, in the range [0, 100].
+  // Defaults to 100 when omitted.
+  uint32 score = 6;
+}
+
+// CreateAttestationResponse wraps the newly created attestation.
+message CreateAttestationResponse {
+  Attestation attestation = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// AttestationService exposes attestation queries and mutations for internal
+// service-to-service communication.  Callers must present a valid
+// shared-secret in the `x-credence-internal-token` metadata header.
+service AttestationService {
+  // ListAttestations returns a paginated list of attestations for a subject.
+  rpc ListAttestations(ListAttestationsRequest) returns (ListAttestationsResponse);
+
+  // CreateAttestation persists a new attestation and emits an outbox event.
+  // Returns ALREADY_EXISTS on duplicate (same bond_id + attester + subject).
+  rpc CreateAttestation(CreateAttestationRequest) returns (CreateAttestationResponse);
+}

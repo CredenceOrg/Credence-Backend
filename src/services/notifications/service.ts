@@ -6,6 +6,8 @@ import type {
   NotificationStore,
 } from './types.js'
 import { IdempotentEmailDeliveryService } from './delivery.js'
+import { MemoryNotificationDlqStore } from './dlq.js'
+import { NotificationProviderHealthTracker } from './health.js'
 import { NotificationMetricsCollector } from './metrics.js'
 
 /**
@@ -19,9 +21,10 @@ import { NotificationMetricsCollector } from './metrics.js'
  * - Rate limiting per provider
  */
 export class NotificationService {
-  private deliveryQueue: Promise<void> = Promise.resolve()
   private rateLimitMap = new Map<string, number>()
   private metricsCollector: NotificationMetricsCollector
+  private readonly healthTracker = new NotificationProviderHealthTracker()
+  private readonly dlqStore = new MemoryNotificationDlqStore()
 
   constructor(
     private readonly store: NotificationStore,
@@ -40,16 +43,13 @@ export class NotificationService {
     options?: DeliveryOptions & { providerName?: string }
   ): Promise<NotificationDeliveryResult> {
     const providerName = options?.providerName ?? this.defaultProvider
-    const provider = this.providers.get(providerName)
+    const providerChain = this.getOrderedProviders(providerName)
 
-    if (!provider) {
+    if (providerChain.length === 0) {
       throw new Error(`Email provider not found: ${providerName}`)
     }
 
-    // Queue delivery to prevent overwhelming provider
-    const result = await this.deliverWithRateLimit(providerName, () =>
-      this.deliverNotification(notification, provider, options)
-    )
+    const result = await this.deliverNotification(notification, providerChain, options)
 
     // Record metrics
     await this.metricsCollector.recordDelivery(result)
@@ -89,11 +89,43 @@ export class NotificationService {
    */
   private async deliverNotification(
     notification: EmailNotification,
-    provider: EmailProvider,
+    providers: EmailProvider[],
     options?: DeliveryOptions
   ): Promise<NotificationDeliveryResult> {
-    const deliveryService = new IdempotentEmailDeliveryService(this.store, provider)
+    const rateLimitedProviders = providers.map(provider => ({
+      ...provider,
+      send: async (
+        queuedNotification: EmailNotification,
+        sendOptions?: { timeout?: number; idempotencyKey?: string; attemptNumber?: number }
+      ) =>
+        this.deliverWithRateLimit(provider.name, () =>
+          provider.send(queuedNotification, sendOptions)
+        ),
+    }))
+
+    const deliveryService = new IdempotentEmailDeliveryService(
+      this.store,
+      rateLimitedProviders,
+      {
+        dlqStore: this.dlqStore,
+        healthTracker: this.healthTracker,
+      }
+    )
     return deliveryService.deliver(notification, options)
+  }
+
+  private getOrderedProviders(primaryProviderName: string): EmailProvider[] {
+    const providers = Array.from(this.providers.values())
+    const primaryProvider = this.providers.get(primaryProviderName)
+
+    if (!primaryProvider) {
+      return []
+    }
+
+    return [
+      primaryProvider,
+      ...providers.filter(provider => provider.name !== primaryProvider.name),
+    ]
   }
 
   /**

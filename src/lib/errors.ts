@@ -1,45 +1,92 @@
-/**
-/**
- * Standard machine-readable error codes for the backend.
- * Use snake_case and document naming patterns here.
- */
-export enum ErrorCode {
-  VALIDATION_FAILED = 'validation_failed',
-  INVALID_ADDRESS = 'invalid_address',
-  INSUFFICIENT_FUNDS = 'insufficient_funds',
-  UNAUTHORIZED = 'unauthorized',
-  FORBIDDEN = 'forbidden',
-  NOT_FOUND = 'not_found',
-  BATCH_SIZE_EXCEEDED = 'batch_size_exceeded',
-  BATCH_SIZE_TOO_SMALL = 'batch_size_too_small',
-  INTERNAL_SERVER_ERROR = 'internal_server_error',
-  SERVICE_UNAVAILABLE = 'service_unavailable',
+import {
+  ErrorCode as ErrorCodeRegistry,
+  getErrorCatalogEntry,
+  getHttpStatus,
+  isErrorCode,
+  type ErrorCode as ErrorCodeValue,
+} from './errorCatalog.js'
+
+export {
+  DEFAULT_ERROR_LOCALE,
+  ERROR_CATALOG,
+  ERROR_CATALOG_BY_CODE,
+  ERROR_CODE_DEPRECATIONS,
+  ERROR_LOCALIZATION_CATALOG,
+  getErrorCatalogEntry,
+  getErrorCatalogEntryByCode,
+  getLocalizedErrorMessage,
+  isErrorCode,
+} from './errorCatalog.js'
+export type {
+  ErrorCatalogEntry,
+  ErrorCatalogKey,
+  ErrorCategory,
+  ErrorCodeDeprecation,
+  ErrorLocale,
+} from './errorCatalog.js'
+export const ErrorCode = ErrorCodeRegistry
+export type ErrorCode = ErrorCodeValue
+
+export interface AppErrorJsonOptions {
+  /** Include the original error message instead of the catalog default message. */
+  readonly exposeMessage?: boolean
+  /** Include structured details supplied by the caller. */
+  readonly exposeDetails?: boolean
 }
 
 /**
  * Base class for all domain and API errors.
- * Ensures consistent structure: { error, code, details? }
+ *
+ * The `code` must come from the centralized error catalog. The catalog's HTTP
+ * status is treated as canonical; an explicitly supplied status must match it.
  */
 export class AppError extends Error {
+  public readonly code: ErrorCodeValue
+  public readonly status: number
+  public readonly details?: unknown
+
   constructor(
-    public readonly message: string,
-    public readonly code: ErrorCode = ErrorCode.INTERNAL_SERVER_ERROR,
-    public readonly status: number = 500,
-    public readonly details?: any
+    message: string,
+    code: ErrorCodeValue = ErrorCodeRegistry.INTERNAL_SERVER_ERROR,
+    status?: number,
+    details?: unknown,
+    options?: ErrorOptions
   ) {
-    super(message)
+    if (!isErrorCode(code)) {
+      throw new TypeError(`Unknown error code: ${String(code)}`)
+    }
+
+    const catalogEntry = getErrorCatalogEntry(code)
+    if (status !== undefined && status !== catalogEntry.httpStatus) {
+      throw new TypeError(
+        `HTTP status ${status} does not match catalog status ${catalogEntry.httpStatus} for error code ${code}`
+      )
+    }
+
+    super(message, options)
     this.name = this.constructor.name
-    // @ts-ignore - captureStackTrace is a Node-specific extension
-    if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, this.constructor)
+    this.code = code
+    this.status = getHttpStatus(catalogEntry)
+    this.details = details
+
+    const captureStackTrace = (Error as ErrorConstructor & {
+      captureStackTrace?: (targetObject: object, constructorOpt?: Function) => void
+    }).captureStackTrace
+
+    if (captureStackTrace) {
+      captureStackTrace(this, this.constructor)
     }
   }
 
-  toJSON() {
+  toJSON(options: AppErrorJsonOptions = {}) {
+    const { exposeMessage = true, exposeDetails = true } = options
+    const catalogEntry = getErrorCatalogEntry(this.code)
+
     return {
-      error: this.message,
+      error: exposeMessage ? this.message : catalogEntry.defaultMessage,
       code: this.code,
-      ...(this.details ? { details: this.details } : {}),
+      error_code: this.code,
+      ...(exposeDetails && this.details !== undefined ? { details: this.details } : {}),
     }
   }
 }
@@ -48,8 +95,11 @@ export class AppError extends Error {
  * Specific error for validation failures (e.g. Zod).
  */
 export class ValidationError extends AppError {
-  constructor(message: string, details?: any) {
-    super(message, ErrorCode.VALIDATION_FAILED, 400, details)
+  constructor(
+    message: string = getErrorCatalogEntry(ErrorCodeRegistry.VALIDATION_FAILED).defaultMessage,
+    details?: unknown
+  ) {
+    super(message, ErrorCodeRegistry.VALIDATION_FAILED, undefined, details)
   }
 }
 
@@ -59,7 +109,7 @@ export class ValidationError extends AppError {
 export class NotFoundError extends AppError {
   constructor(resource: string, id?: string | number) {
     const message = id ? `${resource} with ID ${id} not found` : `${resource} not found`
-    super(message, ErrorCode.NOT_FOUND, 404)
+    super(message, ErrorCodeRegistry.NOT_FOUND)
   }
 }
 
@@ -67,8 +117,8 @@ export class NotFoundError extends AppError {
  * Specific error for authentication failures.
  */
 export class UnauthorizedError extends AppError {
-  constructor(message: string = 'Unauthorized access') {
-    super(message, ErrorCode.UNAUTHORIZED, 401)
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.UNAUTHORIZED).defaultMessage) {
+    super(message, ErrorCodeRegistry.UNAUTHORIZED)
   }
 }
 
@@ -76,8 +126,8 @@ export class UnauthorizedError extends AppError {
  * Specific error for permission/scope failures.
  */
 export class ForbiddenError extends AppError {
-  constructor(message: string = 'Forbidden access') {
-    super(message, ErrorCode.FORBIDDEN, 403)
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.FORBIDDEN).defaultMessage) {
+    super(message, ErrorCodeRegistry.FORBIDDEN)
   }
 }
 
@@ -85,7 +135,7 @@ export class ForbiddenError extends AppError {
  * Specific error for unavailable services.
  */
 export class ServiceUnavailableError extends AppError {
-  constructor(message: string = 'Service temporarily unavailable') {
-    super(message, ErrorCode.SERVICE_UNAVAILABLE, 503)
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.SERVICE_UNAVAILABLE).defaultMessage) {
+    super(message, ErrorCodeRegistry.SERVICE_UNAVAILABLE)
   }
 }

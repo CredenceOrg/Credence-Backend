@@ -4,6 +4,7 @@ import type {
   ExportWorkerOptions,
   ExportWorkerResult,
 } from './exportTypes.js'
+export type { ExportWorkerOptions, ExportWorkerResult } from './exportTypes.js'
 
 export class ExportWorker {
   private readonly batchSize: number

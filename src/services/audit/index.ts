@@ -8,14 +8,21 @@ import type { AuditLogEntry, AuditLogFilters, AuditLogInput, AuditStatus } from 
 import { AuditAction } from './types.js'
 
 /**
- * Audit log service for tracking admin actions
- * In production, this would write to a database or centralized logging system
+ * Audit log service for tracking admin actions.
+ *
+ * All entries are hash-chained: each row stores the SHA-256 of the preceding row
+ * so that any tampering (mutation or deletion) is detectable by walking the chain.
+ *
+ * In production, this would write to a database or centralized logging system.
  */
 export class AuditLogService {
-  constructor(private readonly repository: AuditLogRepository) {}
+  constructor(private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository()) {}
 
   /**
-   * Log an admin action
+   * Log an admin action.
+   *
+   * The underlying repository computes the hash chain (prev_hash + row_hash)
+   * inside the same transaction as the INSERT, so the chain is always consistent.
    * 
    * @param tenantId - Tenant ID for multi-tenant isolation (required)
    * @param adminId - ID of the admin performing the action
@@ -27,10 +34,11 @@ export class AuditLogService {
    * @param status - Whether the action succeeded or failed
    * @param errorMessage - Error message if action failed
    * @param ipAddress - IP address of the requester
-   * @returns The created audit log entry
+   * @returns The created audit log entry (including prevHash and rowHash)
    */
   async logAction(
-    inputOrActorId: AuditLogInput | string,
+    inputOrTenantId: AuditLogInput | string,
+    actorId?: string,
     actorEmail?: string,
     action?: AuditAction | string,
     targetUserId?: string,
@@ -40,11 +48,11 @@ export class AuditLogService {
     errorMessage?: string,
     ipAddress?: string,
   ): Promise<AuditLogEntry> {
-    if (typeof inputOrActorId !== 'string') {
-      return this.repository.append(inputOrActorId)
+    if (typeof inputOrTenantId !== 'string') {
+      return this.repository.append(inputOrTenantId)
     }
 
-    const actorId = inputOrActorId
+    const tenantId = inputOrTenantId
     const effectiveAction = action ?? 'UNKNOWN_ACTION'
     const resourceType =
       effectiveAction === AuditAction.LIST_USERS || effectiveAction === AuditAction.EXPORT_AUDIT_LOGS
@@ -57,11 +65,12 @@ export class AuditLogService {
     }
 
     return this.repository.append({
-      actorId,
+      tenantId,
+      actorId: actorId ?? 'unknown',
       actorEmail: actorEmail ?? 'unknown@unknown',
       action: effectiveAction,
       resourceType,
-      resourceId: targetUserId ?? actorId,
+      resourceId: targetUserId ?? actorId ?? 'unknown',
       details: mappedDetails,
       status,
       errorMessage,
@@ -76,16 +85,26 @@ export class AuditLogService {
    * 
    * @param filters - Optional filters for action, adminId, targetUserId, etc.
    * @param limit - Maximum number of logs to return (default: 100)
-   * @param offset - Pagination offset (default: 0)
+   * @param cursor - Pagination cursor
    * @param options - Additional options for tenant scoping
-   * @returns Array of matching audit log entries and total count
+   * @returns Array of matching audit log entries and pagination metadata
    */
   async getLogs(
-    filters?: AuditLogFilters,
+    tenantId: string | undefined,
+    filters: AuditLogFilters = {},
     limit = 100,
-    offset = 0
-  ): Promise<{ logs: AuditLogEntry[]; total: number }> {
-    return this.repository.query(filters, limit, offset)
+    cursor?: string,
+    options?: { allowSuperScope?: boolean }
+  ): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
+    // SECURITY: Enforce tenant scoping - deny by default
+    if (!tenantId && !options?.allowSuperScope) {
+      throw new Error(
+        'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
+      )
+    }
+
+    const effectiveTenantId = options?.allowSuperScope ? (filters.tenantId || tenantId) : tenantId
+    return this.repository.query({ ...filters, tenantId: effectiveTenantId }, limit, cursor)
   }
 
   /**
@@ -133,7 +152,7 @@ export class AuditLogService {
     const startMs = startDate.getTime()
     const endMs = endDate.getTime()
 
-    const logs = await this.getAllLogs()
+    const { logs } = await this.getLogs(tenantId, {}, Number.MAX_SAFE_INTEGER, undefined, options)
     for (const log of logs) {
       const logTime = new Date(log.timestamp).getTime()
       

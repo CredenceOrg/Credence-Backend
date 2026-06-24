@@ -91,6 +91,8 @@ export interface NotificationDeliveryResult {
   attempts: number
   /** Idempotency key used. */
   idempotencyKey: string
+  /** Provider that ultimately delivered or failed the notification. */
+  provider?: string
 }
 
 /**
@@ -115,10 +117,14 @@ export interface NotificationMetrics {
 export interface DeliveryOptions {
   /** Maximum retry attempts (default: 3). */
   maxRetries?: number
+  /** Maximum provider attempts across retries/failovers. */
+  maxAttempts?: number
   /** Initial retry delay in ms (default: 1000). */
   initialDelay?: number
   /** Backoff multiplier (default: 2). */
   backoffMultiplier?: number
+  /** Jitter factor applied to retry delays (default: 0.2). */
+  jitterFactor?: number
   /** Request timeout in ms (default: 5000). */
   timeout?: number
   /** Email provider to use (default: 'sendgrid'). */
@@ -134,8 +140,72 @@ export interface EmailProvider {
   /** Send email and return provider response ID. */
   send(
     notification: EmailNotification,
-    options?: { timeout?: number }
+    options?: {
+      timeout?: number
+      idempotencyKey?: string
+      attemptNumber?: number
+    }
   ): Promise<{ id: string; statusCode: number }>
+}
+
+/**
+ * Health snapshot for a notification provider.
+ */
+export interface NotificationProviderHealth {
+  /** Provider name. */
+  provider: string
+  /** Consecutive transient failures observed for this provider. */
+  consecutiveFailures: number
+  /** Timestamp until which the provider is considered unhealthy. */
+  unhealthyUntil?: Date
+}
+
+/**
+ * Delivery attempt captured in the notification DLQ.
+ */
+export interface NotificationDlqAttempt {
+  /** Provider name used for this attempt. */
+  provider: string
+  /** 1-based attempt number. */
+  attemptNumber: number
+  /** Idempotency key used for the provider call. */
+  idempotencyKey: string
+  /** Error message from the provider. */
+  error: string
+  /** Optional status code extracted from the failure. */
+  statusCode?: number
+  /** Whether the failure was considered transient. */
+  transient: boolean
+  /** Whether the result may still complete out-of-band. */
+  ambiguous: boolean
+}
+
+/**
+ * Dead-letter entry for exhausted notification delivery.
+ */
+export interface NotificationDlqEntry {
+  /** DLQ entry identifier. */
+  id: string
+  /** Notification that could not be safely delivered. */
+  notification: EmailNotification
+  /** Ordered providers considered for this delivery. */
+  providers: string[]
+  /** Recorded attempts made before DLQ. */
+  attempts: NotificationDlqAttempt[]
+  /** Final failure reason. */
+  failureReason: string
+  /** Timestamp when the message entered the DLQ. */
+  failedAt: string
+}
+
+/**
+ * Store for notification DLQ entries.
+ */
+export interface NotificationDlqStore {
+  /** Push a failed notification into the DLQ. */
+  push(entry: NotificationDlqEntry): Promise<void>
+  /** List DLQ entries. */
+  list(): Promise<NotificationDlqEntry[]>
 }
 
 /**

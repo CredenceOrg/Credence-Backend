@@ -59,9 +59,10 @@ Stores domain events with metadata:
 - `aggregate_id`: Aggregate instance identifier
 - `event_type`: Event type (e.g., "bond.created")
 - `payload`: Event data as JSONB
-- `status`: Processing status (pending, processing, published, failed)
+- `status`: Processing status (pending, processing, published, failed, dead_letter)
 - `retry_count`: Number of publish attempts
 - `max_retries`: Maximum retry attempts before marking as failed
+ - `next_attempt_at`: When the event becomes eligible for the next retry (used for backoff)
 - `created_at`: Event creation timestamp
 - `processed_at`: When event was published or failed
 - `error_message`: Last error message if failed
@@ -86,6 +87,7 @@ Background worker that polls for pending events and publishes them:
 - Processes events in batches (default: 100)
 - Maintains ordering per aggregate
 - Retries failed publishes with configurable max retries
+ - Retries failed publishes with configurable max retries and exponential backoff
 - Cleans up old events periodically
 
 ### 4. OutboxEventEmitter
@@ -164,30 +166,27 @@ await publisher.start()
 
 ### 3. Configuration
 
-Add to `.env`:
+The `OutboxPublisher` accepts an optional config object:
 
-```env
-OUTBOX_ENABLED=true
-OUTBOX_POLL_INTERVAL_MS=1000
-OUTBOX_BATCH_SIZE=100
-OUTBOX_PUBLISHED_RETENTION_DAYS=7
-OUTBOX_FAILED_RETENTION_DAYS=30
-OUTBOX_CLEANUP_INTERVAL_MS=3600000
+```typescript
+const publisher = new OutboxPublisher(
+  new WebhookEventPublisher(webhookService),
+  {
+    pollIntervalMs: 1000,
+    batchSize: 100,
+    leaseSeconds: 300,           // Lease duration (seconds) for claimed events
+    heartbeatIntervalMs: 150000, // Heartbeat to renew lease (default: leaseSeconds * 1000 / 2)
+    consumerId: 'my-publisher-1', // Unique ID for this instance (auto-generated if omitted)
+    cleanup: {
+      publishedRetentionDays: 7,
+      failedRetentionDays: 30
+    },
+    cleanupIntervalMs: 3600000 // 1 hour
+  }
+)
 ```
 
-## Guarantees
-
-### At-Least-Once Delivery
-
-Events are guaranteed to be published at least once. In rare cases (e.g., publisher crashes after publishing but before marking as published), an event may be published multiple times. Consumers should be idempotent.
-
-### Ordering Per Aggregate
-
-Events for the same aggregate (e.g., same bond ID) are processed in order. Events for different aggregates may be processed concurrently.
-
-### Durability
-
-Events are persisted in the database before the transaction commits. If the application crashes, events will be published when the publisher restarts.
+You can also inject configuration via environment variables and build the config object in your app startup.
 
 ## Cleanup Policy
 
@@ -195,6 +194,23 @@ Old events are automatically cleaned up based on retention policy:
 
 - **Published events**: Deleted after 7 days (configurable)
 - **Failed events**: Deleted after 30 days (configurable)
+ - **Dead-letter**: Events moved to `dead_letter` after exceeding `max_retries` are preserved until cleanup and can be inspected or reprocessed manually.
+
+Backoff and dead-letter
+
+- When a publish attempt fails, the repository increments `retry_count` and sets `next_attempt_at` to implement exponential backoff. The formula is:
+
+  next_attempt_at = NOW() + 2^(retry_count + 1) seconds
+
+  (e.g., first retry waits 2s, next 4s, then 8s, etc.)
+
+- When `retry_count + 1 >= max_retries`, the event transitions to `dead_letter` (terminal state) and `processed_at` is set.
+
+- Claiming (`claimEvents`) will only select events whose `next_attempt_at` is NULL or <= NOW(), ensuring not-yet-due events are skipped. Ordering per-aggregate is preserved among due events.
+
+Metrics
+
+- When an event reaches `dead_letter`, the publisher emits a Prometheus counter `outbox_dead_letter_total{error_code}` if `prom-client` is available.
 
 This prevents unbounded table growth while maintaining audit trail for recent events.
 

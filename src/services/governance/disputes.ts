@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import type { Dispute, DisputeInput } from './types.js'
+import type { Dispute, DisputeInput, DisputeStatus } from './types.js'
+import { tryTransition } from './disputeStateMachine.js'
 
 const store = new Map<string, Dispute>()
 
@@ -49,7 +50,7 @@ export function validateDisputeInput(input: DisputeInput): string[] {
   return errors
 }
 
-export function submitDispute(input: DisputeInput): Dispute {
+export function submitDispute(input: DisputeInput, tenantId: string): Dispute {
   const errors = validateDisputeInput(input)
   if (errors.length > 0) {
     throw new Error(`Invalid dispute: ${errors.join('; ')}`)
@@ -58,6 +59,7 @@ export function submitDispute(input: DisputeInput): Dispute {
   const now = new Date()
   const dispute: Dispute = {
     id: randomUUID(),
+    tenantId,
     filedBy: input.filedBy,
     respondent: input.respondent,
     reason: input.reason,
@@ -83,14 +85,17 @@ export function isExpired(dispute: Dispute): boolean {
 export function resolveDispute(id: string, resolution: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status === 'resolved') throw new Error('Dispute already resolved')
-  if (dispute.status === 'dismissed') throw new Error('Cannot resolve a dismissed dispute')
   if (isExpired(dispute)) {
     dispute.status = 'expired'
     throw new Error('Cannot resolve an expired dispute')
   }
   if (!resolution || resolution.trim().length === 0) {
     throw new Error('Resolution text is required')
+  }
+
+  const transition = tryTransition(dispute.status, 'resolved')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'resolved'
@@ -101,10 +106,13 @@ export function resolveDispute(id: string, resolution: string): Dispute {
 export function dismissDispute(id: string, reason: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status === 'resolved') throw new Error('Cannot dismiss a resolved dispute')
-  if (dispute.status === 'dismissed') throw new Error('Dispute already dismissed')
   if (!reason || reason.trim().length === 0) {
     throw new Error('Dismiss reason is required')
+  }
+
+  const transition = tryTransition(dispute.status, 'dismissed')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'dismissed'
@@ -115,10 +123,66 @@ export function dismissDispute(id: string, reason: string): Dispute {
 export function markUnderReview(id: string): Dispute {
   const dispute = store.get(id)
   if (!dispute) throw new Error(`Dispute ${id} not found`)
-  if (dispute.status !== 'pending') {
-    throw new Error(`Cannot review dispute in "${dispute.status}" state`)
+
+  const transition = tryTransition(dispute.status, 'under_review')
+  if (!transition.success) {
+    throw new Error(transition.error)
   }
 
   dispute.status = 'under_review'
   return dispute
+}
+
+export interface ListDisputesFilter {
+  tenantId: string
+  status?: DisputeStatus
+}
+
+export interface ListDisputesPagination {
+  limit: number
+  cursor?: { t: string; i: string }
+}
+
+export interface ListDisputesResult {
+  data: Dispute[]
+  hasMore: boolean
+}
+
+export function listDisputes(filter: ListDisputesFilter, pagination: ListDisputesPagination): ListDisputesResult {
+  let results = Array.from(store.values()).filter(d => d.tenantId === filter.tenantId)
+  
+  if (filter.status) {
+    results = results.filter(d => d.status === filter.status)
+  }
+
+  // Stable ordering by createdAt (descending), then by id (descending)
+  results.sort((a, b) => {
+    const timeDiff = b.createdAt.getTime() - a.createdAt.getTime()
+    if (timeDiff !== 0) return timeDiff
+    return b.id.localeCompare(a.id)
+  })
+
+  if (pagination.cursor) {
+    const cursorTimeMs = new Date(pagination.cursor.t).getTime()
+    const cursorId = pagination.cursor.i
+
+    results = results.filter(d => {
+      const timeMs = d.createdAt.getTime()
+      if (timeMs < cursorTimeMs) return true
+      if (timeMs === cursorTimeMs && d.id < cursorId) return true
+      return false
+    })
+  }
+
+  // take limit + 1
+  const limited = results.slice(0, pagination.limit + 1)
+  const hasMore = limited.length > pagination.limit
+  if (hasMore) {
+    limited.pop()
+  }
+
+  return {
+    data: limited,
+    hasMore
+  }
 }

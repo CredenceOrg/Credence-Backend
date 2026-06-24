@@ -1,0 +1,9 @@
+
+ RUN  v4.1.9 C:/Users/ADMIN/Desktop/lekan-drips/Credence-Backend
+
+No test files found, exiting with code 1
+
+filter: tests/services/impersonation.test.ts
+include: src/**/*.test.ts, src/**/*.spec.ts, src/**/__tests__/**/*.ts, tests/integration/**/*.test.ts, tests/routes/**/*.test.ts, monitoring/**/*.test.ts
+exclude:  **/node_modules/**, **/.git/**
+

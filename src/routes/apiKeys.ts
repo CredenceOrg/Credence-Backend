@@ -1,170 +1,142 @@
-import { Router, type Request, type Response } from 'express'
-import { generateApiKey, listApiKeys, revokeApiKey, rotateApiKey, ApiKeyScope } from '../services/apiKeys.js'
-import { requireApiKey, requireScope } from '../middleware/apiKey.js'
-import { auditLogService, AuditAction } from '../services/audit/index.js'
+/**
+ * @module routes/apiKeys
+ *
+ * Integration API key management endpoints.
+ *
+ * Routes (all require Bearer auth):
+ *   POST   /api/integrations/keys            – Issue a new key
+ *   GET    /api/integrations/keys            – List keys for the authenticated user
+ *   POST   /api/integrations/keys/:id/rotate – Rotate a key (safe invalidation)
+ *   DELETE /api/integrations/keys/:id        – Permanently revoke a key
+ */
 
-const router = Router()
+import { Router, type Request, type Response, type NextFunction } from 'express'
+import { requireUserAuth, UserRole, type AuthenticatedRequest } from '../middleware/auth.js'
+import { InMemoryApiKeyRepository } from '../repositories/apiKeyRepository.js'
+import { ApiKeyRotationService } from '../services/apiKeyRotationService.js'
+import { auditLogService } from '../services/audit/index.js'
+import type { KeyScope, SubscriptionTier } from '../services/apiKeys.js'
+import { ValidationError, NotFoundError, ForbiddenError } from '../lib/errors.js'
+
+const VALID_SCOPES: KeyScope[] = ['read', 'full']
+const VALID_TIERS: SubscriptionTier[] = ['free', 'pro', 'enterprise']
 
 /**
- * POST /api/api-keys
- * 
- * Create a new API key with specified scopes.
- * Requires authentication and audit logging.
+ * Create and return an Express Router for integration API key management.
+ *
+ * Accepts optional pre-built dependencies for testability — production callers
+ * can omit them and rely on the shared singletons.
  */
-router.post(
-  '/',
-  requireApiKey(),
-  requireScope(ApiKeyScope.BOND_WRITE), // Require at least one scope to create keys
-  async (req: Request, res: Response) => {
+export function createApiKeyRouter(
+  repo = new InMemoryApiKeyRepository(),
+  rotationService = new ApiKeyRotationService(repo, auditLogService),
+): Router {
+  const router = Router()
+
+  // ── POST /api/integrations/keys ─────────────────────────────────────────
+  // Issue a new integration API key for the authenticated user.
+  router.post('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      const { ownerId, scopes, tier } = req.body as {
-        ownerId?: string
-        scopes?: ApiKeyScope[]
-        tier?: 'free' | 'pro' | 'enterprise'
+      const { user } = req as AuthenticatedRequest
+
+      const rawScope = req.body?.scope as string | undefined
+      const rawTier = req.body?.tier as string | undefined
+
+      if (rawScope !== undefined && !VALID_SCOPES.includes(rawScope as KeyScope)) {
+        throw new ValidationError(`Invalid scope. Allowed values: ${VALID_SCOPES.join(', ')}`)
+      }
+      if (rawTier !== undefined && !VALID_TIERS.includes(rawTier as SubscriptionTier)) {
+        throw new ValidationError(`Invalid tier. Allowed values: ${VALID_TIERS.join(', ')}`)
       }
 
-      if (!ownerId) {
-        res.status(400).json({ error: 'ownerId is required' })
-        return
-      }
+      const result = await rotationService.issueKey(
+        user!.id,
+        user!.email,
+        (rawScope as KeyScope) ?? 'read',
+        (rawTier as SubscriptionTier) ?? 'free',
+        req.ip,
+      )
 
-      // Default to empty scopes (least privilege) if not provided
-      const keyScopes = scopes || []
-      const keyTier = tier || 'free'
-
-      // Validate scopes
-      const validScopes = Object.values(ApiKeyScope)
-      const invalidScopes = keyScopes.filter((s) => !validScopes.includes(s))
-      if (invalidScopes.length > 0) {
-        res.status(400).json({ error: `Invalid scopes: ${invalidScopes.join(', ')}` })
-        return
-      }
-
-      const result = await generateApiKey(ownerId, keyScopes, keyTier)
-
-      // Log the key creation in audit log
-      await auditLogService.logAction({
-        actorId: req.apiKeyRecord?.ownerId || 'system',
-        actorEmail: 'api-key-service',
-        action: AuditAction.CREATE_API_KEY,
-        resourceType: 'api_key',
-        resourceId: result.id,
-        details: {
-          scopes: keyScopes,
-          tier: keyTier,
-          prefix: result.prefix,
-        },
-        status: 'success',
-      })
-
-      res.status(201).json(result)
-    } catch (error) {
-      console.error('Error creating API key:', error)
-      res.status(500).json({ error: 'Failed to create API key' })
+      res.status(201).json({ success: true, data: result })
+    } catch (err) {
+      next(err)
     }
-  }
-)
+  })
 
-/**
- * GET /api/api-keys/:ownerId
- * 
- * List all API keys for an owner.
- * Requires authentication.
- */
-router.get(
-  '/:ownerId',
-  requireApiKey(),
-  async (req: Request, res: Response) => {
-    try {
-      const { ownerId } = req.params
-      const keys = await listApiKeys(ownerId)
-      res.json(keys)
-    } catch (error) {
-      console.error('Error listing API keys:', error)
-      res.status(500).json({ error: 'Failed to list API keys' })
-    }
-  }
-)
+  // ── GET /api/integrations/keys ──────────────────────────────────────────
+  // List all API keys owned by the authenticated user.
+  router.get('/', requireUserAuth, (req: Request, res: Response): void => {
+    const { user } = req as AuthenticatedRequest
+    const keys = rotationService.listKeys(user!.id)
+    res.status(200).json({ success: true, data: keys })
+  })
 
-/**
- * DELETE /api/api-keys/:id
- * 
- * Revoke an API key.
- * Requires authentication and audit logging.
- */
-router.delete(
-  '/:id',
-  requireApiKey(),
-  async (req: Request, res: Response) => {
+  // ── POST /api/integrations/keys/:id/rotate ──────────────────────────────
+  // Rotate a key: revoke the existing one and issue a replacement.
+  router.post('/:id/rotate', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const { user } = req as AuthenticatedRequest
       const { id } = req.params
-      const success = await revokeApiKey(id)
 
-      if (!success) {
-        res.status(404).json({ error: 'API key not found' })
+      const existing = repo.findById(id)
+      if (!existing) {
+        throw new NotFoundError('API key', id)
+      }
+
+      // Admins may rotate any key; regular users are restricted to their own.
+      const isAdmin = user!.role === UserRole.ADMIN || user!.role === UserRole.SUPER_ADMIN
+      if (!isAdmin && existing.ownerId !== user!.id) {
+        throw new ForbiddenError('You do not have permission to rotate this API key')
+      }
+
+      const newKey = await rotationService.rotateKey(id, user!.id, user!.email, req.ip)
+
+      if (!newKey) {
+        // Key existed but was already revoked — conflict.
+        res.status(409).json({
+          error: 'Conflict',
+          message: 'API key is already revoked and cannot be rotated',
+        })
         return
       }
 
-      // Log the key revocation in audit log
-      await auditLogService.logAction({
-        actorId: req.apiKeyRecord?.ownerId || 'system',
-        actorEmail: 'api-key-service',
-        action: AuditAction.REVOKE_API_KEY,
-        resourceType: 'api_key',
-        resourceId: id,
-        details: {},
-        status: 'success',
+      res.status(200).json({
+        success: true,
+        message: 'API key rotated. Store the new key securely — it will not be shown again.',
+        data: newKey,
       })
-
-      res.status(204).send()
-    } catch (error) {
-      console.error('Error revoking API key:', error)
-      res.status(500).json({ error: 'Failed to revoke API key' })
+    } catch (err) {
+      next(err)
     }
-  }
-)
+  })
 
-/**
- * POST /api/api-keys/:id/rotate
- * 
- * Rotate an API key (revoke old, issue new with same scopes).
- * Requires authentication and audit logging.
- */
-router.post(
-  '/:id/rotate',
-  requireApiKey(),
-  async (req: Request, res: Response) => {
+  // ── DELETE /api/integrations/keys/:id ───────────────────────────────────
+  // Permanently revoke an API key.
+  router.delete('/:id', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
+      const { user } = req as AuthenticatedRequest
       const { id } = req.params
-      const result = await rotateApiKey(id)
 
-      if (!result) {
-        res.status(404).json({ error: 'API key not found or already revoked' })
-        return
+      const existing = repo.findById(id)
+      if (!existing) {
+        throw new NotFoundError('API key', id)
       }
 
-      // Log the key rotation in audit log
-      await auditLogService.logAction({
-        actorId: req.apiKeyRecord?.ownerId || 'system',
-        actorEmail: 'api-key-service',
-        action: AuditAction.CREATE_API_KEY, // Reuse CREATE_API_KEY for rotation
-        resourceType: 'api_key',
-        resourceId: result.id,
-        details: {
-          rotatedFrom: id,
-          scopes: result.scopes,
-          tier: result.tier,
-          prefix: result.prefix,
-        },
-        status: 'success',
-      })
+      const isAdmin = user!.role === UserRole.ADMIN || user!.role === UserRole.SUPER_ADMIN
+      if (!isAdmin && existing.ownerId !== user!.id) {
+        throw new ForbiddenError('You do not have permission to revoke this API key')
+      }
 
-      res.status(201).json(result)
-    } catch (error) {
-      console.error('Error rotating API key:', error)
-      res.status(500).json({ error: 'Failed to rotate API key' })
+      const revoked = await rotationService.revokeKey(id, user!.id, user!.email, req.ip)
+      if (!revoked) {
+        throw new NotFoundError('API key', id)
+      }
+
+      res.status(200).json({ success: true, message: 'API key revoked successfully' })
+    } catch (err) {
+      next(err)
     }
-  }
-)
+  })
 
-export default router
+  return router
+}

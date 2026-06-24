@@ -23,6 +23,24 @@
       "value": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
       "type": "string",
       "description": "Default Ethereum address used in requests. Override per-request or update this variable."
+    },
+    {
+      "key": "bearerToken",
+      "value": "",
+      "type": "string",
+      "description": "API key sent as `Authorization: Bearer <bearerToken>`. Required by all /api/governance and /api/disputes endpoints."
+    },
+    {
+      "key": "slashRequestId",
+      "value": "a1b2c3d4e5f6a7b8",
+      "type": "string",
+      "description": "Slash request ID used in governance vote/get requests. Override with an ID returned from the create request."
+    },
+    {
+      "key": "disputeId",
+      "value": "5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f",
+      "type": "string",
+      "description": "Dispute ID used in dispute review/resolve/dismiss/get requests. Override with an ID returned from the submit request."
     }
   ],
   "item": [
@@ -275,6 +293,33 @@
               }
             }
           ]
+        }
+      ]
+    },
+    {
+      "name": "Disputes",
+      "description": "Manage governance dispute workflows and access restricted to the tenant.",
+      "item": [
+        {
+          "name": "List disputes",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/disputes?status=pending&limit=20",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "disputes"],
+              "query": [
+                { "key": "status", "value": "pending", "description": "Optional: valid status" },
+                { "key": "limit", "value": "20", "description": "Optional: integer" },
+                { "key": "cursor", "value": "", "description": "Optional: cursor string" }
+              ]
+            },
+            "header": [
+              { "key": "Authorization", "value": "Bearer {{apiKey}}" }
+            ],
+            "description": "Returns disputes for the authenticated caller."
+          },
+          "response": []
         }
       ]
     }

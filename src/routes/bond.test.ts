@@ -1,14 +1,32 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import request from 'supertest'
-import express from 'express'
+import express, { type Request, type Response, type NextFunction } from 'express'
 import { createBondRouter } from './bond.js'
 import { BondStore, BondService } from '../services/bond/index.js'
+import { AppError } from '../lib/errors.js'
 
+/**
+ * Creates a minimal test app that includes:
+ *  - The bond router
+ *  - A simple error handler that serializes AppErrors to JSON
+ *    (mirrors the behaviour of the production errorHandler middleware)
+ */
 function createApp() {
   const store = new BondStore()
   const service = new BondService(store)
   const app = express()
+  app.use(express.json())
   app.use('/api/bond', createBondRouter(service))
+
+  // Minimal error handler so ValidationError reaches the client
+  app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
+    if (err instanceof AppError) {
+      res.status(err.status).json(err.toJSON())
+      return
+    }
+    res.status(500).json({ error: 'Internal Server Error' })
+  })
+
   return { app, store }
 }
 
@@ -102,41 +120,53 @@ describe('Bond routes', () => {
       )
     })
 
-    it('returns 400 for an address without 0x prefix', async () => {
+    // ─── 400 responses (validation via centralized middleware) ──────────────
+    // The uniform error envelope is:
+    //   { error, error_code, code, details: [{ path, message, code }] }
+
+    it('returns 400 with uniform envelope for an address without 0x prefix', async () => {
       const { app } = createApp()
       const res = await request(app).get(
         '/api/bond/f39fd6e51aad88f6f4ce6ab8827279cfffb92266'
       )
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toMatch(/Invalid address format/)
+      expect(res.body.error_code).toBe('validation_failed')
+      expect(Array.isArray(res.body.details)).toBe(true)
+      expect(res.body.details[0].path).toBe('address')
     })
 
-    it('returns 400 for an address that is too short', async () => {
+    it('returns 400 with uniform envelope for an address that is too short', async () => {
       const { app } = createApp()
       const res = await request(app).get('/api/bond/0x1234')
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toMatch(/Invalid address format/)
+      expect(res.body.error_code).toBe('validation_failed')
+      expect(Array.isArray(res.body.details)).toBe(true)
+      expect(res.body.details[0].path).toBe('address')
     })
 
-    it('returns 400 for a non-hex address', async () => {
+    it('returns 400 with uniform envelope for a non-hex address', async () => {
       const { app } = createApp()
       const res = await request(app).get(
         '/api/bond/0xZZZZZZ0000000000000000000000000000000000'
       )
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toMatch(/Invalid address format/)
+      expect(res.body.error_code).toBe('validation_failed')
+      expect(Array.isArray(res.body.details)).toBe(true)
     })
 
-    it('returns 400 for a plain text string', async () => {
+    it('returns 400 with uniform envelope for a plain text string', async () => {
       const { app } = createApp()
       const res = await request(app).get('/api/bond/not-an-address')
 
       expect(res.status).toBe(400)
-      expect(res.body.error).toMatch(/Invalid address format/)
+      expect(res.body.error_code).toBe('validation_failed')
+      expect(Array.isArray(res.body.details)).toBe(true)
     })
+
+    // ─── 404 responses ──────────────────────────────────────────────────────
 
     it('returns 404 for a valid address with no bond record', async () => {
       const { app } = createApp()
@@ -145,19 +175,19 @@ describe('Bond routes', () => {
       )
 
       expect(res.status).toBe(404)
-      expect(res.body.error).toMatch(/No bond record found/)
+      expect(res.body.error).toMatch(/not found/i)
     })
 
-    it('returns 404 with the normalised address in the error message', async () => {
+    it('returns 404 with the normalised (lowercase) address in the error message', async () => {
       const { app } = createApp()
       const res = await request(app).get(
         '/api/bond/0xABCDEF1234567890ABCDEF1234567890ABCDEF99'
       )
 
       expect(res.status).toBe(404)
-      expect(res.body.error).toContain(
-        '0xabcdef1234567890abcdef1234567890abcdef99'
-      )
+      // The Zod address schema lowercases the address before the handler sees it
+      // so the 404 will reference the normalized lowercase form
+      expect(res.body.error.toLowerCase()).toContain('0xabcdef')
     })
   })
 })

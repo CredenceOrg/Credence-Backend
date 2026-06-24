@@ -3,8 +3,10 @@ import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
 import { responseSizeBytes } from './metrics.js'
 
+const threshold = Number(process.env.COMPRESSION_THRESHOLD ?? '1024')
+
 export const compressionMiddleware = compression({
-  threshold: 1024, // Enable compression only above size threshold
+  threshold, // Enable compression only above size threshold
   filter: (req: Request, res: Response) => {
     // Exclude Server-Sent Events from compression to not break framing
     if (req.headers.accept === 'text/event-stream' || res.getHeader('Content-Type') === 'text/event-stream') {

@@ -109,17 +109,51 @@ export class IdentityService {
   }
 }
 
+import { pool } from '../db/pool.js'
+import { invalidateTrustScoreCache } from './reputationService.js'
+
 export interface IdentityUpsertInput {
   id: string
 }
 
 export interface BondUpsertInput {
   id: string
+  address: string
   amount: string
   duration: string | null
 }
 
-// Compatibility no-op upsert hooks used by Horizon listener tests.
-export async function upsertIdentity(_identity: IdentityUpsertInput): Promise<void> {}
+/**
+ * Upsert an identity by Stellar address.
+ * Maps 'id' field from Horizon event (source_account) to 'address' in DB.
+ */
+export async function upsertIdentity(identity: IdentityUpsertInput): Promise<void> {
+  await pool.query(
+    `INSERT INTO identities (address)
+     VALUES ($1)
+     ON CONFLICT (address) DO NOTHING`,
+    [identity.id]
+  )
+}
 
-export async function upsertBond(_bond: BondUpsertInput): Promise<void> {}
+/**
+ * Upsert a bond for an identity.
+ * Updates the identities table with bond information.
+ */
+export async function upsertBond(bond: BondUpsertInput): Promise<void> {
+  const durationSeconds = bond.duration ? parseInt(bond.duration, 10) : null
+  
+  await pool.query(
+    `UPDATE identities
+     SET bonded_amount = $2,
+         bond_start = COALESCE(bond_start, NOW()),
+         bond_duration = $3,
+         active = true,
+         updated_at = NOW()
+     WHERE address = $1`,
+    [bond.address, bond.amount, durationSeconds]
+  )
+
+  // Invalidate trust score cache for this address
+  await invalidateTrustScoreCache(bond.address)
+}

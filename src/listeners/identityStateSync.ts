@@ -1,3 +1,4 @@
+import { invalidateTrustScoreCache } from '../services/reputationService.js'
 import type { ContractReader, IdentityState, IdentityStateStore } from './types.js'
 
 /** Result of reconciling one identity. */
@@ -60,6 +61,8 @@ export class IdentityStateSync {
         return { address, updated: false, reason: 'no_drift' }
       }
       await this.store.set(chainState)
+      // Invalidate trust score cache after state update
+      await invalidateTrustScoreCache(address)
       return { address, updated: true }
     } catch {
       return { address, updated: false, reason: 'error' }

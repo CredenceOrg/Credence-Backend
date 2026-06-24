@@ -1,0 +1,94 @@
+// proto/credence/v1/common.proto
+//
+// Shared types and custom options used across all Credence v1 services.
+// Field numbers are permanently reserved once assigned — never reuse them.
+
+syntax = "proto3";
+
+package credence.v1;
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Privacy classification option
+//
+// Any field that carries personally-identifiable information (PII) MUST be
+// annotated with:
+//
+//   string email = 3 [(credence.v1.privacy).classification = SENSITIVE];
+//
+// This annotation is enforced by the buf lint rule FIELD_OPTION_REQUIRED
+// configured in buf.yaml for fields whose names match the PII pattern list.
+// ---------------------------------------------------------------------------
+
+// PrivacyClassification enumerates the data-sensitivity tiers used by the
+// Credence platform.  Consumers of generated stubs can inspect this option
+// at runtime to apply field-level redaction before logging or forwarding.
+enum PrivacyClassification {
+  // Default — field contains no personal data.
+  PRIVACY_CLASSIFICATION_UNSPECIFIED = 0;
+
+  // Field contains PII or other sensitive data that must be redacted in logs
+  // and encrypted at rest.
+  SENSITIVE = 1;
+
+  // Field is public and may be freely logged or forwarded.
+  PUBLIC = 2;
+}
+
+// PrivacyOptions is the message type used as the field-level custom option.
+// Usage:
+//   import "credence/v1/common.proto";
+//   string wallet_address = 1 [(credence.v1.privacy).classification = PUBLIC];
+//   string email          = 2 [(credence.v1.privacy).classification = SENSITIVE];
+message PrivacyOptions {
+  PrivacyClassification classification = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Pagination
+// ---------------------------------------------------------------------------
+
+// PageRequest carries cursor-based or offset-based pagination parameters.
+message PageRequest {
+  // Maximum number of items to return.  Servers may cap this value.
+  uint32 page_size = 1;
+
+  // Opaque cursor returned by a previous response.  Omit for the first page.
+  string page_token = 2;
+}
+
+// PageResponse carries pagination metadata returned alongside list results.
+message PageResponse {
+  // Opaque token for the next page.  Empty when there are no more results.
+  string next_page_token = 1;
+
+  // Total number of items matching the query (may be approximate).
+  uint64 total_count = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Error detail
+// ---------------------------------------------------------------------------
+
+// ErrorDetail provides structured error information beyond the gRPC status
+// code, mirroring the JSON error envelope used by the REST API.
+message ErrorDetail {
+  // Machine-readable error code (e.g. "VALIDATION_FAILED", "NOT_FOUND").
+  string code = 1;
+
+  // Human-readable description of the error.
+  string message = 2;
+
+  // Optional field-level validation errors.
+  repeated FieldViolation field_violations = 3;
+}
+
+// FieldViolation describes a single field-level validation failure.
+message FieldViolation {
+  // Dot-separated path to the offending field (e.g. "bond_id").
+  string field = 1;
+
+  // Human-readable description of the violation.
+  string description = 2;
+}

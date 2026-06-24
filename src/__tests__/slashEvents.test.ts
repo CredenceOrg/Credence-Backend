@@ -1,8 +1,15 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import Database from 'better-sqlite3'
 import { runMigrations } from '../db/migrations.js'
 import { IdentitiesRepository } from '../repositories/identities.repository.js'
 import { SlashEventsRepository } from '../repositories/slashEvents.repository.js'
+import { getTenantId, setTenantId } from '../utils/tenantContext.js'
+
+// Mock the tenant context
+vi.mock('../utils/tenantContext.js', () => ({
+  getTenantId: vi.fn(),
+  setTenantId: vi.fn(),
+}))
 
 describe('SlashEventsRepository', () => {
   let db: Database.Database
@@ -11,17 +18,24 @@ describe('SlashEventsRepository', () => {
   let identityId: number
 
   beforeEach(() => {
+    // Set up tenant context for tests
+    vi.mocked(getTenantId).mockReturnValue('test-tenant')
+    
     db = new Database(':memory:')
     db.pragma('foreign_keys = ON')
     runMigrations(db)
-    identities = new IdentitiesRepository(db)
-    slashEvents = new SlashEventsRepository(db)
-    const identity = identities.create({ address: '0xABCDEF1234567890' })
+    
+    // Create repositories with skipTenantCheck option
+    identities = new IdentitiesRepository(db, { skipTenantCheck: true })
+    slashEvents = new SlashEventsRepository(db, { skipTenantCheck: true })
+    
+    const identity = identities.create({ address: '0xABCDEF1234567890', tenantId: 'test-tenant' })
     identityId = identity.id
   })
 
   afterEach(() => {
     db.close()
+    vi.clearAllMocks()
   })
 
   it('should create a slash event', () => {
@@ -29,6 +43,7 @@ describe('SlashEventsRepository', () => {
       identity_id: identityId,
       amount: '1000000000000000000',
       reason: 'Fraudulent attestation',
+      tenantId: 'test-tenant',
     })
     expect(event.id).toBe(1)
     expect(event.identity_id).toBe(identityId)
@@ -45,6 +60,7 @@ describe('SlashEventsRepository', () => {
       amount: '500',
       reason: 'Double signing',
       evidence_ref: 'ipfs://Qm12345',
+      tenantId: 'test-tenant',
     })
     expect(event.evidence_ref).toBe('ipfs://Qm12345')
   })
@@ -54,6 +70,7 @@ describe('SlashEventsRepository', () => {
       identity_id: identityId,
       amount: '100',
       reason: 'Test',
+      tenantId: 'test-tenant',
     })
     const found = slashEvents.findById(created.id)
     expect(found).toBeDefined()
@@ -71,11 +88,13 @@ describe('SlashEventsRepository', () => {
       identity_id: identityId,
       amount: '100',
       reason: 'Reason 1',
+      tenantId: 'test-tenant',
     })
     slashEvents.create({
       identity_id: identityId,
       amount: '200',
       reason: 'Reason 2',
+      tenantId: 'test-tenant',
     })
     const results = slashEvents.findByIdentityId(identityId)
     expect(results).toHaveLength(2)
@@ -93,11 +112,13 @@ describe('SlashEventsRepository', () => {
       identity_id: identityId,
       amount: '100',
       reason: 'R1',
+      tenantId: 'test-tenant',
     })
     slashEvents.create({
       identity_id: identityId,
       amount: '200',
       reason: 'R2',
+      tenantId: 'test-tenant',
     })
     const all = slashEvents.findAll()
     expect(all).toHaveLength(2)
@@ -109,6 +130,7 @@ describe('SlashEventsRepository', () => {
         identity_id: 9999,
         amount: '100',
         reason: 'Invalid identity',
+        tenantId: 'test-tenant',
       })
     ).toThrow()
   })
@@ -118,6 +140,7 @@ describe('SlashEventsRepository', () => {
       identity_id: identityId,
       amount: '100',
       reason: 'Test',
+      tenantId: 'test-tenant',
     })
     expect(slashEvents.findByIdentityId(identityId)).toHaveLength(1)
     db.prepare('DELETE FROM identities WHERE id = ?').run(identityId)
@@ -130,6 +153,7 @@ describe('SlashEventsRepository', () => {
       amount: '100',
       reason: 'No evidence',
       evidence_ref: null,
+      tenantId: 'test-tenant',
     })
     expect(event.evidence_ref).toBeNull()
   })

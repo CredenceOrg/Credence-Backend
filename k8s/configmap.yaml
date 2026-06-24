@@ -20,3 +20,5 @@ data:
   REDIS_URL: "redis://redis:6379"
   # Log level for the application.
   LOG_LEVEL: "info"
+  # Grace period in milliseconds for graceful shutdown before force exit.
+  SHUTDOWN_GRACE_PERIOD_MS: "30000"

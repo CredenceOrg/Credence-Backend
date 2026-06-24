@@ -1,16 +1,31 @@
-# Integration Tests for DB Repositories
+# Backend Testing Guide
 
-This document describes the comprehensive integration test suite for all database repositories in the Credence Backend.
+This document provides comprehensive guidance for running tests locally and ensuring CI parity for the Credence Backend.
 
 ## Overview
 
-The integration tests validate all CRUD operations, constraints, and relationships across the following repositories:
+The Credence Backend includes multiple test suites that validate different aspects of the system:
+
+### Test Categories
+
+- **Integration Tests** - Database repository operations and constraints
+- **Unit Tests** - Individual service and utility functions  
+- **Repository Tests** - Specific repository functionality
+- **RBAC Tests** - Role-based access control
+- **Route Tests** - API endpoint testing
+
+### Key Components Tested
 
 - **IdentitiesRepository** - Core identity management
 - **BondsRepository** - Bond creation and management
 - **AttestationsRepository** - Attestation scoring system
 - **SlashEventsRepository** - Slashing event tracking
 - **ScoreHistoryRepository** - Score change history
+- **AuditLogsRepository** - Audit trail functionality
+- **Admin Services** - Administrative operations
+- **Governance Routes** - Governance functionality
+- **Dispute Routes** - Dispute management
+- **Evidence Routes** - Evidence handling
 
 ## Test Coverage
 
@@ -52,26 +67,68 @@ The test suite achieves **95%+ code coverage** and includes:
 - **Containers**: testcontainers for database provisioning
 - **Coverage**: c8 for comprehensive coverage reporting
 
-## Running Tests
+## Local Test Running
 
 ### Prerequisites
 
-- Node.js 20+
-- Docker Desktop (for local testing)
-- PostgreSQL client tools (optional)
+- **Node.js 20+** - Required runtime environment
+- **Docker Desktop** - For testcontainers and docker-compose database setup
+- **PostgreSQL client tools** - Optional, for manual database inspection
 
-### Local Development
-
-#### Option 1: Using testcontainers (automatic)
+### Environment Setup
 
 ```bash
+# Install dependencies
+npm install
+
+# Copy environment template
+cp .env.example .env
+
+# Verify test configuration
+cat .env | grep -E "(DATABASE|TEST)"
+```
+
+### Test Commands
+
+#### Basic Test Execution
+
+```bash
+# Run all tests (uses testcontainers automatically)
+npm test
+
+# Run tests in watch mode for development
+npm run test:watch
+
+# Run specific test file
+npm test -- tests/integration/repositories.test.ts
+
+# Run tests with verbose output
+npm test -- --reporter=verbose
+```
+
+#### Coverage Reporting
+
+```bash
+# Run tests with coverage (standard 75% thresholds)
+npm run coverage
+npm run test:coverage
+
+# Run audit-sensitive coverage (95% thresholds)
+npm run coverage:audit
+
+# Generate coverage report without running tests
+npm run coverage -- --reporter=html
+```
+
+#### Database Setup Options
+
+**Option 1: Testcontainers (Recommended)**
+```bash
+# Automatic database provisioning
 npm test
 ```
 
-This automatically starts PostgreSQL in a Docker container.
-
-#### Option 2: Using docker-compose
-
+**Option 2: Docker Compose**
 ```bash
 # Start test database
 docker-compose -f docker-compose.test.yml up -d
@@ -83,8 +140,7 @@ TEST_DATABASE_URL=postgresql://credence:credence@localhost:5433/credence_test np
 docker-compose -f docker-compose.test.yml down
 ```
 
-#### Option 3: Using external PostgreSQL
-
+**Option 3: External PostgreSQL**
 ```bash
 # Set your database URL
 export TEST_DATABASE_URL=postgresql://user:pass@host:port/database
@@ -93,13 +149,26 @@ export TEST_DATABASE_URL=postgresql://user:pass@host:port/database
 npm test
 ```
 
-### Coverage Reporting
+### Test Configuration Files
+
+- **vitest.config.ts** - Main test configuration (75% coverage thresholds)
+- **vitest.audit.config.ts** - Audit-sensitive configuration (95% coverage thresholds)
+- **docker-compose.test.yml** - Test database container configuration
+
+### Running Specific Test Suites
 
 ```bash
-# Run tests with coverage check (requires 95%)
-npm run coverage
+# Integration tests
+npm test -- tests/integration/
 
-# Coverage files generated in ./coverage/
+# Repository tests
+npm test -- tests/repositories/
+
+# RBAC tests
+npm test -- tests/rbac.test.ts
+
+# All repository tests (integration + standalone)
+npm test -- tests/integration/repositories.test.ts tests/repositories/
 ```
 
 ## Test Structure
@@ -195,23 +264,28 @@ it('cascades dependent rows from identities to all child tables', async () => {
 - Isolated test data per test scenario
 - Realistic but deterministic values
 
-## Continuous Integration
+## CI Parity Guide
 
-### GitHub Actions
+### GitHub Actions Configuration
 
-The test suite runs automatically on:
+The test suite runs automatically on GitHub Actions with the following triggers:
 
-- All pushes to main/develop branches
-- All pull requests
-- Manual workflow dispatch
+- **Push events** to `main`, `develop`, and `test/repository-integration-tests` branches
+- **Pull requests** targeting `main` and `develop` branches
+- **Manual workflow dispatch** for on-demand testing
 
-### CI Environment
+### CI Environment Specifications
 
-- Ubuntu latest with PostgreSQL 16
-- Coverage thresholds enforced (95%+ required)
-- Codecov integration for coverage reporting
+```yaml
+# .github/workflows/test.yml
+runs-on: ubuntu-latest
+node-version: "20"
+database: postgres:16-alpine
+```
 
-### CI Database Setup
+### CI Database Configuration
+
+The CI uses PostgreSQL 16 with the following setup:
 
 ```yaml
 services:
@@ -226,6 +300,118 @@ services:
       --health-interval 10s
       --health-timeout 5s
       --health-retries 5
+    ports:
+      - 5432:5432
+```
+
+### CI Test Execution Steps
+
+1. **Checkout** - Repository code checkout
+2. **Node.js Setup** - Node 20 with npm cache
+3. **Dependencies** - `npm ci` for clean install
+4. **Database Wait** - PostgreSQL health check
+5. **Test Run** - `npm test` with TEST_DATABASE_URL
+6. **Coverage** - `npm run coverage` 
+7. **Audit Coverage** - `npm run coverage:audit` (95% thresholds)
+8. **Upload** - Coverage reports to Codecov
+
+### Ensuring Local-CI Parity
+
+#### Database Parity
+
+**Local (docker-compose.test.yml):**
+```yaml
+ports:
+  - "5433:5432"  # Different port to avoid conflicts
+tmpfs:
+  - /var/lib/postgresql/data:rw,noexec,nosuid,size=100m
+```
+
+**CI (.github/workflows/test.yml):**
+```yaml
+ports:
+  - 5432:5432  # Standard port
+# No tmpfs - uses default storage
+```
+
+#### Coverage Parity
+
+**Local Development:**
+```bash
+# Standard coverage (75% thresholds)
+npm run coverage
+
+# Audit coverage (95% thresholds) 
+npm run coverage:audit
+```
+
+**CI Execution:**
+```bash
+# Both standard and audit coverage run
+npm run coverage
+npm run coverage:audit
+```
+
+#### Environment Variables
+
+**Required for CI parity:**
+```bash
+# CI uses this exact URL
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test
+
+# Local development typically uses
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5433/credence_test
+```
+
+### Coverage Thresholds
+
+#### Standard Configuration (vitest.config.ts)
+```typescript
+thresholds: {
+  statements: 75,
+  branches: 75,
+  functions: 65,
+  lines: 75,
+}
+```
+
+#### Audit Configuration (vitest.audit.config.ts)
+```typescript
+thresholds: {
+  statements: 95,
+  lines: 95,
+}
+```
+
+#### CI Enforcement
+- **Standard tests** must meet 75% thresholds
+- **Audit-sensitive tests** must meet 95% thresholds
+- **Codecov integration** tracks coverage over time
+- **CI fails** if thresholds are not met
+
+### Troubleshooting CI Parity Issues
+
+#### Port Conflicts
+```bash
+# If local tests use different port, match CI port
+export TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test
+```
+
+#### Coverage Differences
+```bash
+# Check which files are included/excluded
+npm run coverage -- --reporter=text-summary
+
+# Run audit coverage locally to match CI
+npm run coverage:audit
+```
+
+#### Database Version Mismatches
+```bash
+# Ensure local PostgreSQL version matches CI
+docker pull postgres:16-alpine
+docker-compose -f docker-compose.test.yml down
+docker-compose -f docker-compose.test.yml up -d
 ```
 
 ## Debugging Tests
@@ -268,27 +454,163 @@ psql -h localhost -p 5433 -U credence -d credence_test
 - Temporary storage for faster test execution
 - Automatic cleanup prevents resource leaks
 
+## Advanced Testing
+
+### Test Categories and Coverage
+
+#### Integration Tests
+- **Location**: `tests/integration/`
+- **Focus**: Database operations, constraints, relationships
+- **Coverage**: Repository CRUD operations, cascade behavior
+- **Database**: PostgreSQL with testcontainers
+
+#### Unit Tests
+- **Location**: `src/**/*.test.ts`
+- **Focus**: Individual functions and services
+- **Coverage**: Business logic, utility functions
+- **Database**: Mocked or in-memory
+
+#### RBAC Tests
+- **Location**: `tests/rbac.test.ts`
+- **Focus**: Role-based access control
+- **Coverage**: Permission validation, authorization
+- **Database**: Integration with test data
+
+#### Route Tests
+- **Location**: `tests/routes/`
+- **Focus**: API endpoint functionality
+- **Coverage**: HTTP handlers, request/response validation
+- **Database**: Integration with repositories
+
+### Test Data Management
+
+#### Database Reset Strategy
+```typescript
+// Each test runs with clean state
+beforeEach(async () => {
+  await resetDatabase();
+});
+
+// Tables are truncated between tests
+// No test depends on data from other tests
+```
+
+#### Test Data Patterns
+- **Predictable identifiers**: `GIDENTITY_1`, `GBOND_OWNER`
+- **Isolated scenarios**: Each test creates its own data
+- **Realistic values**: Meaningful but deterministic test data
+- **Cleanup validation**: Verify proper data deletion
+
+### Performance and Optimization
+
+#### Test Execution
+```bash
+# Sequential execution to avoid conflicts
+npm test -- --test-concurrency=1
+
+# Parallel execution for faster runs (when safe)
+npm test -- --test-concurrency=4
+```
+
+#### Database Performance
+- **tmpfs storage**: Faster I/O for test database
+- **Connection pooling**: Reused database connections
+- **Minimal data**: Only necessary test data created
+- **Automatic cleanup**: Prevents resource leaks
+
 ## Contributing
 
 ### Adding New Tests
 
-1. Follow existing test patterns and naming conventions
-2. Include both success and error scenarios
-3. Test database constraints and relationships
-4. Ensure proper cleanup in test lifecycle hooks
-5. Verify coverage remains above 95%
+1. **Follow existing patterns** - Use established test structure and naming
+2. **Include all scenarios** - Test success cases, error cases, and edge cases
+3. **Validate constraints** - Test database constraints and relationships
+4. **Ensure cleanup** - Proper teardown in test lifecycle hooks
+5. **Verify coverage** - Maintain required coverage thresholds
 
 ### Test Guidelines
 
-- Use descriptive test names that explain the scenario
-- Include positive and negative test cases
-- Test edge cases and boundary conditions
-- Validate error codes for database constraint violations
-- Use meaningful assertions with clear failure messages
+#### Best Practices
+- **Descriptive names** - Test names should explain the scenario
+- **Comprehensive coverage** - Include positive and negative test cases
+- **Edge case testing** - Test boundary conditions and error scenarios
+- **Error validation** - Check specific error codes for constraint violations
+- **Clear assertions** - Use meaningful assertions with helpful failure messages
+
+#### Code Organization
+```typescript
+describe('feature being tested', () => {
+  describe('specific scenario', () => {
+    it('should do expected behavior', async () => {
+      // Arrange - setup test data
+      // Act - execute the operation
+      // Assert - verify results
+    });
+  });
+});
+```
 
 ### Coverage Requirements
 
+#### Standard Tests (vitest.config.ts)
+- **Statements**: 75%+ required
+- **Branches**: 75%+ required  
+- **Functions**: 65%+ required
+- **Lines**: 75%+ required
+
+#### Audit-Sensitive Tests (vitest.audit.config.ts)
+- **Statements**: 95%+ required
 - **Lines**: 95%+ required
 - **Functions**: 95%+ required
 - **Branches**: 95%+ required
-- **Statements**: 95%+ required
+
+#### Coverage Exclusions
+- Test files (`**/*.test.ts`, `**/*.spec.ts`)
+- Type definition files (`**/*.d.ts`)
+- Index/barrel files (`**/index.ts`)
+- Utility files requiring live dependencies (`src/utils/**`)
+- Infrastructure code (`src/index.ts`)
+
+## Quick Reference
+
+### Essential Commands
+
+```bash
+# Run all tests
+npm test
+
+# Watch mode for development
+npm run test:watch
+
+# Coverage reports
+npm run coverage
+npm run coverage:audit
+
+# Specific test suites
+npm test -- tests/integration/
+npm test -- tests/rbac.test.ts
+```
+
+### Environment Setup
+
+```bash
+# Database with docker-compose
+docker-compose -f docker-compose.test.yml up -d
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5433/credence_test npm test
+
+# Automatic testcontainers
+npm test
+
+# External database
+export TEST_DATABASE_URL=postgresql://user:pass@host:port/database
+npm test
+```
+
+### CI Parity Checklist
+
+- [ ] Use same PostgreSQL version (16-alpine)
+- [ ] Match database credentials (credence/credence)
+- [ ] Run both standard and audit coverage
+- [ ] Verify coverage thresholds locally
+- [ ] Test with CI database URL format
+- [ ] Ensure clean test isolation

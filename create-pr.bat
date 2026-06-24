@@ -1,0 +1,3 @@
+@echo off
+echo Creating Pull Request...
+gh pr create --title "feat: externalize reputation scoring weights into versioned config" --body-file pr-description.md --base main --repo ayomidearegbeshola29-dev/Credence-Backend

@@ -1,17 +1,25 @@
-import { describe, it, expect, vi } from 'vitest'
-import { detectEventType, emitWebhookForStateChange } from './webhookIntegration.js'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { detectEventType } from './webhookEventDetection.js'
+import { emitWebhookForStateChange } from './webhookIntegrationOutbox.js'
 import type { IdentityState } from './types.js'
-import type { WebhookService } from '../services/webhooks/index.js'
+
+vi.mock('../db/outbox/emitter.js', () => ({
+  outboxEmitter: {
+    emit: vi.fn().mockResolvedValue(1n),
+  },
+}))
+
+import { outboxEmitter } from '../db/outbox/emitter.js'
+
+const baseState: IdentityState = {
+  address: '0xabc',
+  bondedAmount: '1000',
+  bondStart: 1234567890,
+  bondDuration: 86400,
+  active: true,
+}
 
 describe('detectEventType', () => {
-  const baseState: IdentityState = {
-    address: '0xabc',
-    bondedAmount: '1000',
-    bondStart: 1234567890,
-    bondDuration: 86400,
-    active: true,
-  }
-
   it('detects bond.created when transitioning from null to active', () => {
     const event = detectEventType(null, baseState)
     expect(event).toBe('bond.created')
@@ -62,12 +70,12 @@ describe('detectEventType', () => {
   it('handles large bond amounts correctly', () => {
     const oldState: IdentityState = {
       ...baseState,
-      bondedAmount: '1000000000000000000000', // 1000 ETH in wei
+      bondedAmount: '1000000000000000000000',
       active: true,
     }
     const newState: IdentityState = {
       ...baseState,
-      bondedAmount: '500000000000000000000', // 500 ETH in wei
+      bondedAmount: '500000000000000000000',
       active: true,
     }
     const event = detectEventType(oldState, newState)
@@ -75,82 +83,73 @@ describe('detectEventType', () => {
   })
 })
 
-describe('emitWebhookForStateChange', () => {
-  const baseState: IdentityState = {
-    address: '0xabc',
-    bondedAmount: '1000',
-    bondStart: 1234567890,
-    bondDuration: 86400,
-    active: true,
-  }
+describe('emitWebhookForStateChange (outbox)', () => {
+  const mockDb = {} as Parameters<typeof emitWebhookForStateChange>[0]
 
-  it('emits webhook when event is detected', async () => {
-    const mockWebhookService = {
-      emit: vi.fn().mockResolvedValue([]),
-    } as unknown as WebhookService
+  beforeEach(() => {
+    vi.mocked(outboxEmitter.emit).mockClear()
+  })
 
-    const oldState = null
-    const newState = baseState
+  it('emits to outbox when event is detected', async () => {
+    await emitWebhookForStateChange(mockDb, null, baseState)
 
-    await emitWebhookForStateChange(mockWebhookService, oldState, newState)
-
-    expect(mockWebhookService.emit).toHaveBeenCalledWith('bond.created', {
-      address: '0xabc',
-      bondedAmount: '1000',
-      bondStart: 1234567890,
-      bondDuration: 86400,
-      active: true,
+    expect(outboxEmitter.emit).toHaveBeenCalledWith(mockDb, {
+      aggregateType: 'identity',
+      aggregateId: '0xabc',
+      eventType: 'bond.created',
+      payload: {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      },
     })
   })
 
-  it('does not emit webhook when no event detected', async () => {
-    const mockWebhookService = {
-      emit: vi.fn().mockResolvedValue([]),
-    } as unknown as WebhookService
+  it('does not emit to outbox when no event detected', async () => {
+    await emitWebhookForStateChange(mockDb, baseState, baseState)
 
-    const oldState = baseState
-    const newState = baseState
-
-    await emitWebhookForStateChange(mockWebhookService, oldState, newState)
-
-    expect(mockWebhookService.emit).not.toHaveBeenCalled()
+    expect(outboxEmitter.emit).not.toHaveBeenCalled()
   })
 
-  it('emits bond.slashed event with correct data', async () => {
-    const mockWebhookService = {
-      emit: vi.fn().mockResolvedValue([]),
-    } as unknown as WebhookService
-
+  it('emits bond.slashed event with correct payload', async () => {
     const oldState: IdentityState = { ...baseState, bondedAmount: '1000' }
     const newState: IdentityState = { ...baseState, bondedAmount: '500' }
 
-    await emitWebhookForStateChange(mockWebhookService, oldState, newState)
+    await emitWebhookForStateChange(mockDb, oldState, newState)
 
-    expect(mockWebhookService.emit).toHaveBeenCalledWith('bond.slashed', {
-      address: '0xabc',
-      bondedAmount: '500',
-      bondStart: 1234567890,
-      bondDuration: 86400,
-      active: true,
+    expect(outboxEmitter.emit).toHaveBeenCalledWith(mockDb, {
+      aggregateType: 'identity',
+      aggregateId: '0xabc',
+      eventType: 'bond.slashed',
+      payload: {
+        address: '0xabc',
+        bondedAmount: '500',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      },
     })
   })
 
-  it('emits bond.withdrawn event with correct data', async () => {
-    const mockWebhookService = {
-      emit: vi.fn().mockResolvedValue([]),
-    } as unknown as WebhookService
-
+  it('emits bond.withdrawn event with correct payload', async () => {
     const oldState: IdentityState = { ...baseState, active: true }
     const newState: IdentityState = { ...baseState, active: false, bondedAmount: '0' }
 
-    await emitWebhookForStateChange(mockWebhookService, oldState, newState)
+    await emitWebhookForStateChange(mockDb, oldState, newState)
 
-    expect(mockWebhookService.emit).toHaveBeenCalledWith('bond.withdrawn', {
-      address: '0xabc',
-      bondedAmount: '0',
-      bondStart: 1234567890,
-      bondDuration: 86400,
-      active: false,
+    expect(outboxEmitter.emit).toHaveBeenCalledWith(mockDb, {
+      aggregateType: 'identity',
+      aggregateId: '0xabc',
+      eventType: 'bond.withdrawn',
+      payload: {
+        address: '0xabc',
+        bondedAmount: '0',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: false,
+      },
     })
   })
 })

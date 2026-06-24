@@ -1,3 +1,5 @@
+import { horizonWithdrawalListener } from './horizonWithdrawalEvents.js'
+
 export {
   IdentityStateSync,
   createIdentityStateSync,
@@ -14,3 +16,17 @@ export {
   type EventFetcher,
   type ScoreInvalidationCallback,
 } from './attestationEvents.js'
+export {
+  DlqReasonCode,
+  DlqRouter,
+  validateMessage,
+  validateAndRoute,
+  type DlqSink,
+  type ValidationResult,
+  type ValidationSuccess,
+  type ValidationFailure,
+} from './messageValidator.js'
+
+export async function stop(): Promise<void> {
+  await horizonWithdrawalListener.stop()
+}

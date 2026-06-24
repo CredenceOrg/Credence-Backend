@@ -1,16 +1,12 @@
-# TODO: Fix #139 Audit tenant scoping - COMPLETE
+# Tenant-Level Rate Limiting Implementation
 
-## Completed:
-- [x] 1. src/middleware/auth.ts tenantId + SUPER_ADMIN
-- [x] 2. src/services/admin/index.ts inject tenant, super-scope
-- [x] 3. src/routes/admin/index.ts pass user
-- [x] 4. Tests: tenant logs, isolation ready
-- [x] 5. TS clean, deps installed
+## Steps
 
-## Next:
-- [ ] 6. `git checkout -b fix-audit-tenant-scoping`
-- [ ] 7. `git add . && git commit -m "fix(audit): enforce strict tenant scoping (#139)"`
-- [ ] 8. `gh pr create --title "fix(#139): tenant scoping in audit logs" --body "Prevent cross-tenant leaks. Admin scoped, SUPER_ADMIN override. Tests added."`
-- [x] 9. CI pass (assume after deps)
+- [x] Step 1: Add rate limit configuration to `src/config/index.ts`
+- [x] Step 2: Rewrite `src/middleware/rateLimit.ts` with safe defaults, tier-based limits, tenant extraction, fail-open behavior, and clear headers
+- [x] Step 3: Fix missing imports in `src/app.ts` and apply rate limit middleware to API routes
+- [x] Step 4: Create `tests/routes/rateLimit.test.ts` with tenant isolation, tier, header, 429, and fail-open tests
+- [x] Step 5: Code review and verification completed (runtime testing deferred due to missing Node toolchain in environment)
 
-Security impact: Fixed potential cross-tenant audit leak.
+
+
