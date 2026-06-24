@@ -7,6 +7,10 @@ import {
   LockTimeoutError,
 } from "../transaction.js";
 import { WalletTransactionsRepository } from "./walletTransactionsRepository.js";
+import {
+  compareDecimals,
+  isValidPositiveDecimal,
+} from "../../lib/decimalMath.js";
 
 /**
  * Thrown when a debit would reduce a wallet's balance below zero.
@@ -217,6 +221,11 @@ export class WalletsRepository {
       );
     }
 
+    // Reject malformed, zero, or negative amounts before acquiring the row lock.
+    if (!isValidPositiveDecimal(amount)) {
+      throw new Error(`Invalid credit amount: "${amount}"`);
+    }
+
     return this.txManager.withTransaction(
       async (client) => {
         // Lock the row
@@ -303,6 +312,11 @@ export class WalletsRepository {
       );
     }
 
+    // Reject malformed, zero, or negative amounts before acquiring the row lock.
+    if (!isValidPositiveDecimal(amount)) {
+      throw new Error(`Invalid debit amount: "${amount}"`);
+    }
+
     return this.txManager.withTransaction(
       async (client) => {
         // Lock the row so concurrent debits queue up rather than racing.
@@ -323,11 +337,10 @@ export class WalletsRepository {
         const current = mapWallet(lockResult.rows[0]);
         const previousBalance = current.balance;
 
-        // Check if sufficient balance exists
-        const availableNum = Number(current.balance);
-        const requestedNum = Number(amount);
-
-        if (requestedNum > availableNum) {
+        // Number() loses precision beyond ~15 significant digits and can silently
+        // permit an overdraft on large or high-scale balances. compareDecimals()
+        // uses BigInt-scaled integer arithmetic and is always exact.
+        if (compareDecimals(amount, current.balance) > 0) {
           throw new InsufficientBalanceError(id, current.balance, amount);
         }
 
