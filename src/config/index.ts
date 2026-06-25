@@ -328,6 +328,16 @@ export const envSchema = z.object({
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  /**
+   * Short-TTL read-through cache for getIdentityState() responses.
+   * Set to 0 to disable caching entirely.
+   * Default: 5000 ms (5 seconds).
+   */
+  SOROBAN_STATE_CACHE_TTL_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
 
   // Audit log export
   AUDIT_EXPORT_MAX_WINDOW_DAYS: z
@@ -448,6 +458,10 @@ export interface Config {
   sorobanCircuitBreaker: {
     failureThreshold: number
     cooldownPeriodMs: number
+  }
+  sorobanStateCache: {
+    /** TTL in milliseconds. 0 = disabled. */
+    ttlMs: number
   }
   auditLog: {
     exportMaxWindowDays: number
@@ -623,6 +637,9 @@ function mapEnvToConfig(env: Env): Config {
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
       cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+    },
+    sorobanStateCache: {
+      ttlMs: env.SOROBAN_STATE_CACHE_TTL_MS,
     },
     auditLog: {
       exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,

@@ -20,6 +20,11 @@ import {
 import { resolveTimeout, createTimeoutConfig } from "../lib/timeouts.js";
 import { validateConfig } from "../config/index.js";
 import { getCircuitBreaker } from "./circuitBreaker.js";
+import {
+  SorobanStateCache,
+  createSorobanStateCache,
+  type SorobanStateCacheOptions,
+} from "./sorobanStateCache.js";
 
 export type SorobanNetwork = "testnet" | "mainnet";
 
@@ -36,6 +41,12 @@ export interface SorobanClientConfig {
     failureThreshold?: number;
     cooldownPeriodMs?: number;
   };
+  /**
+   * TTL in milliseconds for the getIdentityState() read-through cache.
+   * Set to 0 to disable caching. When omitted the value is read from
+   * SOROBAN_STATE_CACHE_TTL_MS in the environment (default: 5000 ms).
+   */
+  cacheTtlMs?: number;
 }
 
 export interface ContractEvent {
@@ -68,6 +79,8 @@ export interface SorobanClientDependencies {
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
   retryObserver?: RetryObserver;
+  /** Override the identity-state cache (useful in tests). */
+  stateCache?: SorobanStateCache;
 }
 
 export class SorobanClientError extends Error {
@@ -134,6 +147,7 @@ export class SorobanClient {
     failureThreshold: number;
     cooldownPeriodMs: number;
   };
+  private readonly stateCache: SorobanStateCache;
 
   constructor(
     config: SorobanClientConfig,
@@ -161,11 +175,13 @@ export class SorobanClient {
 
     let defaultFailureThreshold = 5;
     let defaultCooldownMs = 10000;
+    let defaultCacheTtlMs = 5000;
     try {
       const globalConfig = validateConfig(process.env);
       defaultFailureThreshold =
         globalConfig.sorobanCircuitBreaker.failureThreshold;
       defaultCooldownMs = globalConfig.sorobanCircuitBreaker.cooldownPeriodMs;
+      defaultCacheTtlMs = globalConfig.sorobanStateCache.ttlMs;
     } catch {
       if (process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
         defaultFailureThreshold = Number(
@@ -177,6 +193,9 @@ export class SorobanClient {
           process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
         );
       }
+      if (process.env.SOROBAN_STATE_CACHE_TTL_MS) {
+        defaultCacheTtlMs = Number(process.env.SOROBAN_STATE_CACHE_TTL_MS);
+      }
     }
 
     this.circuitBreakerConfig = {
@@ -185,10 +204,19 @@ export class SorobanClient {
       cooldownPeriodMs:
         config.circuitBreaker?.cooldownPeriodMs ?? defaultCooldownMs,
     };
+
+    // Allow per-instance override via config.cacheTtlMs; fall back to env default.
+    const cacheTtlMs = config.cacheTtlMs ?? defaultCacheTtlMs;
+    this.stateCache =
+      deps.stateCache ?? createSorobanStateCache(cacheTtlMs);
   }
 
   /**
    * Fetches the current identity state for an address from the configured contract.
+   *
+   * Results are cached in a short-TTL read-through cache (L1 LRU + L2 Redis).
+   * Cache hits bypass the circuit breaker entirely — the breaker only gates
+   * live RPC calls. TTL is controlled by SOROBAN_STATE_CACHE_TTL_MS (0 = off).
    */
   async getIdentityState(address: string): Promise<unknown> {
     if (!address?.trim()) {
@@ -198,11 +226,29 @@ export class SorobanClient {
       });
     }
 
-    return this.callRpc<unknown>("getContractData", {
+    // ── Cache read (never blocked by the circuit breaker) ──────────────────
+    const cached = await this.stateCache.get(
+      this.network,
+      this.contractId,
+      address,
+    );
+    if (cached !== null) {
+      return cached;
+    }
+
+    // ── Cache miss: go through the circuit breaker + retry stack ───────────
+    const result = await this.callRpc<unknown>("getContractData", {
       contractId: this.contractId,
       network: this.network,
       key: { type: "identity", address },
     });
+
+    // Only cache successful (non-null) responses.
+    if (result !== null && result !== undefined) {
+      await this.stateCache.set(this.network, this.contractId, address, result);
+    }
+
+    return result;
   }
 
   /**
