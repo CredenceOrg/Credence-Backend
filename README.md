@@ -77,11 +77,11 @@ curl http://localhost:3000/api/health
 
 ### Services
 
-| Service    | Port  | Description              |
-|------------|-------|--------------------------|
-| `backend`  | 3000  | Express / TypeScript API |
-| `postgres` | 5432  | PostgreSQL 16            |
-| `redis`    | 6379  | Redis 7                  |
+| Service    | Port | Description              |
+| ---------- | ---- | ------------------------ |
+| `backend`  | 3000 | Express / TypeScript API |
+| `postgres` | 5432 | PostgreSQL 16            |
+| `redis`    | 6379 | Redis 7                  |
 
 All ports are configurable via `.env` (see `.env.example`).
 
@@ -120,7 +120,7 @@ docker compose exec postgres psql -U credence
 All configuration is driven by environment variables. Copy `.env.example` to `.env` and adjust as needed. Key variables:
 
 | Variable            | Default    | Description               |
-|---------------------|------------|---------------------------|
+| ------------------- | ---------- | ------------------------- |
 | `PORT`              | `3000`     | Backend listen port       |
 | `POSTGRES_USER`     | `credence` | PostgreSQL user           |
 | `POSTGRES_PASSWORD` | `credence` | PostgreSQL password       |
@@ -134,32 +134,32 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 
 ## Scripts
 
-| Command                   | Description                              |
-|---------------------------|------------------------------------------|
-| `npm run dev`             | Start with tsx watch                     |
-| `npm run build`           | Compile TypeScript                       |
-| `npm start`               | Run compiled `dist/`                     |
-| `npm run lint`            | Run ESLint                               |
-| `npm test`                | Run test suite (vitest)                  |
-| `npm run test:watch`      | Run tests in watch mode                  |
-| `npm run test:coverage`   | Run tests with coverage                  |
-| `npm run migrate:create`  | Create new migration in `src/migrations/`|
-| `npm run migrate:dev`     | Build and run pending migrations (local) |
-| `npm run migrate`         | Run pending migrations (CI/production)   |
-| `npm run migrate:down`    | Rollback last migration                  |
+| Command                  | Description                               |
+| ------------------------ | ----------------------------------------- |
+| `npm run dev`            | Start with tsx watch                      |
+| `npm run build`          | Compile TypeScript                        |
+| `npm start`              | Run compiled `dist/`                      |
+| `npm run lint`           | Run ESLint                                |
+| `npm test`               | Run test suite (vitest)                   |
+| `npm run test:watch`     | Run tests in watch mode                   |
+| `npm run test:coverage`  | Run tests with coverage                   |
+| `npm run migrate:create` | Create new migration in `src/migrations/` |
+| `npm run migrate:dev`    | Build and run pending migrations (local)  |
+| `npm run migrate`        | Run pending migrations (CI/production)    |
+| `npm run migrate:down`   | Rollback last migration                   |
 
 ## API (current)
 
-| Method | Path                          | Description                        |
-|--------|-------------------------------|------------------------------------|
-| GET    | `/api/health`                 | Health check                       |
-| GET    | `/api/health/cache`           | Redis cache health check           |
-| GET    | `/api/trust/:address`         | Trust score from reputation engine |
-| GET    | `/api/bond/:address`          | Bond status                        |
-| GET    | `/api/attestations/:address`  | List attestations for address      |
-| POST   | `/api/attestations`           | Create attestation                 |
-| GET    | `/api/verification/:address`  | Verification proof (stub)          |
-| GET    | `/api/analytics/summary`      | Aggregated analytics from materialized view |
+| Method | Path                         | Description                                 |
+| ------ | ---------------------------- | ------------------------------------------- |
+| GET    | `/api/health`                | Health check                                |
+| GET    | `/api/health/cache`          | Redis cache health check                    |
+| GET    | `/api/trust/:address`        | Trust score from reputation engine          |
+| GET    | `/api/bond/:address`         | Bond status                                 |
+| GET    | `/api/attestations/:address` | List attestations for address               |
+| POST   | `/api/attestations`          | Create attestation                          |
+| GET    | `/api/verification/:address` | Verification proof (stub)                   |
+| GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
 
@@ -186,7 +186,7 @@ Import via **File → Import** in Postman or Insomnia. See [docs/api.md](docs/ap
 
 The health API reports status per dependency (database, Redis, optional external) without exposing internal details.
 
-- **Readiness** (`GET /api/health` or `GET /api/health/ready`): Returns `200` when all *configured* critical dependencies (DB, Redis) are up; returns `503` if any critical dependency is down. When `DATABASE_URL` or `REDIS_URL` are not set, those dependencies are reported as `not_configured` and do not cause `503`.
+- **Readiness** (`GET /api/health` or `GET /api/health/ready`): Returns `200` when all _configured_ critical dependencies (DB, Redis) are up; returns `503` if any critical dependency is down. When `DATABASE_URL` or `REDIS_URL` are not set, those dependencies are reported as `not_configured` and do not cause `503`.
 - **Liveness** (`GET /api/health/live`): Returns `200` when the process is running (no dependency checks). Use for Kubernetes/orchestrator liveness probes.
 
 Response shape (readiness):
@@ -232,7 +232,6 @@ State shape is `IdentityState`: `address`, `bondedAmount`, `bondStart`, `bondDur
 
 Tests cover: no drift (no update), single drift (one address corrected), full resync (multiple drifts), chain missing, store-only addresses, and error handling.
 
-
 ## Monitoring
 
 Comprehensive monitoring with Prometheus and Grafana is available. See **[docs/monitoring.md](docs/monitoring.md)** for:
@@ -259,6 +258,7 @@ docker-compose up -d
 ```
 
 The Grafana dashboard includes:
+
 - HTTP metrics (request rate, latency, error rate, status codes)
 - Infrastructure health (DB, Redis status and check duration)
 - Business metrics (reputation calculations, identity verifications, bulk operations)
@@ -283,6 +283,7 @@ The service includes a Horizon withdrawal events listener that:
 - **Handles errors gracefully** with automatic retry and recovery
 
 See [docs/horizon-listener.md](./docs/horizon-listener.md) for detailed documentation.
+
 ## Caching
 
 The service includes a Redis-based caching layer with:
@@ -311,45 +312,45 @@ The config module (`src/config/index.ts`) centralizes all environment handling:
 ### Usage
 
 ```ts
-import { loadConfig } from './config/index.js'
+import { loadConfig } from "./config/index.js";
 
-const config = loadConfig()
-console.log(config.port)          // number
-console.log(config.db.url)        // string
-console.log(config.features)      // { trustScoring: boolean, bondEvents: boolean }
+const config = loadConfig();
+console.log(config.port); // number
+console.log(config.db.url); // string
+console.log(config.features); // { trustScoring: boolean, bondEvents: boolean }
 ```
 
 For testing, use `validateConfig()` which throws a `ConfigValidationError` instead of calling `process.exit`:
 
 ```ts
-import { validateConfig, ConfigValidationError } from './config/index.js'
+import { validateConfig, ConfigValidationError } from "./config/index.js";
 
 try {
-  const config = validateConfig({ DB_URL: 'bad' })
+  const config = validateConfig({ DB_URL: "bad" });
 } catch (err) {
   if (err instanceof ConfigValidationError) {
-    console.error(err.issues) // Zod issues array
+    console.error(err.issues); // Zod issues array
   }
 }
 ```
 
 ## Environment Variables
 
-| Variable               | Required   | Default        | Description                              |
-|------------------------|------------|----------------|------------------------------------------|
-| `PORT`                 | No         | `3000`         | Server port (1–65535)                    |
-| `NODE_ENV`             | No         | `development`  | `development`, `production`, or `test`   |
-| `LOG_LEVEL`            | No         | `info`         | `debug`, `info`, `warn`, or `error`      |
-| `DB_URL`               | **Yes**    | —              | PostgreSQL connection URL                |
-| `REDIS_URL`            | **Yes**    | —              | Redis connection URL                     |
-| `JWT_SECRET`           | **Yes**    | —              | JWT signing secret (≥ 32 chars)          |
-| `JWT_EXPIRY`           | No         | `1h`           | JWT token lifetime                       |
-| `ENABLE_TRUST_SCORING` | No         | `false`        | Enable trust scoring feature             |
-| `ENABLE_BOND_EVENTS`   | No         | `false`        | Enable bond event processing             |
-| `HORIZON_URL`          | No         | —              | Stellar Horizon API URL                  |
-| `CORS_ORIGIN`          | No         | `*`            | Allowed CORS origin                      |
-| `ANALYTICS_REFRESH_CRON` | No       | `*/5 * * * *`  | Refresh cadence for analytics materialized view |
-| `ANALYTICS_STALENESS_SECONDS` | No | `300`          | Max acceptable analytics staleness before marked stale |
+| Variable                      | Required | Default       | Description                                            |
+| ----------------------------- | -------- | ------------- | ------------------------------------------------------ |
+| `PORT`                        | No       | `3000`        | Server port (1–65535)                                  |
+| `NODE_ENV`                    | No       | `development` | `development`, `production`, or `test`                 |
+| `LOG_LEVEL`                   | No       | `info`        | `debug`, `info`, `warn`, or `error`                    |
+| `DB_URL`                      | **Yes**  | —             | PostgreSQL connection URL                              |
+| `REDIS_URL`                   | **Yes**  | —             | Redis connection URL                                   |
+| `JWT_SECRET`                  | **Yes**  | —             | JWT signing secret (≥ 32 chars)                        |
+| `JWT_EXPIRY`                  | No       | `1h`          | JWT token lifetime                                     |
+| `ENABLE_TRUST_SCORING`        | No       | `false`       | Enable trust scoring feature                           |
+| `ENABLE_BOND_EVENTS`          | No       | `false`       | Enable bond event processing                           |
+| `HORIZON_URL`                 | No       | —             | Stellar Horizon API URL                                |
+| `CORS_ORIGIN`                 | No       | `*`           | Allowed CORS origin                                    |
+| `ANALYTICS_REFRESH_CRON`      | No       | `*/5 * * * *` | Refresh cadence for analytics materialized view        |
+| `ANALYTICS_STALENESS_SECONDS` | No       | `300`         | Max acceptable analytics staleness before marked stale |
 
 ## Analytics materialized views
 
@@ -381,12 +382,14 @@ The project uses [node-pg-migrate](https://salsita.github.io/node-pg-migrate/) f
 ### Quick Start
 
 **Development (recommended):**
+
 ```bash
 # Build TypeScript and run all pending migrations
 npm run migrate:dev
 ```
 
 **Production/CI:**
+
 ```bash
 # Requires dist/ to be built first
 npm run build
@@ -406,6 +409,7 @@ This creates a timestamped `.ts` file in `src/migrations/`.
 ### Migration Workflow
 
 **Development:**
+
 ```bash
 # Build and run all pending migrations
 npm run migrate:dev
@@ -415,6 +419,7 @@ npm run migrate:dev -- --dry-run
 ```
 
 **Production/CI (requires build first):**
+
 ```bash
 npm run build
 npm run migrate
@@ -422,6 +427,7 @@ npm run migrate:down
 ```
 
 **Rollback:**
+
 ```bash
 # Development (builds first)
 npm run migrate:dev -- migrate:down
@@ -433,29 +439,29 @@ npm run migrate:down
 ### Migration File Structure
 
 ```typescript
-import { MigrationBuilder } from 'node-pg-migrate'
+import { MigrationBuilder } from "node-pg-migrate";
 
 export async function up(pgm: MigrationBuilder): Promise<void> {
   // Apply changes (create tables, add columns, etc.)
-  pgm.createTable('users', {
-    id: 'id',
-    email: { type: 'varchar(255)', notNull: true },
-  })
+  pgm.createTable("users", {
+    id: "id",
+    email: { type: "varchar(255)", notNull: true },
+  });
 }
 
 export async function down(pgm: MigrationBuilder): Promise<void> {
   // Reverse changes
-  pgm.dropTable('users')
+  pgm.dropTable("users");
 }
 ```
 
 ### Environment Variables
 
-| Variable | Description | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | PostgreSQL connection string | Required |
-| `MIGRATIONS_TABLE` | Table name for tracking migrations | `pgmigrations` |
-| `MIGRATIONS_SCHEMA` | Schema for migrations table | `public` |
+| Variable            | Description                        | Default        |
+| ------------------- | ---------------------------------- | -------------- |
+| `DATABASE_URL`      | PostgreSQL connection string       | Required       |
+| `MIGRATIONS_TABLE`  | Table name for tracking migrations | `pgmigrations` |
+| `MIGRATIONS_SCHEMA` | Schema for migrations table        | `public`       |
 
 ### CI/CD Integration
 
@@ -472,6 +478,7 @@ npm start
 ### Initial Schema
 
 The first migration (`src/migrations/001_initial_schema.ts`) creates:
+
 - `identities` - Identity and bond state
 - `attestations` - Attestation records
 - `reputation_scores` - Cached reputation scores
@@ -486,7 +493,6 @@ After running `npm run build`, migrations are executed from `dist/migrations/`.
 4. **Don't modify existing migrations** after they've been applied
 5. **Create new migrations** for schema changes
 6. **Back up production database** before running migrations
-
 
 ## Tech
 
@@ -522,3 +528,23 @@ pnpm run test:coverage     # with coverage (40% global threshold)
 pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evidence)
 pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
 ```
+
+## Operations
+
+### On-Call Runbook
+
+For on-call engineers responding to production incidents, see **[docs/RUNBOOK.md](docs/RUNBOOK.md)** for:
+
+- Common alerts and their meanings
+- First three diagnostic commands
+- Rollback procedures
+- Escalation paths
+
+Related operational documentation:
+
+- [Alert Routing](docs/alert-routing.md) — Severity levels and on-call escalation
+- [Monitoring](docs/monitoring.md) — Metrics and health checks
+- [Graceful Shutdown](docs/graceful-shutdown.md) — Service shutdown behavior
+- [Timeouts and Retries](docs/timeouts-and-retries.md) — Timeout budgets for each dependency
+- [Lock Timeout Configuration](docs/lock-timeout-configuration.md) — Lock-specific diagnostics
+- [Backup/Restore](docs/backup-restore.md) — Weekly backup verification
