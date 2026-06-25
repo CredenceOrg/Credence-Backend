@@ -47,6 +47,7 @@ export class AuditLogService {
     status?: AuditStatus,
     errorMessage?: string,
     ipAddress?: string,
+    requestId?: string,
   ): Promise<AuditLogEntry> {
     if (typeof inputOrTenantId !== 'string') {
       return this.repository.append(inputOrTenantId)
@@ -75,6 +76,7 @@ export class AuditLogService {
       status,
       errorMessage,
       ipAddress,
+      requestId,
     })
   }
 

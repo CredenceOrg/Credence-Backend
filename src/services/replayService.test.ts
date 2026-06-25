@@ -85,7 +85,7 @@ describe('ReplayService', () => {
     vi.mocked(cache.get).mockResolvedValue(event)
     mockRepo.findById.mockResolvedValue(updatedEvent)
 
-    const result = await replayService.replayEvent('123', 'admin-1', 'admin@example.com', '127.0.0.1')
+    const result = await replayService.replayEvent('123', 'admin-1', 'admin@example.com', 'tenant-1', '127.0.0.1')
 
     expect(result.success).toBe(true)
     expect(mockHandler.handle).toHaveBeenCalledWith(event.eventData)
@@ -103,7 +103,7 @@ describe('ReplayService', () => {
     }
     vi.mocked(cache.get).mockResolvedValue(event)
 
-    const result = await replayService.replayEvent('123', 'admin-1', 'admin@example.com')
+    const result = await replayService.replayEvent('123', 'admin-1', 'admin@example.com', 'tenant-1')
 
     expect(result.success).toBe(false)
     expect(result.message).toBe('Event already replayed')
@@ -119,7 +119,7 @@ describe('ReplayService', () => {
     }
     vi.mocked(cache.get).mockResolvedValue(event)
 
-    await expect(replayService.replayEvent('123', 'admin-1', 'admin@example.com'))
+    await expect(replayService.replayEvent('123', 'admin-1', 'admin@example.com', 'tenant-1'))
       .rejects.toThrow('No handler registered for event type: unknown_event')
   })
 })

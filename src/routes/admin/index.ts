@@ -53,6 +53,7 @@ export function createAdminRouter(): Router {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
 
       const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
 
@@ -72,6 +73,7 @@ export function createAdminRouter(): Router {
         user.email,
         { page, limit, offset },
         filters,
+        requestId
       );
 
       res.status(200).json({
@@ -93,6 +95,7 @@ export function createAdminRouter(): Router {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
       const assignRequest = req.body as AssignRoleRequest
 
       // Validate request body
@@ -104,6 +107,7 @@ export function createAdminRouter(): Router {
         user.id,
         user.email,
         assignRequest,
+        requestId
       );
 
       res.status(200).json({
@@ -123,6 +127,7 @@ export function createAdminRouter(): Router {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
       const revokeRequest = req.body as RevokeApiKeyRequest
 
       // Validate request body
@@ -134,6 +139,7 @@ export function createAdminRouter(): Router {
         user.id,
         user.email,
         revokeRequest,
+        requestId
       );
 
       res.status(200).json({
@@ -154,6 +160,7 @@ export function createAdminRouter(): Router {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
       const body = req.body as Partial<IssueImpersonationTokenRequest>
 
       if (!body.targetUserId) {
@@ -175,6 +182,7 @@ export function createAdminRouter(): Router {
           ttlSeconds: body.ttlSeconds,
         },
         req.ip,
+        requestId
       );
 
       res.status(201).json({ success: true, data: issued });
@@ -197,6 +205,7 @@ export function createAdminRouter(): Router {
   router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     const authReq = req as AuthenticatedRequest
     const user = authReq.user!
+    const requestId = (req as any).requestId
     const { tokenId } = req.params
 
     if (!tokenId) {
@@ -205,7 +214,7 @@ export function createAdminRouter(): Router {
     }
 
     try {
-      await impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
+      await impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip, requestId)
       res.status(200).json({ success: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
@@ -267,6 +276,7 @@ export function createAdminRouter(): Router {
       try {
         const authReq = req as AuthenticatedRequest;
         const user = authReq.user!;
+        const requestId = (req as any).requestId
 
         if (!req.query.startDate || !req.query.endDate) {
           throw new ValidationError(
@@ -305,6 +315,7 @@ export function createAdminRouter(): Router {
         startDate,
         endDate,
         user,
+        requestId
       );
 
       let count = 0;
@@ -319,6 +330,7 @@ export function createAdminRouter(): Router {
         startDate,
         endDate,
         count,
+        requestId
       );
       res.end();
     } catch (error) {
@@ -337,10 +349,28 @@ export function createAdminRouter(): Router {
    */
   router.get('/events/failed', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     try {
+      const authReq = req as AuthenticatedRequest
+      const admin = authReq.user!
+      const requestId = (req as any).requestId
       const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
       const filters: any = {}
       if (req.query.status) filters.status = req.query.status
       if (req.query.type) filters.type = req.query.type
+
+      // Log the list action
+      void auditLogService.logAction(
+        admin.tenantId,
+        admin.id,
+        admin.email,
+        AuditAction.LIST_FAILED_EVENTS,
+        admin.id,
+        undefined,
+        { filters, limit, offset },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      )
 
       const { events, total } = await replayService.listFailedEvents(filters, limit, offset)
       const paginationMeta = buildPaginationMeta(total, page, limit)
@@ -365,13 +395,15 @@ export function createAdminRouter(): Router {
       const authReq = req as AuthenticatedRequest
       const admin = authReq.user!
       const id = req.params.id
+      const requestId = (req as any).requestId
 
       const result = await replayService.replayEvent(
         id,
         admin.id,
         admin.email,
         admin.tenantId,
-        req.ip
+        req.ip,
+        requestId
       )
 
       res.status(200).json(result)
@@ -386,10 +418,29 @@ export function createAdminRouter(): Router {
    */
   router.post('/replay', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     try {
-      const { requestId } = req.body as { requestId: string };
-      if (!requestId) {
+      const authReq = req as AuthenticatedRequest;
+      const admin = authReq.user!;
+      const requestId = (req as any).requestId;
+      const { requestId: targetRequestId } = req.body as { requestId: string };
+      if (!targetRequestId) {
         throw new ValidationError('Missing requestId');
       }
+
+      // Log the replay request
+      void auditLogService.logAction(
+        admin.tenantId,
+        admin.id,
+        admin.email,
+        AuditAction.REPLAY_REQUEST,
+        targetRequestId,
+        undefined,
+        { requestId: targetRequestId },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      );
+
       const diff = await withReplaySnapshot(pool, async (client, snapshot) => {
         const identityRepo = new IdentityRepository(client);
         const bondsRepo = new BondsRepository(client);
@@ -411,7 +462,7 @@ export function createAdminRouter(): Router {
         const identitiesDiff = computeDiff(currentIdentities, snapshot.identities);
         const bondsDiff = computeDiff(currentBonds, snapshot.bonds);
         return { identities: identitiesDiff, bonds: bondsDiff };
-      }, requestId);
+      }, targetRequestId);
       res.status(200).json({ success: true, data: diff });
     } catch (error) {
       next(error);

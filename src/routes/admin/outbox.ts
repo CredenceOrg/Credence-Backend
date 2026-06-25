@@ -10,7 +10,7 @@ import {
   requireApiKey,
   requireUserAuth,
 } from '../../middleware/auth.js'
-import { auditLogService } from '../../services/audit/index.js'
+import { auditLogService, AuditAction } from '../../services/audit/index.js'
 
 const quarantineReasons = new Set<OutboxQuarantineReason>([
   'malformed_json',
@@ -50,6 +50,9 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
     requireAdminRole,
     async (req: Request, res: Response, next: NextFunction) => {
       try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
         const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>, {
           defaultLimit: 50,
         })
@@ -58,6 +61,21 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
           res.status(400).json({ error: 'InvalidReason', message: `Unsupported quarantine reason: ${reason}` })
           return
         }
+
+        // Log the list action
+        void auditLogService.logAction(
+          admin.tenantId,
+          admin.id,
+          admin.email,
+          AuditAction.LIST_OUTBOX_QUARANTINE,
+          admin.id,
+          undefined,
+          { reason, limit, offset },
+          undefined,
+          undefined,
+          req.ip,
+          requestId
+        )
 
         const { entries, total } = await repository.listQuarantine(
           pool,
@@ -84,6 +102,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
       try {
         const id = BigInt(req.params.id)
         const payload = req.body?.payload
+        const requestId = (req as any).requestId
         if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
           res.status(400).json({ error: 'InvalidPayload', message: 'payload must be a JSON object' })
           return
@@ -104,7 +123,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
           tenantId,
           actorId,
           actorEmail,
-          action: 'OUTBOX_REINJECT',
+          action: AuditAction.OUTBOX_REINJECT,
           resourceType: 'outbox_quarantine',
           resourceId: id.toString(),
           details: {
@@ -113,6 +132,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
           },
           status: 'success',
           ipAddress: req.ip,
+          requestId,
         })
 
         res.status(201).json({
