@@ -1,8 +1,18 @@
-﻿import { createHmac, timingSafeEqual } from 'node:crypto'
+import { createHmac, timingSafeEqual } from 'node:crypto'
 
 export type VerifyResult =
   | { ok: true }
-  | { ok: false; reason: 'missing_secret' | 'missing_signature' | 'malformed_signature' | 'invalid_signature' }
+  | {
+      ok: false
+      reason:
+        | 'missing_secret'
+        | 'missing_signature'
+        | 'malformed_signature'
+        | 'invalid_signature'
+        | 'expired'
+        | 'missing_timestamp'
+        | 'invalid_timestamp'
+    }
 
 export function parseSignatureHeader(raw: string | null | undefined): string | null {
   if (raw == null) return null
@@ -28,7 +38,8 @@ export function verifySignature(
   rawSignature: string | null | undefined,
   body: string,
   currentSecret: string | null | undefined,
-  previousSecret?: string | null | undefined
+  previousSecret?: string | null | undefined,
+  options?: { tolerance?: number }
 ): VerifyResult {
   if (!currentSecret && !previousSecret) return { ok: false, reason: 'missing_secret' }
   if (rawSignature == null || rawSignature === '') {
@@ -37,6 +48,28 @@ export function verifySignature(
 
   const received = parseSignatureHeader(rawSignature)
   if (!received) return { ok: false, reason: 'malformed_signature' }
+
+  // Replay Protection / Timestamp Verification
+  try {
+    const payload = JSON.parse(body)
+    if (!payload || typeof payload !== 'object' || !('timestamp' in payload)) {
+      return { ok: false, reason: 'missing_timestamp' }
+    }
+    if (typeof payload.timestamp !== 'string') {
+      return { ok: false, reason: 'invalid_timestamp' }
+    }
+    const timestamp = new Date(payload.timestamp).getTime()
+    if (isNaN(timestamp)) {
+      return { ok: false, reason: 'invalid_timestamp' }
+    }
+    const now = Date.now()
+    const tolerance = options?.tolerance ?? 300000 // default 5 minutes (300,000 ms)
+    if (Math.abs(now - timestamp) > tolerance) {
+      return { ok: false, reason: 'expired' }
+    }
+  } catch {
+    return { ok: false, reason: 'missing_timestamp' }
+  }
 
   // Try current secret first
   if (currentSecret) {
