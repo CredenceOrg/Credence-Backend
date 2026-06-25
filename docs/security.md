@@ -204,6 +204,18 @@ The pipeline runs two complementary scanning engines:
 
 A custom-built, fully unit-tested severity gate engine (`scripts/security-gate.ts`) parses the output of both tools. If any vulnerability is found matching or exceeding the configured severity threshold (default is **HIGH**), the script prints the offending advisory details and exits with `1`, **failing the build**.
 
+### Pull Request SBOM Component Diff
+
+`.github/workflows/sbom-diff.yml` runs on pull requests to `main` and `develop`. The workflow checks out both the pull request head and base commit, generates CycloneDX SBOM files for each dependency graph, and runs `scripts/sbom-component-diff.js` to compare their component lists.
+
+The workflow posts or updates a single pull request comment named **SBOM component changes**. The comment shows the count and names of components added by the pull request and components removed relative to the base branch, giving operators and downstream consumers a quick supply-chain review surface without downloading SBOM artifacts.
+
+Developers can run the same local smoke check with:
+
+```bash
+npm run sbom:check
+```
+
 ### Response SLA Matrix
 
 Vulnerabilities discovered in production dependencies must be triaged, patched, and resolved according to the following strict SLA timeline:

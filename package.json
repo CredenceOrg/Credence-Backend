@@ -14,6 +14,8 @@
     "test:coverage": "vitest run --coverage",
     "coverage": "vitest run --coverage",
     "coverage:audit": "vitest run --config vitest.audit.config.ts --coverage",
+    "security:scan": "npm audit --omit=dev",
+    "sbom:check": "npx @cyclonedx/cyclonedx-npm --output-file sbom.json --ignore-npm-errors && node scripts/sbom-component-diff.js --base sbom.json --head sbom.json --summary",
     "migrate:create": "node-pg-migrate create -j ts -m src/migrations",
     "migrate": "node-pg-migrate -m dist/migrations up",
     "migrate:down": "node-pg-migrate -m dist/migrations down",
