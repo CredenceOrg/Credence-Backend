@@ -29,6 +29,10 @@ describe('Health routes', () => {
       expect(res.body.dependencies.horizonListener.status).toBe('up')
       expect(res.body.dependencies.outboxPublisher.status).toBe('up')
       expect(res.body.dependencies.horizon.status).toBe('up')
+      expect(res.body.version).toBeDefined()
+      expect(typeof res.body.version.gitSha).toBe('string')
+      expect(typeof res.body.version.buildTimestamp).toBe('string')
+      expect(typeof res.body.version.nodeVersion).toBe('string')
     })
 
     it('response includes latencyMs per dependency', async () => {
@@ -146,6 +150,10 @@ describe('Health routes', () => {
       expect(res.status).toBe(200)
       expect(res.body.status).toBe('ok')
       expect(res.body.service).toBe('credence-backend')
+      expect(res.body.version).toBeDefined()
+      expect(typeof res.body.version.gitSha).toBe('string')
+      expect(typeof res.body.version.buildTimestamp).toBe('string')
+      expect(typeof res.body.version.nodeVersion).toBe('string')
     })
 
     it('does not include dependencies in /live response', async () => {

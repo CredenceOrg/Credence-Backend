@@ -39,11 +39,11 @@ registry.registerPath({
   responses: {
     200: {
       description: 'Healthy',
-      content: { 'application/json': { schema: z.object({ status: z.string(), service: z.string() }) } },
+      content: { 'application/json': { schema: z.object({ status: z.string(), service: z.string(), version: z.object({ gitSha: z.string(), buildTimestamp: z.string(), nodeVersion: z.string() }) }) } },
     },
     503: {
       description: 'Unhealthy',
-      content: { 'application/json': { schema: z.object({ status: z.string(), service: z.string() }) } },
+      content: { 'application/json': { schema: z.object({ status: z.string(), service: z.string(), version: z.object({ gitSha: z.string(), buildTimestamp: z.string(), nodeVersion: z.string() }) }) } },
     },
   },
 });

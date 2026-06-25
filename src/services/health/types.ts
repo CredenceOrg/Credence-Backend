@@ -1,3 +1,5 @@
+import type { VersionMetadata } from '../../utils/version.js'
+
 /**
  * Health check result for a single dependency.
  * Status is intentionally minimal to avoid exposing internal details.
@@ -17,6 +19,7 @@ export interface DependencyHealth {
 export interface HealthResult {
   status: 'ok' | 'degraded' | 'unhealthy'
   service: string
+  version: VersionMetadata
   dependencies: {
     postgres: DependencyHealth
     redis: DependencyHealth

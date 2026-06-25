@@ -225,6 +225,11 @@ The `/api/health/ready` endpoint is dependency-aware and used as the Kubernetes 
 {
   "status": "ok",
   "service": "credence-backend",
+  "version": {
+    "gitSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "buildTimestamp": "2026-06-25T20:00:00.000Z",
+    "nodeVersion": "v20.10.0"
+  },
   "dependencies": {
     "postgres":        { "status": "up", "latencyMs": 4 },
     "redis":           { "status": "up", "latencyMs": 1 },

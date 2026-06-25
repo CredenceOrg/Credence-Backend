@@ -74,12 +74,13 @@ describe('Health route – dependency-aware checks with degradation reasons', ()
     expect(res.body.dependencies.redis.reason).toBeUndefined()
   })
 
-  it('schema is stable: always has status, service, dependencies keys', async () => {
+  it('schema is stable: always has status, service, version, dependencies keys', async () => {
     const app = appWithHealth({})
     const res = await request(app).get('/api/health')
     expect(res.status).toBe(200)
     expect(res.body).toHaveProperty('status')
     expect(res.body).toHaveProperty('service', 'credence-backend')
+    expect(res.body).toHaveProperty('version')
     expect(res.body).toHaveProperty('dependencies')
     expect(res.body.dependencies).toHaveProperty('postgres')
     expect(res.body.dependencies).toHaveProperty('redis')
