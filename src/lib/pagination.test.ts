@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import fc from 'fast-check'
 
+process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long'
+
 import {
   buildPaginationMeta,
   decodeCursor,
