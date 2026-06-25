@@ -233,6 +233,10 @@ State shape is `IdentityState`: `address`, `bondedAmount`, `bondStart`, `bondDur
 Tests cover: no drift (no update), single drift (one address corrected), full resync (multiple drifts), chain missing, store-only addresses, and error handling.
 
 
+## Logging
+
+We rely on structured logging to maintain a consistent schema and protect PII. See **[docs/LOGGING.md](docs/LOGGING.md)** for our policy on reserved keys (`request_id`, `tenant`, `actor`) and redaction rules.
+
 ## Monitoring
 
 Comprehensive monitoring with Prometheus and Grafana is available. See **[docs/monitoring.md](docs/monitoring.md)** for:
