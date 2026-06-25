@@ -1,110 +1,124 @@
 /**
  * Migration Runner
- * 
+ *
  * Programmatic interface for running database migrations.
  * Wraps node-pg-migrate to provide a TypeScript-friendly API.
  */
 
-import { runner, Migration } from 'node-pg-migrate'
-import { loadMigrationConfig, validateConfig, MigrationConfig } from './config.js'
-import { analyzeMigration, PreflightResult } from './guardrails.js'
+import { runner, Migration } from "node-pg-migrate";
+import {
+  loadMigrationConfig,
+  validateConfig,
+  MigrationConfig,
+} from "./config.js";
+import { analyzeMigration, PreflightResult } from "./guardrails.js";
 
-type RunnerOptions = Parameters<typeof runner>[0] & { ignorePattern?: string }
+type RunnerOptions = Parameters<typeof runner>[0] & { ignorePattern?: string };
 
 export interface MigrationOptions {
   /** Direction of migration: 'up' or 'down' */
-  direction: 'up' | 'down'
+  direction: "up" | "down";
   /** Number of migrations to run (default: all for up, 1 for down) */
-  count?: number
+  count?: number;
   /** Specific migration to run (optional) */
-  file?: string
+  file?: string;
   /** Whether to print verbose output */
-  verbose?: boolean
+  verbose?: boolean;
   /** Custom configuration (uses loadMigrationConfig() if not provided) */
-  config?: MigrationConfig
+  config?: MigrationConfig;
   /** Skip preflight safety checks (not recommended) */
-  skipPreflight?: boolean
+  skipPreflight?: boolean;
   /** Allow blocking operations (use with caution) */
-  allowBlocking?: boolean
+  allowBlocking?: boolean;
 }
 
 export interface MigrationResult {
   /** Whether the migration was successful */
-  success: boolean
+  success: boolean;
   /** List of migrations that were applied */
-  applied: string[]
+  applied: string[];
   /** Error message if failed */
-  error?: string
+  error?: string;
   /** Preflight check results */
-  preflight?: PreflightResult
+  preflight?: PreflightResult;
 }
 
 /**
  * Run database migrations programmatically
- * 
+ *
  * @param options Migration options
  * @returns MigrationResult with status and applied migrations
- * 
+ *
  * @example
  * ```typescript
  * // Run all pending migrations
  * const result = await runMigration({ direction: 'up' })
- * 
+ *
  * // Rollback last migration
  * const result = await runMigration({ direction: 'down' })
- * 
+ *
  * // Rollback 3 migrations
  * const result = await runMigration({ direction: 'down', count: 3 })
  * ```
  */
-export async function runMigration(options: MigrationOptions): Promise<MigrationResult> {
-  const config = options.config ?? loadMigrationConfig()
-  validateConfig(config)
+export async function runMigration(
+  options: MigrationOptions,
+): Promise<MigrationResult> {
+  const config = options.config ?? loadMigrationConfig();
+  validateConfig(config);
 
-  const applied: string[] = []
-  let preflightResult: PreflightResult | undefined
+  const applied: string[] = [];
+  let preflightResult: PreflightResult | undefined;
 
   // Run preflight checks unless explicitly skipped
   if (!options.skipPreflight) {
     if (options.file) {
-      preflightResult = analyzeMigration(options.file)
+      preflightResult = analyzeMigration(options.file);
     } else {
       // For directory-based migrations, we'd need to scan which migrations will run
       // For now, we'll skip directory preflight checks as it requires complex logic
       if (options.verbose !== false) {
-        console.log('⚠️  Skipping preflight checks for directory-based migrations')
+        console.log(
+          "⚠️  Skipping preflight checks for directory-based migrations",
+        );
       }
     }
 
     // Check preflight results
     if (preflightResult && !preflightResult.passed) {
-      const blockingIssues = preflightResult.issues.filter(issue => issue.type === 'blocking')
-      
+      const blockingIssues = preflightResult.issues.filter(
+        (issue) => issue.type === "blocking",
+      );
+
       if (blockingIssues.length > 0 && !options.allowBlocking) {
         return {
           success: false,
           applied,
-          error: `Blocking operations detected. Use allowBlocking: true to override. Issues: ${blockingIssues.map(i => i.message).join(', ')}`,
-          preflight: preflightResult
-        }
+          error: `Blocking operations detected. Use allowBlocking: true to override. Issues: ${blockingIssues.map((i) => i.message).join(", ")}`,
+          preflight: preflightResult,
+        };
       }
 
       if (preflightResult.issues.length > 0) {
         return {
           success: false,
           applied,
-          error: `Safety issues detected: ${preflightResult.issues.map(i => i.message).join(', ')}`,
-          preflight: preflightResult
-        }
+          error: `Safety issues detected: ${preflightResult.issues.map((i) => i.message).join(", ")}`,
+          preflight: preflightResult,
+        };
       }
     }
 
     // Log warnings if any
-    if (preflightResult && preflightResult.warnings.length > 0 && options.verbose !== false) {
-      console.log('⚠️  Migration warnings:')
-      preflightResult.warnings.forEach(warning => {
-        console.log(`  • ${warning.message}`)
-      })
+    if (
+      preflightResult &&
+      preflightResult.warnings.length > 0 &&
+      options.verbose !== false
+    ) {
+      console.log("⚠️  Migration warnings:");
+      preflightResult.warnings.forEach((warning) => {
+        console.log(`  • ${warning.message}`);
+      });
     }
   }
 
@@ -120,57 +134,137 @@ export async function runMigration(options: MigrationOptions): Promise<Migration
       file: options.file,
       verbose: options.verbose ?? true,
       // Only numbered migration files (e.g. 001_initial_schema.ts); skip tooling/templates.
-      ignorePattern: '^(?!\\d+_).*',
+      ignorePattern: "^(?!\\d+_).*",
       // Log applied migrations
       log: (message: string) => {
         if (options.verbose !== false) {
-          console.log(message)
+          console.log(message);
         }
       },
       // Track applied migrations
       logger: {
         info: (msg: string) => {
           if (options.verbose !== false) {
-            console.info(msg)
+            console.info(msg);
           }
           // Extract migration name from log messages
-          const match = msg.match(/migrating\s+'(.+)'/i)
+          const match = msg.match(/migrating\s+'(.+)'/i);
           if (match) {
-            applied.push(match[1])
+            applied.push(match[1]);
           }
         },
         warn: (msg: string) => console.warn(msg),
         error: (msg: string) => console.error(msg),
       },
-    } as RunnerOptions)
+    } as RunnerOptions);
 
     return {
       success: true,
       applied,
-      preflight: preflightResult
-    }
+      preflight: preflightResult,
+    };
   } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error)
+    const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
       applied,
       error: errorMessage,
-      preflight: preflightResult
-    }
+      preflight: preflightResult,
+    };
+  }
+}
+
+/**
+ * Preview database migrations without executing them
+ *
+ * Prints the SQL that would be executed by the next migration without actually running it.
+ * Useful for reviewing changes before deployment.
+ *
+ * @param options Migration options (same as runMigration but direction defaults to 'up')
+ * @returns MigrationResult with status and list of migrations that would be applied
+ *
+ * @example
+ * ```typescript
+ * // Preview all pending migrations
+ * const result = await dryRunMigration({ skipPreflight: true })
+ *
+ * // Preview specific number of migrations
+ * const result = await dryRunMigration({ count: 2 })
+ * ```
+ */
+export async function dryRunMigration(
+  options: Omit<MigrationOptions, "direction"> = {},
+): Promise<MigrationResult> {
+  const config = options.config ?? loadMigrationConfig();
+  validateConfig(config);
+
+  const applied: string[] = [];
+  const sqlStatements: string[] = [];
+
+  try {
+    await runner({
+      databaseUrl: config.databaseUrl,
+      dir: config.migrationsDir,
+      migrationsTable: config.migrationsTable,
+      schema: config.migrationsSchema,
+      createSchema: config.createSchema,
+      direction: "up",
+      count: options.count,
+      file: options.file,
+      dryRun: true,
+      verbose: options.verbose ?? true,
+      // Only numbered migration files (e.g. 001_initial_schema.ts); skip tooling/templates.
+      ignorePattern: "^(?!\\d+_).*",
+      // Collect SQL statements
+      log: (message: string) => {
+        if (options.verbose !== false) {
+          console.log(message);
+        }
+        // Collect SQL output
+        sqlStatements.push(message);
+      },
+      // Track migrations that would be applied
+      logger: {
+        info: (msg: string) => {
+          if (options.verbose !== false) {
+            console.info(msg);
+          }
+          // Extract migration name from log messages
+          const match = msg.match(/migrating\s+'(.+)'/i);
+          if (match) {
+            applied.push(match[1]);
+          }
+        },
+        warn: (msg: string) => console.warn(msg),
+        error: (msg: string) => console.error(msg),
+      },
+    } as RunnerOptions);
+
+    return {
+      success: true,
+      applied,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      success: false,
+      applied,
+      error: errorMessage,
+    };
   }
 }
 
 /**
  * Get the status of all migrations
- * 
+ *
  * @returns List of migrations with their status
  */
 export async function getMigrationStatus(): Promise<{
-  applied: string[]
-  pending: string[]
+  applied: string[];
+  pending: string[];
 }> {
-  const config = loadMigrationConfig()
-  validateConfig(config)
+  const config = loadMigrationConfig();
+  validateConfig(config);
 
   try {
     // Run with dryRun to get status without applying
@@ -179,50 +273,53 @@ export async function getMigrationStatus(): Promise<{
       dir: config.migrationsDir,
       migrationsTable: config.migrationsTable,
       schema: config.migrationsSchema,
-      direction: 'up',
+      direction: "up",
       dryRun: true,
       verbose: false,
-      ignorePattern: '^(?!\\d+_).*',
+      ignorePattern: "^(?!\\d+_).*",
       log: () => {}, // Suppress logs
-    } as RunnerOptions)
+    } as RunnerOptions);
 
     // This is a simplified status check
     // In production, you might want to query the migrations table directly
     return {
       applied: [],
       pending: [],
-    }
+    };
   } catch (error) {
-    console.error('Failed to get migration status:', error)
+    console.error("Failed to get migration status:", error);
     return {
       applied: [],
       pending: [],
-    }
+    };
   }
 }
 
 /**
  * Create a new migration file from the template
- * 
+ *
  * @param name Name of the migration (will be prefixed with timestamp)
  * @returns Path to the created migration file
  */
 export async function createMigration(name: string): Promise<string> {
-  const config = loadMigrationConfig()
-  
+  const config = loadMigrationConfig();
+
   // Sanitize name: replace spaces with underscores, remove special chars
   const sanitizedName = name
     .toLowerCase()
-    .replace(/\s+/g, '_')
-    .replace(/[^a-z0-9_]/g, '')
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "");
 
   if (!sanitizedName) {
-    throw new Error('Migration name cannot be empty')
+    throw new Error("Migration name cannot be empty");
   }
 
-  const timestamp = new Date().toISOString().replace(/[-:T.Z]/g, '').slice(0, 14)
-  const filename = `${timestamp}_${sanitizedName}.ts`
-  const filepath = `${config.migrationsDir}/${filename}`
+  const timestamp = new Date()
+    .toISOString()
+    .replace(/[-:T.Z]/g, "")
+    .slice(0, 14);
+  const filename = `${timestamp}_${sanitizedName}.ts`;
+  const filepath = `${config.migrationsDir}/${filename}`;
 
   // Template content
   const template = `import { MigrationBuilder } from 'node-pg-migrate'
@@ -250,11 +347,11 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
   // Example:
   // pgm.dropTable('users')
 }
-`
+`;
 
-  const fs = await import('fs/promises')
-  await fs.writeFile(filepath, template, 'utf-8')
-  
-  console.log(`Created migration: ${filepath}`)
-  return filepath
+  const fs = await import("fs/promises");
+  await fs.writeFile(filepath, template, "utf-8");
+
+  console.log(`Created migration: ${filepath}`);
+  return filepath;
 }
