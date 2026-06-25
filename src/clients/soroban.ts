@@ -11,7 +11,7 @@ import {
 } from "../lib/timeoutExecutor.js";
 import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.js";
 import { normalizeTransportError, isAbortError } from "./httpErrors.js";
-import { classifyTransportError } from "../utils/retryClassifier.js";
+import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
 import {
   noopRetryObserver,
@@ -489,7 +489,7 @@ export class SorobanClient {
     }
 
     if (error.code === "RPC_ERROR") {
-      return error.rpcCode === -32004 || error.rpcCode === -32005;
+      return isRetryableRpcCode(error.rpcCode);
     }
 
     return false;

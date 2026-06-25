@@ -269,6 +269,7 @@ The backend implements a comprehensive timeout and retry strategy for all extern
 
 - Timeout budgets by service type (database, cache, HTTP, Soroban, webhooks)
 - Default and per-provider retry policies
+- Downstream error classification (`NETWORK_ERROR` vs `TIMEOUT_ERROR` vs `RPC_ERROR`) with typed surfacing
 - Environment variable tuning guide
 - Operational runbook (symptom → diagnosis → tuning)
 
