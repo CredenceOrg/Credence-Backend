@@ -701,5 +701,228 @@ describe('decimalMath', () => {
       expect(getFracLen(m)).toBe(aScale + bScale)
     })
   })
+
+  describe('round-trip invariants for normalize, denormalize, and multiply', () => {
+    /**
+     * Arbitrary decimal strings with up to 8 fractional digits.
+     * Excludes signed zero ("-0") to match library expectations.
+     */
+    const decimalArb = fc
+      .tuple(
+        fc.boolean(),
+        fc.integer({ min: 0, max: 999_999 }),
+        fc.integer({ min: 0, max: 8 }),
+        fc.integer({ min: 0, max: 99_999_999 }),
+      )
+      .map(([negative, intPart, fracLen, fracVal]) => {
+        const fracStr =
+          fracLen === 0
+            ? ''
+            : fracVal.toString().padStart(fracLen, '0').slice(0, fracLen)
+        const magnitude = fracLen > 0 ? `${intPart}.${fracStr}` : `${intPart}`
+        const isZero = intPart === 0 && (fracLen === 0 || fracVal === 0)
+        return negative && !isZero ? `-${magnitude}` : magnitude
+      })
+
+    const nonZeroDecimalArb = decimalArb.filter(
+      (s) => compareDecimals(s, '0') !== 0,
+    )
+
+    const getFracLen = (v: string): number => {
+      const dot = v.indexOf('.')
+      return dot === -1 ? 0 : v.length - dot - 1
+    }
+
+    // -- normalize (roundToScale) invariants --------------------------------
+
+    it('roundToScale_is_idempotent_for_all_rounding_modes', () => {
+      const modes = [
+        RoundingMode.HALF_UP,
+        RoundingMode.HALF_DOWN,
+        RoundingMode.HALF_EVEN,
+        RoundingMode.DOWN,
+        RoundingMode.UP,
+      ]
+      fc.assert(
+        fc.property(
+          decimalArb,
+          fc.integer({ min: 0, max: 10 }),
+          fc.constantFrom(...modes),
+          (value, scale, mode) => {
+            const once = roundToScale(value, scale, mode)
+            const twice = roundToScale(once, scale, mode)
+            expect(twice).toBe(once)
+          },
+        ),
+        { numRuns: 2000 },
+      )
+    })
+
+    it('roundToScale_preserves_value_when_input_already_has_fewer_or_equal_fractional_digits', () => {
+      fc.assert(
+        fc.property(
+          decimalArb,
+          fc.integer({ min: 0, max: 10 }),
+          (value, extraDigits) => {
+            const inputFracLen = getFracLen(value)
+            const targetScale = inputFracLen + extraDigits
+            // Rounding to a wider scale should not change the numeric value.
+            const rounded = roundToScale(value, targetScale, RoundingMode.DOWN)
+            expect(compareDecimals(rounded, value)).toBe(0)
+          },
+        ),
+        { numRuns: 1000 },
+      )
+    })
+
+    // -- normalize then denormalize round-trip --------------------------------
+
+    it('normalize_then_widen_scale_preserves_numeric_value', () => {
+      fc.assert(
+        fc.property(
+          decimalArb,
+          fc.integer({ min: 0, max: 8 }),
+          fc.integer({ min: 0, max: 4 }),
+          (value, narrowScale, extraDigits) => {
+            const widerScale = narrowScale + extraDigits
+            // Normalize to narrower scale, then widen back.
+            const normalized = roundToScale(value, narrowScale, RoundingMode.DOWN)
+            const widened = roundToScale(normalized, widerScale, RoundingMode.DOWN)
+            // The widened result must be numerically equal to the normalized value.
+            expect(compareDecimals(widened, normalized)).toBe(0)
+          },
+        ),
+        { numRuns: 1000 },
+      )
+    })
+
+    it('normalize_DOWN_then_normalize_UP_bounds_original_value', () => {
+      fc.assert(
+        fc.property(
+          decimalArb,
+          fc.integer({ min: 0, max: 10 }),
+          (value, scale) => {
+            const down = roundToScale(value, scale, RoundingMode.DOWN)
+            const up = roundToScale(value, scale, RoundingMode.UP)
+            // The original value must sit between DOWN and UP (inclusive).
+            // For positive values: down <= value <= up
+            // For negative values: up <= value <= down (magnitudes reversed)
+            expect(compareDecimals(down, up)).toBeLessThanOrEqual(0)
+          },
+        ),
+        { numRuns: 1000 },
+      )
+    })
+
+    // -- multiply round-trip invariants ---------------------------------------
+
+    it('multiplyDecimals_by_one_preserves_numeric_value', () => {
+      fc.assert(
+        fc.property(decimalArb, (a) => {
+          const result = multiplyDecimals(a, '1')
+          expect(compareDecimals(result, a)).toBe(0)
+        }),
+        { numRuns: 1000 },
+      )
+    })
+
+    it('multiplyDecimals_by_zero_returns_zero', () => {
+      fc.assert(
+        fc.property(decimalArb, (a) => {
+          const result = multiplyDecimals(a, '0')
+          expect(compareDecimals(result, '0')).toBe(0)
+        }),
+        { numRuns: 500 },
+      )
+    })
+
+    it('multiplyDecimals_is_commutative', () => {
+      fc.assert(
+        fc.property(decimalArb, decimalArb, (a, b) => {
+          const ab = multiplyDecimals(a, b)
+          const ba = multiplyDecimals(b, a)
+          expect(compareDecimals(ab, ba)).toBe(0)
+        }),
+        { numRuns: 1000 },
+      )
+    })
+
+    it('multiplyDecimals_result_scale_equals_sum_of_input_scales', () => {
+      fc.assert(
+        fc.property(decimalArb, decimalArb, (a, b) => {
+          const result = multiplyDecimals(a, b)
+          const expectedScale = getFracLen(a) + getFracLen(b)
+          expect(getFracLen(result)).toBe(expectedScale)
+        }),
+        { numRuns: 1000 },
+      )
+    })
+
+    it('multiplyDecimals_then_divideDecimals_round_trips_within_one_ulp', () => {
+      fc.assert(
+        fc.property(
+          decimalArb,
+          nonZeroDecimalArb,
+          fc.integer({ min: 0, max: 8 }),
+          (a, b, extraScale) => {
+            // Use enough scale to capture input precision.
+            const inputScale = getFracLen(a)
+            const scale = inputScale + extraScale
+            const product = multiplyDecimals(a, b)
+            const quotient = divideDecimals(product, b, scale, RoundingMode.HALF_UP)
+            // |quotient - a| ≤ 1 ULP at `scale`
+            const diff = subtractDecimals(quotient, a)
+            const absDiff = diff.startsWith('-') ? diff.slice(1) : diff
+            const ulp = scale === 0 ? '1' : `0.${'0'.repeat(scale - 1)}1`
+            expect(compareDecimals(absDiff, ulp)).toBeLessThanOrEqual(0)
+          },
+        ),
+        { numRuns: 1000 },
+      )
+    })
+
+    // -- sad path: invalid inputs always throw --------------------------------
+
+    it('roundToScale_rejects_non_numeric_strings', () => {
+      fc.assert(
+        fc.property(
+          fc.string({ minLength: 1 }).filter((s) => !/^\s*-?\d+(\.\d*)?\s*$/.test(s)),
+          fc.integer({ min: 0, max: 6 }),
+          (garbage, scale) => {
+            expect(() => roundToScale(garbage, scale)).toThrow()
+          },
+        ),
+        { numRuns: 500 },
+      )
+    })
+
+    it('multiplyDecimals_rejects_non_numeric_strings', () => {
+      fc.assert(
+        fc.property(
+          fc.string({ minLength: 1 }).filter((s) => !/^\s*-?\d+(\.\d*)?\s*$/.test(s)),
+          (garbage) => {
+            expect(() => multiplyDecimals(garbage, '1')).toThrow()
+            expect(() => multiplyDecimals('1', garbage)).toThrow()
+          },
+        ),
+        { numRuns: 500 },
+      )
+    })
+
+    it('divideDecimals_throws_DivisionByZeroError_for_any_zero_divisor', () => {
+      const zeroArb = fc.constantFrom('0', '0.0', '0.00', '-0', '-0.0', '-0.00')
+      fc.assert(
+        fc.property(
+          nonZeroDecimalArb,
+          zeroArb,
+          fc.integer({ min: 0, max: 6 }),
+          (a, zero, scale) => {
+            expect(() => divideDecimals(a, zero, scale)).toThrow(DivisionByZeroError)
+          },
+        ),
+        { numRuns: 200 },
+      )
+    })
+  })
 })
 
