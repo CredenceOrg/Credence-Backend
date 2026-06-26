@@ -179,6 +179,58 @@ export const webhookDlqSize = new client.Gauge({
 })
 
 // ============================================================================
+// Queue Backlog Metrics
+// ============================================================================
+
+/** Sampling cadence for queue backlog gauge (milliseconds). */
+export const QUEUE_BACKLOG_SAMPLE_INTERVAL_MS = 15_000
+
+/**
+ * Gauge tracking the current number of pending items in a named queue,
+ * partitioned by `topic` label.
+ *
+ * Update via `queueBacklogSize.set({ topic: '<name>' }, count)`.
+ */
+export const queueBacklogSize = new client.Gauge({
+  name: 'queue_backlog_size',
+  help: 'Current number of items pending in the backlog queue, partitioned by topic',
+  labelNames: ['topic'],
+  registers: [register]
+})
+
+/**
+ * Starts the background worker that samples queue backlog sizes every
+ * QUEUE_BACKLOG_SAMPLE_INTERVAL_MS (15 s) and updates the gauge.
+ *
+ * @param samplers - Map of topic name → async function returning current backlog count.
+ * @returns The interval handle (pass to clearInterval to stop).
+ *
+ * Usage:
+ * ```typescript
+ * import { startQueueBacklogSampler } from './middleware/metrics.js'
+ *
+ * startQueueBacklogSampler({
+ *   'bulk_verification': () => bulkQueue.getWaitingCount(),
+ *   'outbox':            () => outboxRepo.countPending(),
+ * })
+ * ```
+ */
+export function startQueueBacklogSampler(
+  samplers: Record<string, () => Promise<number> | number>
+): NodeJS.Timeout {
+  return setInterval(async () => {
+    for (const [topic, getSampleFn] of Object.entries(samplers)) {
+      try {
+        const count = await getSampleFn()
+        queueBacklogSize.set({ topic }, count)
+      } catch {
+        // Swallow per-topic errors so one failing sampler does not block others
+      }
+    }
+  }, QUEUE_BACKLOG_SAMPLE_INTERVAL_MS)
+}
+
+// ============================================================================
 // Middleware
 // ============================================================================
 
