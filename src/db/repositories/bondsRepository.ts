@@ -133,6 +133,20 @@ export class BondsRepository {
     return result.rows.map(mapBond)
   }
 
+  async findAll(limit = 100, offset = 0): Promise<Bond[]> {
+    const result = await this.db.query<BondRow>(
+      `
+      SELECT id, identity_address, amount, start_time, duration_days, status, created_at
+      FROM bonds
+      ORDER BY created_at DESC
+      LIMIT $1 OFFSET $2
+      `,
+      [limit, offset]
+    )
+
+    return result.rows.map(mapBond)
+  }
+
   async updateStatus(id: number, status: BondStatus): Promise<Bond | null> {
     const result = await this.db.query<BondRow>(
       `

@@ -45,8 +45,65 @@ describe('DB Pool configuration', () => {
   })
 
   it('statement_timeout is set in options string', async () => {
-    const { pool, workerPool } = await import('./pool.js')
+    const { pool, workerPool, replicaPool } = await import('./pool.js')
     expect(pool.options.options).toContain('-c statement_timeout=')
     expect(workerPool.options.options).toContain('-c statement_timeout=')
+    expect(replicaPool.options.options).toContain('-c statement_timeout=')
+  })
+
+  it('replicaPool is a separate Pool instance', async () => {
+    const { pool, replicaPool } = await import('./pool.js')
+    expect(replicaPool).toBeInstanceOf(Pool)
+    expect(replicaPool).not.toBe(pool)
+  })
+
+  it('withReplica uses replicaPool when lag is within bounds', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+    
+    // Mock the lag query
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: 10 }] } as any)
+    
+    const operation = vi.fn().mockResolvedValue('success')
+    const result = await withReplica(operation, { maxLagMs: 100 })
+    
+    expect(result).toBe('success')
+    expect(operation).toHaveBeenCalledWith(replicaPool)
+  })
+
+  it('withReplica falls back to pool when lag exceeds maxLagMs', async () => {
+    const { pool, withReplica, replicaPool } = await import('./pool.js')
+    
+    // Mock the lag query
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: 500 }] } as any)
+    
+    const operation = vi.fn().mockResolvedValue('success')
+    const result = await withReplica(operation, { maxLagMs: 100 })
+    
+    expect(result).toBe('success')
+    expect(operation).toHaveBeenCalledWith(pool)
+  })
+
+  it('withReplica falls back to pool when replica query throws', async () => {
+    const { pool, withReplica, replicaPool } = await import('./pool.js')
+    
+    // Mock the lag query
+    vi.spyOn(replicaPool, 'query').mockRejectedValueOnce(new Error('Connection refused'))
+    
+    const operation = vi.fn().mockResolvedValue('success')
+    const result = await withReplica(operation)
+    
+    expect(result).toBe('success')
+    expect(operation).toHaveBeenCalledWith(pool)
+  })
+
+  it('withReplica throws when lag is high and fallback is false', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+    
+    // Mock the lag query
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: 500 }] } as any)
+    
+    const operation = vi.fn()
+    await expect(withReplica(operation, { maxLagMs: 100, fallback: false })).rejects.toThrow('Replica lag too high: 500ms')
+    expect(operation).not.toHaveBeenCalled()
   })
 })

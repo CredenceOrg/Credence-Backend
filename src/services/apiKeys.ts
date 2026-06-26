@@ -1,4 +1,6 @@
 import { randomBytes, createHash } from 'crypto'
+import { ApiKeysRepository } from '../db/repositories/apiKeysRepository.js'
+import { pool } from '../db/pool.js'
 
 export type KeyScope = 'read' | 'full' | string   // extended to accept granular scope strings
 export type SubscriptionTier = 'free' | 'pro' | 'enterprise'
@@ -40,8 +42,12 @@ export interface CreateApiKeyResult {
   createdAt: Date
 }
 
-// In-memory store — replace with a DB adapter in production
-const store = new Map<string, StoredApiKey>()
+// Repository for database operations
+const repository = new ApiKeysRepository(pool)
+
+// In-memory fallback for testing when DB is not available
+const inMemoryStore = new Map<string, StoredApiKey>()
+let useInMemory = process.env.NODE_ENV === 'test' && !process.env.TEST_WITH_DB
 
 function hashKey(rawKey: string): string {
   return createHash('sha256').update(rawKey).digest('hex')
@@ -61,9 +67,9 @@ function extractPrefix(rawKey: string): string {
  * @param scopes   Optional explicit list of granted scopes. When provided, overrides `scope`.
  * @returns        Key metadata including the raw key (shown once only)
  */
-export function generateApiKey(
+export async function generateApiKey(
   ownerId: string,
-  scope: KeyScope = 'read',
+  scopes: KeyScope[] = [],
   tier: SubscriptionTier = 'free',
   scopes?: string[],
 ): CreateApiKeyResult {
@@ -106,20 +112,29 @@ export function generateApiKey(
  * @param rawKey  The key supplied by the caller
  * @returns       The stored key record (with lastUsedAt updated) or null if invalid/revoked
  */
-export function validateApiKey(rawKey: string): StoredApiKey | null {
+export async function validateApiKey(rawKey: string): Promise<StoredApiKey | null> {
   if (!/^cr_[0-9a-f]{64}$/.test(rawKey)) return null
 
   const prefix = extractPrefix(rawKey)
   const hashed = hashKey(rawKey)
 
-  for (const key of store.values()) {
-    if (key.prefix === prefix && key.hashedKey === hashed) {
-      if (!key.active) return null
-      key.lastUsedAt = new Date()
-      return key
+  if (useInMemory) {
+    for (const key of inMemoryStore.values()) {
+      if (key.prefix === prefix && key.hashedKey === hashed) {
+        if (!key.active) return null
+        key.lastUsedAt = new Date()
+        return key
+      }
     }
+    return null
+  } else {
+    const apiKey = await repository.findByHashAndPrefix(hashed, prefix)
+    if (apiKey) {
+      await repository.updateLastUsedAt(apiKey.id)
+      apiKey.lastUsedAt = new Date()
+    }
+    return apiKey
   }
-  return null
 }
 
 /**
@@ -127,16 +142,20 @@ export function validateApiKey(rawKey: string): StoredApiKey | null {
  *
  * @returns true if the key was found and deactivated, false if not found
  */
-export function revokeApiKey(id: string): boolean {
-  const key = store.get(id)
-  if (!key) return false
-  key.active = false
-  return true
+export async function revokeApiKey(id: string): Promise<boolean> {
+  if (useInMemory) {
+    const key = inMemoryStore.get(id)
+    if (!key) return false
+    key.active = false
+    return true
+  } else {
+    return await repository.revokeApiKey(id)
+  }
 }
 
 /**
  * Rotate an API key: revokes the existing key and issues a new one with the same
- * scope, tier, and owner. Returns null if the key doesn't exist or is already revoked.
+ * scopes, tier, and owner. Returns null if the key doesn't exist or is already revoked.
  */
 export function rotateApiKey(id: string): CreateApiKeyResult | null {
   const existing = store.get(id)
@@ -161,13 +180,26 @@ export function findApiKeyById(id: string): Omit<StoredApiKey, 'hashedKey'> | nu
 /**
  * List all keys for an owner. The `hashedKey` field is omitted.
  */
-export function listApiKeys(ownerId: string): Omit<StoredApiKey, 'hashedKey'>[] {
-  return [...store.values()]
-    .filter((k) => k.ownerId === ownerId)
-    .map(({ hashedKey: _h, ...rest }) => rest)
+export async function listApiKeys(ownerId: string): Promise<Omit<StoredApiKey, 'hashedKey'>[]> {
+  if (useInMemory) {
+    return [...inMemoryStore.values()]
+      .filter((k) => k.ownerId === ownerId)
+      .map(({ hashedKey: _h, ...rest }) => rest)
+  } else {
+    return await repository.listByOwner(ownerId)
+  }
 }
 
 /** Reset the in-memory store. Intended for use in tests only. */
 export function _resetStore(): void {
-  store.clear()
+  inMemoryStore.clear()
+  if (!useInMemory) {
+    // In DB mode, we'd need to truncate the table
+    // For now, this is only used in tests which use in-memory mode
+  }
+}
+
+/** Force use of in-memory store (for testing) */
+export function _setUseInMemory(value: boolean): void {
+  useInMemory = value
 }

@@ -726,4 +726,144 @@ Operations that will be quarantined:
 - Missing `operation ID`
 
 ---
+
+## Controlled Failover (Lease + Heartbeat)
+
+The single-cursor / reconnect-backoff design used by `HorizonListener` is
+correct for a single process, but in production we run multiple replicas.
+To guarantee that **exactly one** replica processes a stream at a time —
+without dropping or duplicating events during a handoff — we layer a
+**lease + heartbeat row** on top of the existing cursor.
+
+### Architecture
+
+```
+                  ┌──────────────────────────┐
+                  │      listener_leases     │  ← migration 011
+                  │  (PRIMARY KEY stream)    │
+                  └──────────┬───────────────┘
+                             │ atomic UPSERT
+       ┌─────────────────────┼─────────────────────┐
+       ▼                                           ▼
+┌──────────────┐                            ┌──────────────┐
+│  primary     │ ── heartbeat (every 5s) ──▶│   standby    │
+│ owner=PID-A  │                            │ owner=PID-B  │
+│ fencing=42   │                            │  (idle)      │
+└──────┬───────┘                            └──────────────┘
+       │ process(event)                            │
+       │ ├─ heartbeat()  ── re-asserts ownership   │
+       │ └─ updateCursor(token) under fencing=42   │
+       ▼                                           │
+   evidence tables                                 │
+                                                   │
+   ── primary stalls ──▶ TTL expires ──▶ standby steals lease,
+                                       fencing→43, replays
+                                       in-flight token.
+```
+
+### Pieces
+
+| File | Role |
+| --- | --- |
+| `src/migrations/011_create_listener_leases.ts` | Creates the `listener_leases` table (owner, expiry, heartbeat, fencing token). |
+| `src/listeners/horizon.listeners.ts` → `LeaseManager` | Atomic `acquire / heartbeat / release / updateCursor / peek / getLagSeconds`. |
+| `src/listeners/horizon.listeners.ts` → `LeasedHorizonListener` | Wraps `HorizonListener` so each event is processed only while the lease is valid. |
+| `scripts/horizon-failover-drill.ts` | The scripted drill (`npm run drill:horizon`). |
+| `monitoring/grafana/dashboard.json` (panels 15 & 16) | Listener-lag time-series + active-owner table. |
+
+### Running the drill
+
+```bash
+npm run drill:horizon
+```
+
+The drill runs against an in-memory store so it can execute in CI. For a
+true rehearsal, point `scripts/horizon-failover-drill.ts` at a staging
+Postgres by swapping `createInMemoryLeaseStore()` for a real `pg` Pool.
+
+Expected output (truncated):
+
+```
+▶ Horizon failover drill — stream: bond_creation
+✅ primary acquires lease on cold start
+✅ primary processed 3 events in order — 10,20,30
+✅ standby is blocked while primary is healthy
+… pausing primary, waiting for lease to expire
+✅ standby steals expired lease
+✅ fencing token advanced on steal — primary=1 → standby=2
+✅ split-brain: zombie primary heartbeat rejected
+✅ standby processes event 40 cleanly
+✅ expired-lease-while-processing: result reported as "skipped"
+✅ in-flight replay: new owner re-processes event 50
+✅ cursor handoff: paging_token monotonically advanced to 50
+
+Drill complete — 10/10 checks passed
+```
+
+### Operator Checklist — Controlled Failover
+
+Use this checklist whenever you need to fail a Horizon listener over to a
+standby (rolling deploy, node drain, suspected stall):
+
+- [ ] **Confirm two replicas are running** with distinct `OWNER_ID`s
+      (`hostname:pid` is the default).
+- [ ] **Verify Grafana panel "Horizon Listener Lag (seconds)"** is green
+      (< TTL of 15 s) and the "Active Owner & Fencing Token" table shows
+      a single owner per stream.
+- [ ] **Snapshot pre-failover state**: record `owner_id`, `fencing_token`,
+      and `paging_token` from `SELECT * FROM listener_leases;`.
+- [ ] **Pause the primary** (`kubectl rollout pause`, SIGSTOP, or scale
+      down replica). Do **not** delete the pod yet.
+- [ ] **Watch the lag panel** climb past the 15 s TTL line.
+- [ ] **Confirm the standby steals the lease**: the "Active Owner" table
+      flips to the standby and `fencing_token` increments by ≥1.
+- [ ] **Tail the standby logs** and verify events resume from the last
+      checkpointed `paging_token` with no gap. Sample 10 events against
+      your event source for duplicates — there should be at most one
+      in-flight replay (the event being processed when the lease died).
+- [ ] **Resume / terminate the old primary.** A resumed primary MUST
+      log its rejected heartbeat (the split-brain guard) and exit. If it
+      doesn't, abort and roll back.
+- [ ] **Run `npm run drill:horizon` post-failover** to leave a green
+      audit artifact attached to the incident ticket.
+
+### Edge Cases & How We Cover Them
+
+| Edge case | Mechanism | Drill assertion |
+| --- | --- | --- |
+| **Split-brain** (two leaders) | Atomic UPSERT only succeeds when the existing row is unowned, expired, or already owned by the claimant. The fencing token monotonically increases on every steal; zombie writes are filtered by `WHERE fencing_token = $5`. | "split-brain: zombie primary heartbeat rejected" |
+| **Expired lease while processing** | `LeasedHorizonListener.process` re-asserts the lease via `heartbeat()` before each event and via `updateCursor()` after. Either failure returns `'skipped'` so the caller does **not** ack the event. | "expired-lease-while-processing: result reported as 'skipped'" |
+| **Replay of an in-flight event** | Cursor is only advanced *after* the event handler completes. If the lease was stolen mid-flight, the new owner sees the un-advanced cursor and replays the event. Handlers in `dbRepository` are already idempotent (`upsertNode`, `updateNodeStatus`). | "in-flight replay: new owner re-processes event 50" + "cursor handoff: paging_token monotonically advanced to 50" |
+
+### Security
+
+The `listener_leases` table is written by a **dedicated service role**
+that has no read access to evidence tables (`audit_logs`, `attestations`,
+`settlements`, …). Grant statements applied at deploy time:
+
+```sql
+CREATE ROLE horizon_listener LOGIN PASSWORD '…';
+GRANT  SELECT, INSERT, UPDATE, DELETE ON listener_leases   TO horizon_listener;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM horizon_listener;
+GRANT  SELECT, INSERT, UPDATE, DELETE ON listener_leases   TO horizon_listener;
+GRANT  SELECT, INSERT, UPDATE         ON horizon_cursors   TO horizon_listener;
+-- Intentionally NO grants on audit_logs / attestations / settlements.
+```
+
+Process the events under a separate role (the existing application user)
+so an attacker who steals the listener's credentials cannot exfiltrate
+evidence rows.
+
+### Monitoring
+
+Two Grafana panels were added in this change (IDs 15 & 16):
+
+* **Horizon Listener Lag (seconds)** — `max by (stream) (horizon_listener_lag_seconds)` with reference line `horizon_listener_lease_ttl_seconds`. Alerts page when `> 60s for 2m`.
+* **Horizon Listener — Active Owner & Fencing Token** — table view that makes ownership flips visually obvious.
+
+Wire the listener to Prometheus by exposing the values returned by
+`LeaseManager.getLagSeconds()` and `LeaseManager.peek().fencingToken`
+through `prom-client`.
+
+---
 For further details, see the code and tests.

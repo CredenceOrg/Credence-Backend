@@ -32,6 +32,7 @@ describe('ReplayService', () => {
       create: vi.fn(),
       findById: vi.fn(),
       updateStatus: vi.fn(),
+      incrementRetryCount: vi.fn(),
       list: vi.fn(),
     }
     vi.mock('./audit/index.js', () => ({

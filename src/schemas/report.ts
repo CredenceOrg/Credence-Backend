@@ -26,3 +26,12 @@ export const createReportBodySchema = z
 
 export type ReportType = z.infer<typeof reportTypeSchema>
 export type CreateReportBody = z.infer<typeof createReportBodySchema>
+
+/**
+ * Path params for GET /api/reports/:jobId
+ */
+export const reportJobParamsSchema = z.object({
+  jobId: z.string().min(1, 'jobId is required'),
+})
+
+export type ReportJobParams = z.infer<typeof reportJobParamsSchema>

@@ -23,6 +23,28 @@ export interface CursorPaginationMeta {
   nextCursor?: string
 }
 
+/**
+ * Standard cursor-based pagination envelope.
+ * Provides a consistent response structure for paginated endpoints.
+ */
+export interface CursorPaginationEnvelope<T> {
+  data: T[]
+  page: {
+    nextCursor: string | null
+    hasMore: boolean
+    limit: number
+  }
+}
+
+/**
+ * Options for building a cursor pagination envelope.
+ */
+export interface BuildCursorEnvelopeOptions {
+  limit: number
+  hasMore: boolean
+  nextCursor?: string | null
+}
+
 export interface DecodedCursor {
   t: string
   i: string
@@ -95,7 +117,12 @@ export function parsePaginationParams(
     }
   }
 
-  const rawCursor = typeof query.cursor === 'string' ? query.cursor : null
+  // Treat an empty (or whitespace-only) cursor query param as "no cursor"
+  // rather than an invalid one, so `?cursor=` is ignored gracefully.
+  const rawCursor =
+    typeof query.cursor === 'string' && query.cursor.trim() !== ''
+      ? query.cursor
+      : null
   const decodedCursor = rawCursor ? decodeCursor(rawCursor) : undefined
 
   // Backwards compatibility: allow client to pass offset via ?cursor=10
@@ -199,5 +226,26 @@ export function decodeCursor(cursor: string): DecodedCursor | null {
     return { t: parsed.t, i: parsed.i }
   } catch {
     return null
+  }
+}
+
+/**
+ * Builds a standard cursor pagination envelope for API responses.
+ * @template T The type of items in the data array
+ * @param data The paginated results
+ * @param options Pagination metadata options
+ * @returns A standardized envelope with data and pagination info
+ */
+export function buildCursorEnvelope<T>(
+  data: T[],
+  options: BuildCursorEnvelopeOptions
+): CursorPaginationEnvelope<T> {
+  return {
+    data,
+    page: {
+      nextCursor: options.nextCursor ?? null,
+      hasMore: options.hasMore,
+      limit: options.limit,
+    },
   }
 }

@@ -1,4 +1,4 @@
-import { Pool } from "pg";
+import { Pool, type PoolClient } from "pg";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -21,6 +21,9 @@ const IDLE_TIMEOUT = envInt("DB_POOL_IDLE_TIMEOUT_MS", 30_000);
 const CONN_TIMEOUT = envInt("DB_POOL_CONNECTION_TIMEOUT_MS", 5_000);
 const STMT_TIMEOUT = envInt("DB_STATEMENT_TIMEOUT_MS", 30_000);
 const WORKER_MAX = envInt("DB_WORKER_POOL_MAX", 5);
+
+const DB_REPLICA_URL = process.env.DB_REPLICA_URL || DB_URL;
+const MAX_REPLICA_LAG_MS = envInt("MAX_REPLICA_LAG_MS", 1000);
 
 /**
  * Primary API pool — serves route handlers and services.
@@ -59,3 +62,53 @@ export const workerPool = new Pool({
 workerPool.on("error", (err) => {
   console.error("[workerPool] unexpected client error", err);
 });
+
+/**
+ * Secondary API pool — serves read-heavy endpoints.
+ */
+export const replicaPool = new Pool({
+  connectionString: DB_REPLICA_URL,
+  max: POOL_MAX,
+  idleTimeoutMillis: IDLE_TIMEOUT,
+  connectionTimeoutMillis: CONN_TIMEOUT,
+  options: `-c statement_timeout=${STMT_TIMEOUT}`,
+});
+
+replicaPool.on("error", (err) => {
+  console.error("[replicaPool] unexpected client error", err);
+});
+
+/**
+ * Helper to execute an operation on the replica, falling back to primary
+ * if the replica is lagging or disconnected.
+ */
+export async function withReplica<T>(
+  operation: (client: Pool | PoolClient) => Promise<T>,
+  options: { maxLagMs?: number; fallback?: boolean } = {}
+): Promise<T> {
+  const maxLagMs = options.maxLagMs ?? MAX_REPLICA_LAG_MS;
+  const fallback = options.fallback ?? true;
+
+  try {
+    const { rows } = await replicaPool.query(
+      `SELECT COALESCE(EXTRACT(EPOCH FROM (now() - pg_last_xact_replay_timestamp())) * 1000, 0) as lag_ms`
+    );
+    const lagMs = rows[0]?.lag_ms ?? 0;
+
+    if (lagMs > maxLagMs) {
+      if (!fallback) {
+        throw new Error(`Replica lag too high: ${lagMs}ms`);
+      }
+      return await operation(pool);
+    }
+
+    return await operation(replicaPool);
+  } catch (err) {
+    if (fallback) {
+      // In a real application, you might use a proper logger instead of console.warn
+      console.warn(`[withReplica] Replica error or lag exceeded, falling back to primary`, err);
+      return await operation(pool);
+    }
+    throw err;
+  }
+}

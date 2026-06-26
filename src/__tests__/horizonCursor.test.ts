@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { newDb, type IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
+import crypto from 'crypto'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
 import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
 import { HorizonWithdrawalListener } from '../listeners/horizonWithdrawalEvents.js'
@@ -13,7 +14,13 @@ describe('Horizon Cursor Checkpointing', () => {
   beforeEach(async () => {
     // Create in-memory PostgreSQL database
     db = newDb()
-    pool = db.adapters.createPg().Pool as unknown as Pool
+    db.public.registerFunction({
+      name: 'gen_random_uuid',
+      returns: 'uuid',
+      implementation: () => crypto.randomUUID(),
+    })
+    const pgMock = db.adapters.createPg()
+    pool = new pgMock.Pool() as unknown as Pool
 
     // Create horizon_cursors table
     await pool.query(`
@@ -352,7 +359,7 @@ describe('Horizon Cursor Checkpointing', () => {
 
       // Table should still exist
       const result = await pool.query('SELECT COUNT(*) FROM horizon_cursors')
-      expect(result.rows[0].count).toBe('1')
+      expect(Number(result.rows[0].count)).toBe(1)
     })
 
     it('should reject SQL injection attempts in paging token', async () => {

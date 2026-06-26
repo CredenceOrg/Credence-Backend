@@ -1,9 +1,7 @@
 /**
  * Webhook event types for bond lifecycle.
  */
-export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn'
-  | 'attestation.created'
-  | 'attestation.revoked'
+export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn' | 'attestation.added' | 'attestation.revoked' | 'score.updated' | 'attestation.added' | 'attestation.revoked' | 'score.updated'
 
 /**
  * Webhook configuration for a registered endpoint.
@@ -27,6 +25,16 @@ export interface WebhookConfig {
   secretRotatedAt?: string
   /** ISO timestamp after which previousSecret is no longer valid. */
   previousSecretExpiresAt?: string
+  /** Optional per-webhook delivery retry attempt cap. */
+  maxAttempts?: number
+  /** Optional per-webhook delivery timeout in milliseconds. */
+  timeoutMs?: number
+  /** Optional mTLS client certificate (PEM) presented to the endpoint. */
+  clientCertPem?: string
+  /** Optional KMS reference for the mTLS client private key. */
+  clientKeyKmsRef?: string
+  /** Optional SHA-256 pin of the expected server certificate. */
+  pinnedServerCertSha256?: string
 }
 
 /**
@@ -49,7 +57,18 @@ export interface WebhookPayload {
   /** ISO timestamp when event occurred. */
   timestamp: string
   /** Event data (identity state). */
-  data: Record<string, unknown>
+  data: {
+    address: string
+    bondedAmount: string
+    bondStart: number | null
+    bondDuration: number | null
+    active: boolean
+    attestationId?: string
+    verifier?: string
+    weight?: number
+    claim?: string
+    score?: number
+  }
 }
 
 /**
@@ -68,6 +87,8 @@ export interface WebhookDeliveryResult {
   attempts: number
   /** First 500 chars of response body on failure. */
   responseBodySnippet?: string
+  /** Error code for mTLS-specific failures. */
+  errorCode?: string
 }
 
 /**

@@ -1,0 +1,41 @@
+# buf.gen.yaml — Code-generation configuration
+# https://buf.build/docs/configuration/v2/buf-gen-yaml
+#
+# Run:  buf generate
+# Output lands in src/sdk/grpc/gen/
+#
+# Prerequisites (install once):
+#   npm install --save-dev @bufbuild/protoc-gen-es @bufbuild/buf
+#   npm install @bufbuild/protobuf @connectrpc/connect @connectrpc/connect-node
+version: v2
+
+# Managed mode keeps well-known options consistent across all generated files.
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/innovative-drips/credence/gen/go
+
+plugins:
+  # -------------------------------------------------------------------------
+  # TypeScript message types (ES module, works in Node and browsers)
+  # Generates: src/sdk/grpc/gen/**/*_pb.ts
+  # -------------------------------------------------------------------------
+  - remote: buf.build/bufbuild/es:v2.2.3
+    out: src/sdk/grpc/gen
+    opt:
+      - target=ts
+      - import_extension=.js
+
+  # -------------------------------------------------------------------------
+  # Connect-RPC TypeScript client stubs
+  # Generates: src/sdk/grpc/gen/**/*_connect.ts
+  # -------------------------------------------------------------------------
+  - remote: buf.build/connectrpc/es:v1.6.1
+    out: src/sdk/grpc/gen
+    opt:
+      - target=ts
+      - import_extension=.js
+
+inputs:
+  - directory: proto

@@ -1151,6 +1151,107 @@
         "x": 18,
         "y": 32
       }
+    },
+    {
+      "id": 15,
+      "title": "Horizon Listener Lag (seconds)",
+      "description": "Seconds since the active Horizon listener last heartbeated / checkpointed its cursor. A sustained value above the lease TTL indicates the primary is unhealthy and a standby should have taken over. Threshold lines mirror the lease TTL (15s) and the alerting page-out level (60s).",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "orange", "value": 15 },
+              { "color": "red", "value": 60 }
+            ]
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 2,
+            "fillOpacity": 10,
+            "thresholdsStyle": { "mode": "line" }
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (stream) (horizon_listener_lag_seconds)",
+          "legendFormat": "{{stream}} lag",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (stream) (horizon_listener_lease_ttl_seconds)",
+          "legendFormat": "{{stream}} TTL",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 40
+      },
+      "alert": {
+        "name": "Horizon listener lag exceeds TTL",
+        "conditions": [
+          {
+            "evaluator": { "params": [60], "type": "gt" },
+            "operator": { "type": "and" },
+            "query": { "params": ["A", "5m", "now"] },
+            "reducer": { "type": "max" },
+            "type": "query"
+          }
+        ],
+        "for": "2m",
+        "noDataState": "no_data",
+        "executionErrorState": "alerting"
+      }
+    },
+    {
+      "id": 16,
+      "title": "Horizon Listener — Active Owner & Fencing Token",
+      "description": "Current lease holder per stream and its fencing token. The fencing token monotonically increases on every successful failover, so a rising step is your visual confirmation that a controlled handoff happened.",
+      "type": "table",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "max by (stream, owner) (horizon_listener_fencing_token)",
+          "legendFormat": "{{stream}} / {{owner}}",
+          "format": "table",
+          "instant": true,
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 40
+      }
     }
   ],
   "refresh": "10s",

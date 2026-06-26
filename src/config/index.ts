@@ -17,6 +17,12 @@ export const envSchema = z.object({
       .default('600') // 10 minutes
       .transform(Number)
       .pipe(z.number().int().min(60).max(86400)),
+    // Webhook payload size cap in bytes
+    WEBHOOK_PAYLOAD_SIZE_CAP: z
+      .string()
+      .default('262144') // 256 KiB
+      .transform(Number)
+      .pipe(z.number().int().min(1024).max(10485760)), // 1KB to 10MB
   // Server
   PORT: z
     .string()
@@ -57,6 +63,21 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1).max(50)),
+  DB_LOCK_TIMEOUT_READONLY_MS: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(30000)),
+  DB_LOCK_TIMEOUT_DEFAULT_MS: z
+    .string()
+    .default('2000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(30000)),
+  DB_LOCK_TIMEOUT_CRITICAL_MS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(60000)),
 
   // Redis
   REDIS_URL: z.string().url({ message: 'REDIS_URL must be a valid URL' }),
@@ -134,6 +155,23 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+
+  // Request snapshots retention
+  REQUEST_SNAPSHOT_RETENTION_DAYS: z
+    .string()
+    .default('14')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS: z
+    .string()
+    .default('86400000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)),
+  REQUEST_SNAPSHOT_CLEANUP_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val === 'true'),
+
   SHUTDOWN_GRACE_PERIOD_MS: z
     .string()
     .default('30000')
@@ -168,6 +206,38 @@ export const envSchema = z.object({
   OUTBOUND_RETRY_WEBHOOK_BACKOFF_MULTIPLIER: z.coerce.number().min(1).optional(),
   OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY: z.enum(['none', 'full', 'equal']).optional(),
 
+  // Timeout budgets
+  TIMEOUT_DB_MS: z
+    .string()
+    .default('2000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(30000)),
+  TIMEOUT_CACHE_MS: z
+    .string()
+    .default('500')
+    .transform(Number)
+    .pipe(z.number().int().min(50).max(10000)),
+  TIMEOUT_QUEUE_MS: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(15000)),
+  TIMEOUT_HTTP_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(60000)),
+  TIMEOUT_SOROBAN_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(100).max(45000)),
+  TIMEOUT_WEBHOOK_MS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(2000).max(60000)),
+
   // Rate limiting
   RATE_LIMIT_ENABLED: z
     .string()
@@ -201,6 +271,14 @@ export const envSchema = z.object({
       if (val !== undefined) return val === 'true'
       return process.env.NODE_ENV !== 'production'
     }),
+
+  // Credits / billing
+  ENDPOINT_COST_WEIGHTS: z.string().default('{"default":1,"/bulk/verify":10,"/reports":5}'),
+  DEFAULT_MONTHLY_CREDITS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
 
   // Reputation scoring model
   REPUTATION_MODEL_VERSION: z.string().default('1.0.0'),
@@ -240,6 +318,30 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
+  SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+
+  // Audit log export
+  AUDIT_EXPORT_MAX_WINDOW_DAYS: z
+    .string()
+    .default('90')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(3650)),
+
+  // Report generation
+  REPORT_MAX_CONCURRENT_JOBS_PER_ORG: z
+    .string()
+    .default('10')
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(1000)),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -298,6 +400,11 @@ export interface Config {
     failedRetentionDays: number
     cleanupIntervalMs: number
   }
+  requestSnapshots: {
+    retentionDays: number
+    cleanupIntervalMs: number
+    cleanupEnabled: boolean
+  }
   shutdown: {
     gracePeriodMs: number
   }
@@ -337,6 +444,32 @@ export interface Config {
     oneEthWei: bigint
     maxDurationDays: number
     maxAttestationCount: number
+  }
+  sorobanCircuitBreaker: {
+    failureThreshold: number
+    cooldownPeriodMs: number
+  }
+  auditLog: {
+    exportMaxWindowDays: number
+  }
+  reports: {
+    maxConcurrentJobsPerOrg: number
+  }
+  endpointCostWeights: Record<string, number>
+  credits: {
+    defaultMonthly: number
+  }
+}
+
+function parseCostWeights(raw: string): Record<string, number> {
+  try {
+    const parsed = JSON.parse(raw)
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as Record<string, number>
+    }
+    return { default: 1 }
+  } catch {
+    return { default: 1 }
   }
 }
 
@@ -442,6 +575,11 @@ function mapEnvToConfig(env: Env): Config {
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
     },
+    requestSnapshots: {
+      retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,
+      cleanupIntervalMs: env.REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS,
+      cleanupEnabled: env.REQUEST_SNAPSHOT_CLEANUP_ENABLED,
+    },
     shutdown: {
       gracePeriodMs: env.SHUTDOWN_GRACE_PERIOD_MS,
     },
@@ -481,6 +619,20 @@ function mapEnvToConfig(env: Env): Config {
     },
     trustScoreCache: {
       ttl: env.TRUST_SCORE_CACHE_TTL,
+    },
+    sorobanCircuitBreaker: {
+      failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+      cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+    },
+    auditLog: {
+      exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
+    },
+    reports: {
+      maxConcurrentJobsPerOrg: env.REPORT_MAX_CONCURRENT_JOBS_PER_ORG,
+    },
+    endpointCostWeights: parseCostWeights(env.ENDPOINT_COST_WEIGHTS),
+    credits: {
+      defaultMonthly: env.DEFAULT_MONTHLY_CREDITS,
     },
   }
 

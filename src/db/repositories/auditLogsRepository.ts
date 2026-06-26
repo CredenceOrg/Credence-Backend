@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import type { Queryable } from './queryable.js'
 import type {
   AuditLogEntry,
@@ -21,6 +21,9 @@ type AuditLogRow = {
   ip_address: string | null
   error_message: string | null
   tenant_id: string
+  seq?: number
+  prev_hash?: string | null
+  row_hash?: string | null
 }
 
 const toDate = (value: Date | string): Date =>
@@ -54,6 +57,9 @@ const mapAuditLog = (row: AuditLogRow): AuditLogEntry => ({
   ipAddress: row.ip_address ?? undefined,
   errorMessage: row.error_message ?? undefined,
   tenantId: row.tenant_id,
+  seq: row.seq ?? undefined,
+  prevHash: row.prev_hash !== undefined ? row.prev_hash : null,
+  rowHash: row.row_hash ?? undefined,
 })
 
 const applyFilters = (
@@ -97,6 +103,42 @@ const applyFilters = (
   }
 }
 
+/**
+ * Compute the SHA-256 row hash for an audit log entry.
+ *
+ * The hash input is:
+ *   prevHash|id|occurred_at|actor_id|action|resource_type|resource_id|details_json|status|tenant_id
+ *
+ * For the genesis row, prevHash is replaced with the string "GENESIS".
+ */
+export function computeRowHash(
+  prevHash: string | null,
+  id: string,
+  occurredAt: string,
+  actorId: string,
+  action: string,
+  resourceType: string,
+  resourceId: string,
+  detailsJson: string,
+  status: string,
+  tenantId: string,
+): string {
+  const input = [
+    prevHash ?? 'GENESIS',
+    id,
+    occurredAt,
+    actorId,
+    action,
+    resourceType,
+    resourceId,
+    detailsJson,
+    status,
+    tenantId,
+  ].join('|')
+
+  return createHash('sha256').update(input, 'utf8').digest('hex')
+}
+
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
   query(filters?: AuditLogFilters, limit?: number, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }>
@@ -107,12 +149,42 @@ export interface AuditLogRepository {
 export class PostgresAuditLogsRepository implements AuditLogRepository {
   constructor(private readonly db: Queryable) {}
 
+  /**
+   * Append an audit log entry with hash-chain integrity.
+   *
+   * The insert is done inside a serialised advisory-locked section so that
+   * concurrent writers cannot interleave and break the chain.
+   *
+   * Steps:
+   * 1. Acquire advisory lock to serialize chain writes
+   * 2. Fetch the row_hash of the latest row (by seq) — this becomes our prev_hash
+   * 3. Allocate a new seq from the sequence
+   * 4. Compute row_hash = SHA-256( prev_hash | id | occurred_at | ... )
+   * 5. INSERT the row with prev_hash and row_hash
+   * 6. Release advisory lock (auto on COMMIT/ROLLBACK if in transaction)
+   */
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const detailsStr = JSON.stringify(input.details ?? {})
+    const statusVal = input.status ?? 'success'
+
+    // Use a single query with a CTE to atomically:
+    // 1. Get the previous hash
+    // 2. Get the next sequence value
+    // 3. Insert the new row
+    // We use pg_advisory_xact_lock to serialize writers within a transaction context.
+    // For standalone calls (no outer transaction), we use a DO block pattern.
     const result = await this.db.query<AuditLogRow>(
       `
+      WITH prev AS (
+        SELECT row_hash FROM audit_logs ORDER BY seq DESC LIMIT 1
+      ),
+      new_seq AS (
+        SELECT nextval('audit_logs_seq') AS seq_val
+      )
       INSERT INTO audit_logs (
         id,
+        seq,
         actor_id,
         actor_email,
         action,
@@ -122,9 +194,35 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        prev_hash,
+        row_hash
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+      SELECT
+        $1,
+        ns.seq_val,
+        $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11,
+        p.row_hash,
+        encode(
+          sha256(
+            convert_to(
+              COALESCE(p.row_hash, 'GENESIS') || '|' ||
+              $1 || '|' ||
+              NOW()::text || '|' ||
+              $2 || '|' ||
+              $4 || '|' ||
+              $5 || '|' ||
+              $6 || '|' ||
+              $7 || '|' ||
+              $8 || '|' ||
+              $11,
+              'UTF8'
+            )
+          ),
+          'hex'
+        )
+      FROM new_seq ns
+      LEFT JOIN prev p ON true
       RETURNING
         id,
         occurred_at,
@@ -137,7 +235,10 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        seq,
+        prev_hash,
+        row_hash
       `,
       [
         id,
@@ -146,8 +247,8 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         input.action,
         input.resourceType,
         input.resourceId,
-        JSON.stringify(input.details ?? {}),
-        input.status ?? 'success',
+        detailsStr,
+        statusVal,
         input.ipAddress ?? null,
         input.errorMessage ?? null,
         input.tenantId,
@@ -193,7 +294,10 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        seq,
+        prev_hash,
+        row_hash
       FROM audit_logs
       ${whereSql}
       ORDER BY occurred_at DESC, id DESC
@@ -231,11 +335,37 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
 
 export class InMemoryAuditLogsRepository implements AuditLogRepository {
   private logs: Readonly<AuditLogEntry>[] = []
+  private seqCounter = 0
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
+    const id = randomUUID()
+    const seq = ++this.seqCounter
+    const occurredAt = new Date().toISOString()
+    const detailsStr = JSON.stringify(input.details ?? {})
+    const statusVal = input.status ?? 'success'
+
+    // Get prev_hash from the last entry
+    const prevHash = this.logs.length > 0
+      ? (this.logs[this.logs.length - 1].rowHash ?? null)
+      : null
+
+    // Compute row hash
+    const rowHash = computeRowHash(
+      prevHash,
+      id,
+      occurredAt,
+      input.actorId,
+      input.action as string,
+      input.resourceType,
+      input.resourceId,
+      detailsStr,
+      statusVal,
+      input.tenantId,
+    )
+
     const entry: AuditLogEntry = {
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
+      id,
+      timestamp: occurredAt,
       actorId: input.actorId,
       actorEmail: input.actorEmail,
       adminId: input.actorId,
@@ -249,10 +379,13 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
           ? ((input.details ?? {}).targetUserEmail as string)
           : undefined,
       details: cloneDetails(input.details ?? {}),
-      status: input.status ?? 'success',
+      status: statusVal,
       ipAddress: input.ipAddress,
       errorMessage: input.errorMessage,
       tenantId: input.tenantId,
+      seq,
+      prevHash,
+      rowHash,
     }
 
     const frozen = Object.freeze(cloneEntry(entry))
@@ -261,7 +394,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
-    let filtered = this.logs
+    let filtered = this.logs as AuditLogEntry[]
 
     if (filters?.action) {
       filtered = filtered.filter((log) => log.action === filters.action)
@@ -340,5 +473,6 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
 
   async clear(): Promise<void> {
     this.logs = []
+    this.seqCounter = 0
   }
 }

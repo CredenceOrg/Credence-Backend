@@ -4,10 +4,12 @@ import { ReportService } from "../services/reportService.js";
 import { ReportRepository } from "../db/repositories/reportRepository.js";
 import { ReportStorageService } from "../services/reportStorage.js";
 import { pool } from "../db/pool.js";
-import { validate } from "../middleware/validate.js";
+import { validate, type ValidatedRequest } from "../middleware/validate.js";
 import {
   createReportBodySchema,
+  reportJobParamsSchema,
   type CreateReportBody,
+  type ReportJobParams,
 } from "../schemas/report.js";
 
 const router = Router();
@@ -35,14 +37,29 @@ router.post(
       const { type } = req.validated!.body! as CreateReportBody;
 
       const tenantId = (req as any).apiKey?.tenantId ?? "default";
-      const job = await reportService.startReportGeneration(type, tenantId);
+      // Extract additional params from body for deduplication
+      const params = { ...req.validated!.body };
+      delete (params as any).type;
 
-      res.status(202).json({
-        jobId: job.id,
-        status: job.status,
-        type: job.type,
-        createdAt: job.createdAt,
-      });
+      try {
+        const job = await reportService.startReportGeneration(type, tenantId, Object.keys(params).length > 0 ? params : undefined);
+
+        res.status(202).json({
+          jobId: job.id,
+          status: job.status,
+          type: job.type,
+          createdAt: job.createdAt,
+        });
+      } catch (error) {
+        if (error instanceof Error && error.message.includes('maximum concurrent')) {
+          res.status(429).json({
+            error: "TooManyRequests",
+            message: error.message,
+          });
+        } else {
+          throw error;
+        }
+      }
     } catch (error) {
       console.error("Report generation error:", error);
       res.status(500).json({
@@ -67,17 +84,11 @@ router.post(
 router.get(
   "/:jobId",
   requireApiKey(ApiScope.ENTERPRISE),
+  validate({ params: reportJobParamsSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
-      const { jobId } = req.params;
-
-      if (!jobId) {
-        res.status(400).json({
-          error: "InvalidRequest",
-          message: "Job ID is required",
-        });
-        return;
-      }
+      const validatedReq = req as ValidatedRequest<ReportJobParams>
+      const { jobId } = validatedReq.validated.params
 
       const job = await reportService.getReportStatus(jobId);
 

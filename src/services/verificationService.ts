@@ -1,4 +1,5 @@
 import * as crypto from 'crypto'
+import type { IdentityVerification, VerificationError } from './identityService.js'
 
 import type {
   AttestationSummary,
@@ -11,6 +12,7 @@ import type {
  * Service for building and signing verification proof packages
  */
 export class VerificationService {
+
   /**
    * Build a canonical JSON string for hashing
    */
@@ -115,6 +117,33 @@ export class VerificationService {
   }
 
   /**
+   * Verify a signed proof with expiry enforcement.
+   * Returns structured result indicating whether the proof is valid and why if not.
+   * Prevents replay attacks by refusing expired proofs even with valid signatures.
+   */
+  verifySignedProofStrict(
+    proof: SignedVerificationProof,
+    publicKey: string
+  ): { valid: boolean; reason?: 'expired' | 'bad_signature' | 'hash_mismatch' } {
+    // Check expiry first (even if signature fails, expiry takes precedence)
+    if (this.isExpired(proof)) {
+      return { valid: false, reason: 'expired' }
+    }
+
+    // Check hash consistency
+    if (!this.verifyProofHash(proof)) {
+      return { valid: false, reason: 'hash_mismatch' }
+    }
+
+    // Verify signature
+    if (!this.verifySignedProof(proof, publicKey)) {
+      return { valid: false, reason: 'bad_signature' }
+    }
+
+    return { valid: true }
+  }
+
+  /**
    * Check if proof is expired
    */
   isExpired(proof: VerificationProof): boolean {
@@ -143,11 +172,14 @@ export class VerificationService {
   /**
    * Verify addresses in chunks by delegating to IdentityService.verifyBulk.
    */
-  async verifyBulkChunked(addresses: string[], chunkSize = 50): Promise<{ results: any[]; errors: any[] }> {
+  async verifyBulkChunked(
+    addresses: string[],
+    chunkSize = 50,
+  ): Promise<{ results: IdentityVerification[]; errors: VerificationError[] }> {
     const { IdentityService } = await import('./identityService.js')
     const identitySvc = new IdentityService()
-    const results: any[] = []
-    const errors: any[] = []
+    const results: IdentityVerification[] = []
+    const errors: VerificationError[] = []
 
     for (let i = 0; i < addresses.length; i += chunkSize) {
       const chunk = addresses.slice(i, i + chunkSize)

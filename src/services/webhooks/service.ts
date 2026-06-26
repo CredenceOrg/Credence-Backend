@@ -81,7 +81,7 @@ export class WebhookService {
    * Deliveries are queued and rate-limited per webhook.
    * Permanently failed deliveries are routed to the DLQ if one is configured.
    */
-  async emit(event: WebhookEventType, data: WebhookPayload['data']): Promise<WebhookDeliveryResult[]> {
+  async emit(event: WebhookEventType, data: WebhookPayload['data']): Promise<(WebhookDeliveryResult | WebhookDeliveryResult[])[]> {
     const webhooks = await this.store.getByEvent(event)
     const activeWebhooks = webhooks.filter(w => w.active)
 
@@ -95,21 +95,25 @@ export class WebhookService {
       data,
     }
 
-    const results = await Promise.all(
+    const rawResults = await Promise.all(
       activeWebhooks.map(webhook => this.deliverWithRateLimit(webhook.id, () =>
-        deliverWebhook(webhook, payload, this.deliveryOptions)
+        deliverWebhook(webhook, payload, { ...this.deliveryOptions, returnAllChunks: true })
       ))
     )
 
     if (this.dlq) {
       await Promise.all(
-        results
-          .filter(r => !r.success)
-          .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
+        rawResults.flatMap(webhookResults => 
+          webhookResults
+            .filter(r => !r.success)
+            .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
+        )
       )
     }
 
-    return results
+    return rawResults.map(webhookResults => 
+      webhookResults.length === 1 ? webhookResults[0] : webhookResults
+    )
   }
 
   /**

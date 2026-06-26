@@ -18,6 +18,7 @@ let _publishedCounter: any | undefined = undefined
 let _failedCounter: any | undefined = undefined
 let _pendingGauge: any | undefined = undefined
 let _leaseRenewCounter: any | undefined = undefined
+let _quarantineCounter: any | undefined = undefined
 
 function getMetric(name: string, type: 'Counter' | 'Gauge', help: string, labelNames: string[] = []) {
     const prom = tryLoadPromClient()
@@ -81,6 +82,15 @@ export function incrementOutboxLeaseRenew(count: number = 1) {
     }
 }
 
+export function incrementOutboxQuarantine(reason: string = 'unknown') {
+    if (!_quarantineCounter) {
+        _quarantineCounter = getMetric('outbox_quarantine_total', 'Counter', 'Total number of outbox events moved to quarantine', ['reason'])
+    }
+    if (_quarantineCounter) {
+        try { _quarantineCounter.inc({ reason }, 1) } catch {}
+    }
+}
+
 export function _resetOutboxMetricsCacheForTests(): void {
     const prom = tryLoadPromClient()
     if (prom) {
@@ -92,4 +102,5 @@ export function _resetOutboxMetricsCacheForTests(): void {
     _failedCounter = undefined
     _pendingGauge = undefined
     _leaseRenewCounter = undefined
+    _quarantineCounter = undefined
 }

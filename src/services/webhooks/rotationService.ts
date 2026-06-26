@@ -35,17 +35,18 @@ export class WebhookRotationService {
     const webhook = await this.store.get(webhookId)
 
     if (!webhook) {
-      this.audit.logAction(
+      void this.audit.logAction({
+        tenantId: 'tenant-unknown',
         actorId,
         actorEmail,
-        AuditAction.ROTATE_WEBHOOK_SECRET,
-        webhookId,
-        '',
-        { webhookId },
-        'failure',
-        'Webhook not found',
+        action: AuditAction.ROTATE_WEBHOOK_SECRET,
+        resourceType: 'webhook',
+        resourceId: webhookId,
+        details: { webhookId },
+        status: 'failure',
+        errorMessage: 'Webhook not found',
         ipAddress,
-      )
+      })
       throw new WebhookNotFoundError(webhookId)
     }
 
@@ -56,17 +57,17 @@ export class WebhookRotationService {
 
     await this.store.rotateSecret(webhookId, newSecret, webhook.secret, previousSecretExpiresAt)
 
-    this.audit.logAction(
+    void this.audit.logAction({
+      tenantId: 'tenant-unknown',
       actorId,
       actorEmail,
-      AuditAction.ROTATE_WEBHOOK_SECRET,
-      webhookId,
-      '',
-      { webhookId, url: webhook.url, previousSecretExpiresAt },
-      'success',
-      undefined,
+      action: AuditAction.ROTATE_WEBHOOK_SECRET,
+      resourceType: 'webhook',
+      resourceId: webhookId,
+      details: { webhookId, url: webhook.url, previousSecretExpiresAt },
+      status: 'success',
       ipAddress,
-    )
+    })
 
     return { webhookId, newSecret, rotatedAt, previousSecretExpiresAt }
   }

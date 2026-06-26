@@ -5,6 +5,7 @@ import {
   incrementOutboxFailed,
   setOutboxPendingGauge,
   incrementOutboxLeaseRenew,
+  incrementOutboxQuarantine,
   _resetOutboxMetricsCacheForTests,
 } from './outboxMetrics.js'
 import promClient from 'prom-client'
@@ -66,5 +67,13 @@ describe('Outbox Metrics (#329)', () => {
     const metrics = await promClient.register.getMetricsAsJSON()
     const metric = metrics.find(m => m.name === 'outbox_lease_renew_total')
     expect(metric?.values[0].value).toBe(5)
+  })
+
+  it('updates outbox_quarantine_total correctly', async () => {
+    incrementOutboxQuarantine('schema_invalid')
+    const metrics = await promClient.register.getMetricsAsJSON()
+    const metric = metrics.find(m => m.name === 'outbox_quarantine_total')
+    expect(metric?.values[0].value).toBe(1)
+    expect(metric?.values[0].labels).toEqual({ reason: 'schema_invalid' })
   })
 })

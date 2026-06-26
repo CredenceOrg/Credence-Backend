@@ -3,10 +3,9 @@
  * Ensures cache consistency after attestation score updates.
  */
 
-import { AttestationsRepository, Attestation } from '../db/repositories/attestationsRepository.js'
+import { AttestationsRepository, Attestation, type AttestationPage, type ListAttestationsPageOptions, type CursorPaginationOptions, type AttestationCursorPage } from '../db/repositories/attestationsRepository.js'
 import { cache } from '../cache/redis.js'
-import { invalidateCache, createCacheKey } from '../cache/invalidation.js'
-import type { AttestationPage, ListAttestationsPageOptions } from '../db/repositories/attestationsRepository.js'
+import { createCacheKey, invalidateCache } from '../cache/invalidation.js'
 
 const ATTESTATION_CACHE_TTL = 300 // 5 minutes
 
@@ -84,6 +83,28 @@ export class AttestationCacheService {
 
     return page
   }
+
+  /**
+   * Get one subject-address page with cursor-based pagination.
+   * Cursor-based pagination doesn't cache by offset since cursors are opaque.
+   */
+  async getAttestationsBySubjectPaginated(
+    subjectAddress: string,
+    options: CursorPaginationOptions
+  ): Promise<AttestationCursorPage> {
+    // For cursor-based pagination, we skip caching to avoid invalidation complexity
+    // Cursors are opaque and not tied to page numbers, so caching by cursor would be inefficient
+    const page = await this.repository.listBySubjectPaginated(subjectAddress, options)
+    
+    return {
+      attestations: page.attestations.map(a => ({
+        ...a,
+        createdAt: new Date(a.createdAt)
+      })),
+      hasMore: page.hasMore,
+    }
+  }
+
 
   /**
    * Get attestations by bond ID with caching.

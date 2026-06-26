@@ -62,6 +62,7 @@ const CREATE_TABLE_STATEMENTS = [
     identity_address TEXT NOT NULL REFERENCES identities(address) ON DELETE CASCADE,
     score INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
     source TEXT NOT NULL CHECK (source IN ('bond', 'attestation', 'slash', 'manual')),
+    input_vector JSONB NOT NULL DEFAULT '{}'::jsonb,
     computed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
   `,
@@ -108,13 +109,16 @@ const CREATE_TABLE_STATEMENTS = [
   `
   CREATE TABLE IF NOT EXISTS idempotency_keys (
     key TEXT PRIMARY KEY,
+    actor_id TEXT NOT NULL,
     request_hash TEXT NOT NULL,
     response_code INTEGER NOT NULL,
     response_body JSONB NOT NULL,
+    ttl_seconds INTEGER NOT NULL DEFAULT 86400,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
   `,
+  `CREATE INDEX IF NOT EXISTS idempotency_keys_expires_at_idx ON idempotency_keys (expires_at)`,
   `
   CREATE TABLE IF NOT EXISTS notification_send_attempts (
     id TEXT PRIMARY KEY,
@@ -160,22 +164,22 @@ const CREATE_TABLE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS settlements_status_idx ON settlements (status)`,
   `CREATE INDEX IF NOT EXISTS settlements_settled_at_idx ON settlements (settled_at DESC)`,
   `CREATE INDEX IF NOT EXISTS settlements_transaction_hash_idx ON settlements (transaction_hash)`,
-] as const
+] as const;
 
 const DROP_TABLE_STATEMENTS = [
-  'DROP TABLE IF EXISTS idempotent_job_attempts',
-  'DROP TABLE IF EXISTS notification_send_attempts',
-  'DROP TABLE IF EXISTS event_outbox',
-  'DROP TABLE IF EXISTS settlements',
-  'DROP TABLE IF EXISTS report_jobs',
-  'DROP TABLE IF EXISTS score_history',
-  'DROP TABLE IF EXISTS audit_logs',
-  'DROP TABLE IF EXISTS slash_events',
-  'DROP TABLE IF EXISTS attestations',
-  'DROP TABLE IF EXISTS bonds',
-  'DROP TABLE IF EXISTS idempotency_keys',
-  'DROP TABLE IF EXISTS identities',
-] as const
+  "DROP TABLE IF EXISTS idempotent_job_attempts",
+  "DROP TABLE IF EXISTS notification_send_attempts",
+  "DROP TABLE IF EXISTS event_outbox",
+  "DROP TABLE IF EXISTS settlements",
+  "DROP TABLE IF EXISTS report_jobs",
+  "DROP TABLE IF EXISTS score_history",
+  "DROP TABLE IF EXISTS audit_logs",
+  "DROP TABLE IF EXISTS slash_events",
+  "DROP TABLE IF EXISTS attestations",
+  "DROP TABLE IF EXISTS bonds",
+  "DROP TABLE IF EXISTS idempotency_keys",
+  "DROP TABLE IF EXISTS identities",
+] as const;
 
 export async function createSchema(db: Queryable): Promise<void> {
   for (const statement of CREATE_TABLE_STATEMENTS) {
@@ -185,14 +189,14 @@ export async function createSchema(db: Queryable): Promise<void> {
 
 export async function resetDatabase(db: Queryable): Promise<void> {
   await db.query(
-    'TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities RESTART IDENTITY CASCADE'
-  )
+    "TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities RESTART IDENTITY CASCADE",
+  );
 }
 
 export async function dropSchema(db: Queryable): Promise<void> {
   for (const statement of DROP_TABLE_STATEMENTS) {
     await db.query(statement);
   }
-  await db.query('DROP TABLE IF EXISTS idempotency_keys')
-  await db.query('DROP TABLE IF EXISTS settlements')
+  await db.query("DROP TABLE IF EXISTS idempotency_keys");
+  await db.query("DROP TABLE IF EXISTS settlements");
 }

@@ -25,6 +25,11 @@ export interface IdempotentJobResult<T> {
 }
 
 const DEFAULT_EXPIRY_SECONDS = 24 * 60 * 60
+export const NOTIFICATION_DELIVERY_JOB_TYPE = 'notification_delivery'
+
+export function buildNotificationDeliveryJobKey(notificationId: string): string {
+  return `${NOTIFICATION_DELIVERY_JOB_TYPE}:${notificationId}`
+}
 
 export class NotificationIdempotencyRepository {
   constructor(private readonly db: Queryable) {}

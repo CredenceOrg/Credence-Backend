@@ -15,10 +15,17 @@ export interface IdempotentResult<T = unknown> {
 
 export interface IdempotentConsumerOptions {
   expiresInSeconds?: number
+  /**
+   * Actor attributed to idempotency records. Message consumers run outside a
+   * user request, so this defaults to a system sentinel.
+   */
+  actorId?: string
 }
 
 export class IdempotentConsumer<T = unknown, R = unknown> {
   private readonly repository: IdempotencyRepository
+  private readonly ttlSeconds: number
+  private readonly actorId: string
 
   constructor(
     private readonly db: IdempotencyRepository,
@@ -29,6 +36,8 @@ export class IdempotentConsumer<T = unknown, R = unknown> {
       expiresInSeconds: 86400,
       ...options,
     }
+    this.ttlSeconds = this.options.expiresInSeconds ?? 86400
+    this.actorId = this.options.actorId ?? 'system'
   }
 
   async process(
@@ -50,10 +59,11 @@ export class IdempotentConsumer<T = unknown, R = unknown> {
 
       await this.repository.save({
         key: messageId,
+        actorId: this.actorId,
         requestHash: messageId,
         responseCode: 200,
         responseBody: result,
-        expiresInSeconds: this.options.expiresInSeconds!,
+        ttlSeconds: this.ttlSeconds,
       })
 
       return {
@@ -66,10 +76,11 @@ export class IdempotentConsumer<T = unknown, R = unknown> {
 
       await this.repository.save({
         key: messageId,
+        actorId: this.actorId,
         requestHash: messageId,
         responseCode: 500,
         responseBody: { error: errorMessage },
-        expiresInSeconds: this.options.expiresInSeconds!,
+        ttlSeconds: this.ttlSeconds,
       })
 
       return {

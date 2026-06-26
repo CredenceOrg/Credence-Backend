@@ -150,6 +150,55 @@ export class RetentionRepository {
     }
   }
 
+  // ── evidence ──────────────────────────────────────────────────────────
+
+  async countExpiredEvidence(ttlDays: number): Promise<RetentionCountResult> {
+    if (ttlDays === 0) return { entity: 'evidence', expiredCount: 0, ttlDays }
+    const result = await this.db.query<{ cnt: string }>(
+      `SELECT COUNT(*)::text AS cnt FROM evidence
+       WHERE created_at < NOW() - ($1 || ' days')::interval
+         AND deleted_at IS NULL
+         AND legal_hold = false
+         AND shredded_at IS NULL`,
+      [ttlDays],
+    )
+    return {
+      entity: 'evidence',
+      expiredCount: parseInt(result.rows[0]?.cnt ?? '0', 10),
+      ttlDays,
+    }
+  }
+
+  async deleteExpiredEvidence(
+    ttlDays: number,
+    batchLimit: number,
+  ): Promise<RetentionDeleteResult> {
+    if (ttlDays === 0 || this.dryRun) {
+      return { entity: 'evidence', deletedCount: 0, ttlDays, dryRun: this.dryRun }
+    }
+    const result = await this.db.query<{ cnt: string }>(
+      `WITH rows AS (
+         SELECT evidence_id FROM evidence
+         WHERE created_at < NOW() - ($1 || ' days')::interval
+           AND deleted_at IS NULL
+           AND legal_hold = false
+           AND shredded_at IS NULL
+         LIMIT $2
+       )
+       UPDATE evidence
+       SET deleted_at = NOW()
+       WHERE evidence_id IN (SELECT evidence_id FROM rows)
+       RETURNING 1`,
+      [ttlDays, batchLimit],
+    )
+    return {
+      entity: 'evidence',
+      deletedCount: result.rowCount ?? 0,
+      ttlDays,
+      dryRun: false,
+    }
+  }
+
   // ── outbox_events ──────────────────────────────────────────────────────
 
   async countExpiredOutboxEvents(ttlDays: number): Promise<RetentionCountResult> {

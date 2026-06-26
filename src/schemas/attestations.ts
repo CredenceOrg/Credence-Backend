@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import { addressSchema } from './address.js'
+import { addressSchema, stellarAddressSchema } from './address.js'
 
 /**
  * Path params for attestation routes (e.g. GET /api/attestations/:address)

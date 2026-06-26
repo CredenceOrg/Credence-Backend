@@ -158,7 +158,8 @@ describe('POST /api/integrations/keys', () => {
   })
 
   it('records a CREATE_API_KEY audit entry', async () => {
-    const { app, auditSvc } = buildApp()
+    const { app, repo, auditSvc } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
     await makeRequest(app, 'POST', '/api/integrations/keys', { auth: ADMIN_TOKEN })
 
     const { logs } = await auditSvc.getLogs(undefined, { action: 'CREATE_API_KEY' }, 100, 0, { allowSuperScope: true })
@@ -178,12 +179,13 @@ describe('GET /api/integrations/keys', () => {
 
     expect(res.status).toBe(200)
     expect(Array.isArray(res.body.data)).toBe(true)
-    expect((res.body.data as unknown[]).length).toBe(0)
+    expect((res.body.data as unknown[]).length).toBe(1)
   })
 
   it('lists only keys belonging to the requesting user', async () => {
     const { app, repo } = buildApp()
     const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
 
     // Issue one key as admin and one as verifier
     await makeRequest(app, 'POST', '/api/integrations/keys', { auth: ADMIN_TOKEN })
@@ -193,7 +195,7 @@ describe('GET /api/integrations/keys', () => {
       auth: ADMIN_TOKEN,
     })
 
-    expect((adminList.body.data as unknown[]).length).toBe(1)
+    expect((adminList.body.data as unknown[]).length).toBe(2)
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -293,7 +295,9 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
   })
 
   it('returns 403 when a non-owner attempts to rotate another user\'s key', async () => {
-    const { app } = buildApp()
+    const { app, repo } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
 
     // Admin creates a key
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
@@ -319,7 +323,8 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
   })
 
   it('writes a ROTATE_API_KEY success entry to the audit log', async () => {
-    const { app, auditSvc } = buildApp()
+    const { app, repo, auditSvc } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -338,7 +343,8 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
   })
 
   it('logs a failure audit entry when rotating a non-existent key', async () => {
-    const { app, auditSvc } = buildApp()
+    const { app, repo, auditSvc } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
 
     await makeRequest(app, 'POST', '/api/integrations/keys/ghost-id/rotate', {
       auth: ADMIN_TOKEN,
@@ -353,7 +359,8 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
 describe('DELETE /api/integrations/keys/:id', () => {
   it('revokes an active key successfully', async () => {
-    const { app } = buildApp()
+    const { app, repo } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -372,7 +379,8 @@ describe('DELETE /api/integrations/keys/:id', () => {
   })
 
   it('returns 404 for an unknown key ID', async () => {
-    const { app } = buildApp()
+    const { app, repo } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'DELETE', '/api/integrations/keys/ghost-id', {
       auth: ADMIN_TOKEN,
     })
@@ -381,7 +389,9 @@ describe('DELETE /api/integrations/keys/:id', () => {
   })
 
   it('returns 403 when a non-owner attempts to revoke another user\'s key', async () => {
-    const { app } = buildApp()
+    const { app, repo } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -405,7 +415,8 @@ describe('DELETE /api/integrations/keys/:id', () => {
   })
 
   it('writes a REVOKE_API_KEY audit entry on success', async () => {
-    const { app, auditSvc } = buildApp()
+    const { app, repo, auditSvc } = buildApp()
+    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,

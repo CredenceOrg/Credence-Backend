@@ -2,6 +2,7 @@ import { AuditAction } from './audit/index.js'
 import type { AuditLogService } from './audit/index.js'
 import type { ApiKeyRepository } from '../repositories/apiKeyRepository.js'
 import type { CreateApiKeyResult, KeyScope, StoredApiKey, SubscriptionTier } from './apiKeys.js'
+import { getTenantId } from '../utils/tenantContext.js'
 
 /**
  * High-level service for managing integration API keys.
@@ -15,6 +16,16 @@ export class ApiKeyRotationService {
     private readonly repo: ApiKeyRepository,
     private readonly audit: AuditLogService,
   ) {}
+
+  /**
+   * Resolve the tenant for audit records from the ambient request context.
+   * API-key operations run inside a tenant-scoped ALS; when invoked outside a
+   * tenant scope (e.g. background tooling) we fall back to a sentinel value so
+   * the audit entry still satisfies the required-tenant contract.
+   */
+  private resolveTenantId(): string {
+    return getTenantId() ?? 'tenant-unknown'
+  }
 
   /**
    * Issue a new integration API key and log the creation event.
@@ -36,6 +47,7 @@ export class ApiKeyRotationService {
     const result = this.repo.create(ownerId, scope, tier)
 
     await this.audit.logAction({
+      tenantId: this.resolveTenantId(),
       actorId: ownerId,
       actorEmail,
       action: AuditAction.CREATE_API_KEY,
@@ -77,6 +89,7 @@ export class ApiKeyRotationService {
 
     if (!existing) {
       await this.audit.logAction({
+        tenantId: this.resolveTenantId(),
         actorId,
         actorEmail,
         action: AuditAction.ROTATE_API_KEY,
@@ -92,6 +105,7 @@ export class ApiKeyRotationService {
 
     if (!existing.active) {
       await this.audit.logAction({
+        tenantId: this.resolveTenantId(),
         actorId,
         actorEmail,
         action: AuditAction.ROTATE_API_KEY,
@@ -114,6 +128,7 @@ export class ApiKeyRotationService {
     }
 
     await this.audit.logAction({
+      tenantId: this.resolveTenantId(),
       actorId,
       actorEmail,
       action: AuditAction.ROTATE_API_KEY,
@@ -153,6 +168,7 @@ export class ApiKeyRotationService {
     const revoked = this.repo.revoke(keyId)
 
     await this.audit.logAction({
+      tenantId: this.resolveTenantId(),
       actorId,
       actorEmail,
       action: AuditAction.REVOKE_API_KEY,

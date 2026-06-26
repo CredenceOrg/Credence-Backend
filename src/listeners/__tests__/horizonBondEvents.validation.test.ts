@@ -56,9 +56,11 @@ vi.mock('@stellar/stellar-sdk', () => {
   }
 })
 
-// Mock identityService functions 
-const mockUpsertIdentity = vi.fn().mockResolvedValue({})
-const mockUpsertBond = vi.fn().mockResolvedValue({})
+// Mock identityService functions using vi.hoisted to avoid hoisting issues
+const { mockUpsertIdentity, mockUpsertBond } = vi.hoisted(() => ({
+  mockUpsertIdentity: vi.fn().mockResolvedValue({}),
+  mockUpsertBond: vi.fn().mockResolvedValue({}),
+}))
 
 // Correct the path: from the test file (src/listeners/__tests__) to src/services is ../../services
 vi.mock('../../services/identityService.js', () => ({
@@ -118,10 +120,10 @@ describe('subscribeBondCreationEvents validation', () => {
       // Should not call captureFailure
       expect(mockReplayService.captureFailure).not.toHaveBeenCalled()
       // Should advance cursor and process event
-      expect(mockOnEvent).toHaveBeenClicked()
+      expect(mockOnEvent).toHaveBeenCalled()
       // Should call upsertIdentity and upsertBond
-      expect(mockUpsertIdentity).toHaveBeenClicked()
-      expect(mockUpsertBond).toHaveBeenClicked()
+      expect(mockUpsertIdentity).toHaveBeenCalled()
+      expect(mockUpsertBond).toHaveBeenCalled()
     })
   })
 
@@ -144,16 +146,16 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should call captureFailure with the operation
-      expect(mockReplayService.captureFailure).toHaveBeenClickedWith(
+      expect(mockReplayService.captureFailure).toHaveBeenCalledWith(
         'bond_creation',
         invalidOp,
         expect.stringContaining('source_account')
       )
       // Should NOT call onEvent
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
 
     it('should quarantine operation with invalid source_account', async () => {
@@ -174,12 +176,12 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should call captureFailure
-      expect(mockReplayService.captureFailure).toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).toHaveBeenCalled()
       // Should NOT call onEvent
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
 
     it('should quarantine operation with missing amount', async () => {
@@ -200,12 +202,12 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should call captureFailure
-      expect(mockReplayService.captureFailure).toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).toHaveBeenCalled()
       // Should NOT call onEvent
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
 
     it('should quarantine operation with non-numeric amount', async () => {
@@ -226,12 +228,12 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should call captureFailure
-      expect(mockReplayService.captureFailure).toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).toHaveBeenCalled()
       // Should NOT call onEvent
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
 
     it('should quarantine operation with negative amount', async () => {
@@ -252,12 +254,12 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should call captureFailure
-      expect(mockReplayService.captureFailure).toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).toHaveBeenCalled()
       // Should NOT call onEvent
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
 
     it('should not advance cursor on validation failure', async () => {
@@ -278,12 +280,12 @@ describe('subscribeBondCreationEvents validation', () => {
       }
       
       // Should NOT call onEvent (early return)
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should call captureFailure
-      expect(mockReplayService.captureFailure).toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
   })
 
@@ -308,11 +310,11 @@ describe('subscribeBondCreationEvents validation', () => {
       
       // Should still validate the operation (to check format)
       // But should not process it as a bond creation
-      expect(mockReplayService.captureFailure).not.toHaveBeenClicked()
-      expect(mockOnEvent).not.toHaveBeenClicked()
+      expect(mockReplayService.captureFailure).not.toHaveBeenCalled()
+      expect(mockOnEvent).not.toHaveBeenCalled()
       // Should NOT call upsert functions
-      expect(mockUpsertIdentity).not.toHaveBeenClicked()
-      expect(mockUpsertBond).not.toHaveBeenClicked()
+      expect(mockUpsertIdentity).not.toHaveBeenCalled()
+      expect(mockUpsertBond).not.toHaveBeenCalled()
     })
   })
 })

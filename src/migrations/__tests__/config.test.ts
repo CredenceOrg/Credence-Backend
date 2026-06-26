@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { loadMigrationConfig, validateConfig, MigrationConfig } from './config.js'
+import { loadMigrationConfig, validateConfig, MigrationConfig } from '../config.js'
 
 describe('loadMigrationConfig', () => {
   const originalEnv = process.env

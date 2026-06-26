@@ -2,31 +2,45 @@
 
 ## Overview
 
-This document describes the cache invalidation strategy implemented to ensure read-after-write consistency across the Credence backend. The implementation closes invalidation gaps that could lead to stale reads in concurrent environments.
+This document describes the cache invalidation strategy implemented to ensure read-after-write consistency across the Credence backend. The implementation closes invalidation gaps that could lead to stale reads in concurrent environments, and supports distributed deployments with multiple API replicas.
 
 ## Problem Statement
 
-Without proper cache invalidation, the following race condition can occur:
+Without proper cache invalidation, the following race conditions can occur:
 
 1. Process A updates a database record (e.g., settlement status: `pending` → `completed`)
 2. Process B reads from cache before invalidation completes
 3. Process B receives stale data (status: `pending`)
 4. Users see inconsistent state
 
+In distributed deployments, even if invalidation is done in-process on the updating replica, other replicas may still serve stale data from their local caches or even Redis (if sharded).
+
 ## Solution Architecture
 
 ### Core Components
 
-#### 1. Cache Invalidation Utilities (`src/cache/invalidation.ts`)
+#### 1. Cache Layers (`src/cache/redis.ts`)
+- **L1 Cache**: In-memory LRU cache for hot data (default: 1000 items, 1 min TTL)
+- **L2 Cache**: Redis for shared, persistent caching across replicas
+
+All cache operations first check L1, then fall back to L2. Updates are written to both caches.
+
+#### 2. Invalidation Bus (`src/cache/invalidationBus.ts`)
+- Uses Postgres LISTEN/NOTIFY to broadcast invalidation events across replicas
+- Channel name is environment-scoped to prevent cross-env leakage
+- Auto-reconnects to Postgres if the listen client disconnects
+- Each replica automatically invalidates its L1/L2 caches when receiving invalidation events
+
+#### 3. Cache Invalidation Utilities (`src/cache/invalidation.ts`)
 
 Provides reusable patterns for cache invalidation:
 
-- `invalidateCache()` - Invalidate a single cache key with optional verification
-- `invalidateMultiple()` - Invalidate multiple keys atomically
-- `invalidatePattern()` - Invalidate keys matching a pattern
+- `invalidateCache()` - Invalidate a single cache key with optional verification and broadcast
+- `invalidateMultiple()` - Invalidate multiple keys atomically and broadcast
+- `invalidatePattern()` - Invalidate keys matching a pattern and broadcast
 - `createCacheKey()` - Helper to create consistent cache keys
 
-#### 2. Cache-Aware Services
+#### 4. Cache-Aware Services
 
 Services that wrap repositories and handle cache invalidation:
 

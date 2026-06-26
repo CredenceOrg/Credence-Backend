@@ -205,6 +205,62 @@ docker-compose down
 docker-compose down -v
 ```
 
+## Kubernetes Readiness Probe
+
+The `/api/health/ready` endpoint is dependency-aware and used as the Kubernetes readiness probe. A pod is removed from the Service's endpoint list when this returns 503.
+
+**What it checks:**
+
+| Dependency | Check | Marks pod unready |
+|---|---|---|
+| PostgreSQL | `SELECT 1` | Yes (503) |
+| Redis | `PING` | Yes (503) |
+| Horizon/Soroban client | Circuit breaker state | Yes (503 when `OPEN`) |
+| Horizon listener | Heartbeat age | Yes (503 when stale) |
+| Outbox publisher | Heartbeat age | Yes (503 when stale) |
+
+**Response shape:**
+
+```json
+{
+  "status": "ok",
+  "service": "credence-backend",
+  "dependencies": {
+    "postgres":        { "status": "up", "latencyMs": 4 },
+    "redis":           { "status": "up", "latencyMs": 1 },
+    "horizon":         { "status": "up", "latencyMs": 2, "details": { "circuitState": "CLOSED" } },
+    "horizonListener": { "status": "up", "latencyMs": 0 },
+    "outboxPublisher": { "status": "up", "latencyMs": 0 }
+  }
+}
+```
+
+Each check is bounded to **5 seconds** (`CHECK_TIMEOUT_MS`). A hung dependency returns `{ "status": "down", "reason": "timeout" }` and does not block the other probes — all checks run in parallel.
+
+**Liveness probe** (`/api/health/live`) always returns 200 with no dependency checks, used to restart crashed pods without evicting healthy pods over transient DB blips.
+
+The k8s manifest at `k8s/deployment.yaml` already wires both probes:
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /api/health/live
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 15
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /api/health/ready
+    port: http
+  initialDelaySeconds: 5
+  periodSeconds: 10
+  timeoutSeconds: 3
+  failureThreshold: 3
+```
+
 ## Resources
 
 - Full documentation: [docs/monitoring.md](docs/monitoring.md)

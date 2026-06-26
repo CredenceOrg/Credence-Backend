@@ -1,0 +1,139 @@
+
+> credence-backend@0.1.0 test
+> vitest run impersonation
+
+
+[1m[30m[46m RUN [49m[39m[22m [36mv4.1.9 [39m[90mC:/Users/ADMIN/Desktop/lekan-drips/Credence-Backend[39m
+
+[90mstdout[2m | src/services/impersonation/impersonation.test.ts
+[22m[39m◇ injected env (0) from .env // tip: ⌘ enable debugging { debug: true }
+
+[90mstderr[2m | tests/integration/impersonation.test.ts[2m > [22m[2mImpersonation Tokens Integration
+[22m[39mTestcontainers (Postgres) failed to start, falling back to mock: Could not find a working container runtime strategy
+
+ [32m✓[39m tests/integration/impersonation.test.ts [2m([22m[2m4 tests[22m[2m)[22m[33m 2779[2mms[22m[39m
+     [33m[2m✓[22m[39m persists and validates a token [33m 336[2mms[22m[39m
+ [31m❯[39m src/services/impersonation/impersonation.test.ts [2m([22m[2m23 tests[22m[2m | [22m[31m7 failed[39m[2m)[22m[33m 35555[2mms[22m[39m
+       [32m✓[39m returns a token with correct fields[32m 64[2mms[22m[39m
+       [32m✓[39m applies the default TTL of 900 s when ttlSeconds is omitted[32m 3[2mms[22m[39m
+       [32m✓[39m passes through a custom TTL below the cap[32m 12[2mms[22m[39m
+       [32m✓[39m clamps TTL to MAX_TTL_SECONDS (3600) when exceeded[32m 3[2mms[22m[39m
+       [32m✓[39m trims leading/trailing whitespace from reason before storing[32m 3[2mms[22m[39m
+[31m       [31m×[31m emits a success audit record with correct fields[39m[33m 5125[2mms[22m[39m
+[31m       [31m×[31m throws and emits a FAILURE audit log when reason is empty[39m[33m 5019[2mms[22m[39m
+[31m       [31m×[31m throws and emits a FAILURE audit log when reason is whitespace-only[39m[33m 5186[2mms[22m[39m
+[31m       [31m×[31m throws and emits a failure audit log when targetUserId is unknown[39m[33m 5050[2mms[22m[39m
+[31m       [31m×[31m passes ipAddress through to the audit log on failure[39m[33m 5009[2mms[22m[39m
+       [32m✓[39m returns the token record while the token is valid[32m 3[2mms[22m[39m
+       [32m✓[39m returns null for a completely unknown token ID[32m 1[2mms[22m[39m
+       [32m✓[39m returns null when the token has been explicitly revoked[32m 5[2mms[22m[39m
+       [32m✓[39m returns null after the token has expired (fake clock)[32m 5[2mms[22m[39m
+       [32m✓[39m returns the record for a token that is at exactly expiry minus 1 ms[32m 4[2mms[22m[39m
+       [32m✓[39m revokes a valid token and subsequent validation returns null[32m 3[2mms[22m[39m
+[31m       [31m×[31m emits a success audit record on revoke with correct audit fields[39m[33m 5016[2mms[22m[39m
+       [32m✓[39m throws "Token not found" for an unknown tokenId[32m 3[2mms[22m[39m
+       [32m✓[39m throws "Token already revoked" on a double-revoke attempt[32m 8[2mms[22m[39m
+[31m       [31m×[31m passes ipAddress through on revoke success audit[39m[33m 5019[2mms[22m[39m
+       [32m✓[39m removes expired tokens and returns the count[32m 3[2mms[22m[39m
+       [32m✓[39m returns 0 when there are no expired tokens[32m 2[2mms[22m[39m
+       [32m✓[39m clears all tokens from the store[32m 2[2mms[22m[39m
+
+[31m⎯⎯⎯⎯⎯⎯⎯[39m[1m[41m Failed Tests 7 [49m[22m[31m⎯⎯⎯⎯⎯⎯⎯[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22missueToken()[2m > [22memits a success audit record with correct fields
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m200:5[22m[39m
+    [90m198|[39m     })
+    [90m199|[39m
+    [90m200|[39m     it('emits a success audit record with correct fields', async () =>…
+    [90m   |[39m     [31m^[39m
+    [90m201|[39m       [35mconst[39m result [33m=[39m [35mawait[39m [34missueDefault[39m(svc[33m,[39m { ip[33m:[39m [32m'192.168.1.1'[39m })
+    [90m202|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22missueToken()[2m > [22mthrows and emits a FAILURE audit log when reason is empty
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m221:5[22m[39m
+    [90m219|[39m     })
+    [90m220|[39m
+    [90m221|[39m     it('throws and emits a FAILURE audit log when reason is empty', as…
+    [90m   |[39m     [31m^[39m
+    [90m222|[39m       [35mawait[39m [34mexpect[39m([34missueDefault[39m(svc[33m,[39m { reason[33m:[39m [32m''[39m }))[33m.[39mrejects[33m.[39m[34mtoThrow[39m(
+    [90m223|[39m         [32m'reason is required and must not be empty'[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22missueToken()[2m > [22mthrows and emits a FAILURE audit log when reason is whitespace-only
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m234:5[22m[39m
+    [90m232|[39m     })
+    [90m233|[39m
+    [90m234|[39m     it('throws and emits a FAILURE audit log when reason is whitespace…
+    [90m   |[39m     [31m^[39m
+    [90m235|[39m       await expect(issueDefault(svc, { reason: '   ' })).rejects.toThr…
+    [90m236|[39m         [32m'reason is required and must not be empty'[39m[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22missueToken()[2m > [22mthrows and emits a failure audit log when targetUserId is unknown
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m245:5[22m[39m
+    [90m243|[39m     })
+    [90m244|[39m
+    [90m245|[39m     it('throws and emits a failure audit log when targetUserId is unkn…
+    [90m   |[39m     [31m^[39m
+    [90m246|[39m       [35mawait[39m [34mexpect[39m(
+    [90m247|[39m         [34missueDefault[39m(svc[33m,[39m { targetUserId[33m:[39m [33mUNKNOWN_TARGET[39m })[33m,[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22missueToken()[2m > [22mpasses ipAddress through to the audit log on failure
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m258:5[22m[39m
+    [90m256|[39m     })
+    [90m257|[39m
+    [90m258|[39m     it('passes ipAddress through to the audit log on failure', async (…
+    [90m   |[39m     [31m^[39m
+    [90m259|[39m       await expect(issueDefault(svc, { reason: '', ip: '9.9.9.9' })).r…
+    [90m260|[39m
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22mrevokeToken()[2m > [22memits a success audit record on revoke with correct audit fields
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m324:5[22m[39m
+    [90m322|[39m     })
+    [90m323|[39m
+    [90m324|[39m     it('emits a success audit record on revoke with correct audit fiel…
+    [90m   |[39m     [31m^[39m
+    [90m325|[39m       [35mconst[39m { tokenId } [33m=[39m [35mawait[39m [34missueDefault[39m(svc)
+    [90m326|[39m       logSpy[33m.[39m[34mmockClear[39m()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯[22m[39m
+
+[41m[1m FAIL [22m[49m src/services/impersonation/impersonation.test.ts[2m > [22mImpersonationService[2m > [22mrevokeToken()[2m > [22mpasses ipAddress through on revoke success audit
+[31m[1mError[22m: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".[39m
+[36m [2m❯[22m src/services/impersonation/impersonation.test.ts:[2m355:5[22m[39m
+    [90m353|[39m     })
+    [90m354|[39m
+    [90m355|[39m     it('passes ipAddress through on revoke success audit', async () =>…
+    [90m   |[39m     [31m^[39m
+    [90m356|[39m       [35mconst[39m { tokenId } [33m=[39m [35mawait[39m [34missueDefault[39m(svc)
+    [90m357|[39m       logSpy[33m.[39m[34mmockClear[39m()
+
+[31m[2m⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯[22m[39m
+
+
+[2m Test Files [22m [1m[31m1 failed[39m[22m[2m | [22m[1m[32m1 passed[39m[22m[90m (2)[39m
+[2m      Tests [22m [1m[31m7 failed[39m[22m[2m | [22m[1m[32m20 passed[39m[22m[90m (27)[39m
+[2m   Start at [22m 12:42:41
+[2m   Duration [22m 41.32s[2m (transform 2.75s, setup 0ms, import 21.55s, tests 38.33s, environment 2ms)[22m
+

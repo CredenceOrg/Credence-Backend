@@ -1,11 +1,16 @@
 import {
   CredenceConfig,
-  CredenceApiError,
   TrustScore,
   BondStatus,
   AttestationsResponse,
   VerificationProof,
 } from './types.js'
+import {
+  CredenceError,
+  createCredenceErrorFromEnvelope,
+  createTransportCredenceError,
+  parseCredenceErrorEnvelope,
+} from './errors.generated.js'
 
 const DEFAULT_TIMEOUT = 30_000
 
@@ -54,10 +59,10 @@ export class CredenceClient {
   private async request<T>(path: string): Promise<T> {
     const url = `${this.baseUrl}${path}`
     const headers: Record<string, string> = {
-      'Accept': 'application/json',
+      Accept: 'application/json',
     }
     if (this.apiKey) {
-      headers['Authorization'] = `Bearer ${this.apiKey}`
+      headers.Authorization = `Bearer ${this.apiKey}`
     }
 
     const controller = new AbortController()
@@ -71,16 +76,19 @@ export class CredenceClient {
         signal: controller.signal,
       })
     } catch (err: unknown) {
-      if (err instanceof DOMException && err.name === 'AbortError') {
-        throw new CredenceApiError(`Request timed out: ${url}`, 0, '')
+      if (this.isAbortError(err)) {
+        throw createTransportCredenceError(
+          'sdk_request_timeout',
+          `Request timed out: ${url}`,
+          0,
+          { cause: err },
+        )
       }
-      if (err instanceof Error && err.name === 'AbortError') {
-        throw new CredenceApiError(`Request timed out: ${url}`, 0, '')
-      }
-      throw new CredenceApiError(
+      throw createTransportCredenceError(
+        'sdk_network_error',
         `Network error: ${err instanceof Error ? err.message : String(err)}`,
         0,
-        '',
+        { cause: err },
       )
     } finally {
       clearTimeout(timer)
@@ -89,17 +97,36 @@ export class CredenceClient {
     const body = await response.text()
 
     if (!response.ok) {
-      throw new CredenceApiError(
+      const envelope = parseCredenceErrorEnvelope(body)
+      if (envelope) {
+        throw createCredenceErrorFromEnvelope(envelope, response.status, { rawBody: body })
+      }
+
+      throw createTransportCredenceError(
+        'sdk_unmapped_http',
         `HTTP ${response.status}: ${response.statusText}`,
         response.status,
-        body,
+        { rawBody: body },
       )
     }
 
     try {
       return JSON.parse(body) as T
-    } catch {
-      throw new CredenceApiError('Invalid JSON response', response.status, body)
+    } catch (err: unknown) {
+      throw createTransportCredenceError(
+        'sdk_invalid_json',
+        'Invalid JSON response',
+        response.status,
+        { cause: err, rawBody: body },
+      )
     }
   }
+
+  private isAbortError(err: unknown): boolean {
+    if (err instanceof DOMException && err.name === 'AbortError') return true
+    if (err instanceof Error && err.name === 'AbortError') return true
+    return false
+  }
 }
+
+export { CredenceError }

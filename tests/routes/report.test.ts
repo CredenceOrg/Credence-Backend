@@ -135,3 +135,128 @@ describe("POST /api/reports — type validation", () => {
     expect(res.status).toBe(400);
   });
 });
+
+import { ReportStorageService } from "../../src/services/reportStorage.js";
+import reportRouter from "../../src/routes/report.js";
+
+// App is built once for the entire suite.
+// The signing secret is injected via vitest.config.ts#setupFiles before this module loads.
+const downloadApp = express();
+downloadApp.use("/api/reports", reportRouter);
+
+describe("GET /api/reports/download/:key validation", () => {
+  let reportStorage: ReportStorageService;
+
+  beforeEach(() => {
+    ReportStorageService.reset();
+    reportStorage = new ReportStorageService();
+  });
+
+  afterEach(() => {
+    ReportStorageService.reset();
+  });
+
+  it("returns 200 and serves artifact with correct headers for valid signed URL", async () => {
+    const key = reportStorage.makeKey("test-tenant", "job-123");
+    async function* stream() {
+      yield Buffer.from("mock-pdf-content", "utf-8");
+    }
+    await reportStorage.uploadStream(key, stream());
+
+    const { url } = reportStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+
+    expect(res.status).toBe(200);
+    expect(res.headers["content-type"]).toBe("application/pdf");
+    expect(res.headers["content-disposition"]).toBe('attachment; filename="job-123.pdf"');
+    expect(res.body.toString("utf8")).toBe("mock-pdf-content");
+  });
+
+  it("returns 401 when the signed URL has expired", async () => {
+    const key = reportStorage.makeKey("test-tenant", "job-exp");
+    async function* stream() { yield Buffer.from("data", "utf-8"); }
+    await reportStorage.uploadStream(key, stream());
+
+    // Generate valid URL and modify expires query param (which breaks signature,
+    // but the implementation checks expires first anyway, or checking both).
+    // Better way: create another instance with short TTL.
+    const strictStorage = new ReportStorageService({ ttlMs: -1000 });
+    const { url } = strictStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+    expect(res.status).toBe(401);
+    expect(res.body.error).toBe("Unauthorized");
+  });
+
+  it("returns 401 when the signature is tampered", async () => {
+    const key = reportStorage.makeKey("test-tenant", "job-tamper");
+    async function* stream() { yield Buffer.from("data", "utf-8"); }
+    await reportStorage.uploadStream(key, stream());
+
+    const { url } = reportStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+    parsed.searchParams.set("signature", "deadbeef");
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 401 for a tampered key request", async () => {
+    const keyA = reportStorage.makeKey("tenant", "a");
+    const keyB = reportStorage.makeKey("tenant", "b");
+
+    async function* stream() { yield Buffer.from("data", "utf-8"); }
+    await reportStorage.uploadStream(keyA, stream());
+    await reportStorage.uploadStream(keyB, stream());
+
+    // Signed URL for A
+    const { url } = reportStorage.generateSignedUrl(keyA);
+    const parsed = new URL(url);
+
+    // Request using key B but with signature for A
+    const tamperedPath = `/api/reports/download/${encodeURIComponent(keyB)}`;
+    const res = await request(downloadApp).get(tamperedPath + parsed.search);
+    
+    expect(res.status).toBe(401);
+  });
+
+  it("returns 400 when missing signature", async () => {
+    const key = reportStorage.makeKey("t1", "job");
+    const { url } = reportStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+    parsed.searchParams.delete("signature");
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+    expect(res.status).toBe(400);
+  });
+
+  it("returns 400 when missing expires", async () => {
+    const key = reportStorage.makeKey("t1", "job");
+    const { url } = reportStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+    parsed.searchParams.delete("expires");
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+    expect(res.status).toBe(400);
+  });
+
+
+  it("handles URL decoding of the :key param correctly (spaces and special chars)", async () => {
+    // The route param /:key is a single Express segment, so the key must not contain
+    // literal slashes. We test that percent-encoded spaces and other safe chars round-trip.
+    const key = "reports_t1_job+report (2026).pdf";
+    async function* stream() { yield Buffer.from("decoded-content", "utf-8"); }
+    await reportStorage.uploadStream(key, stream());
+
+    // generateSignedUrl percent-encodes the key into the URL path
+    const { url } = reportStorage.generateSignedUrl(key);
+    const parsed = new URL(url);
+
+    const res = await request(downloadApp).get(parsed.pathname + parsed.search);
+    expect(res.status).toBe(200);
+    expect(res.body.toString("utf8")).toBe("decoded-content");
+  });
+});

@@ -39,7 +39,7 @@ describe('bulkVerificationScheduler', () => {
       jobs.push({ id: `b${i}`, orgId: 'B', size: 1, createdAt: now + i + 1 })
     }
     // A single medium job from A
-    jobs.push({ id: 'a1', orgId: 'A', size: 50, createdAt: now + 101 })
+    jobs.push({ id: 'a1', orgId: 'A', size: 25, createdAt: now + 50 })
 
     const orgUsages = [
       { orgId: 'A', usage: 0 },

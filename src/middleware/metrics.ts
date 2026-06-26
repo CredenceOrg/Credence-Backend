@@ -11,8 +11,9 @@
 
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
-import { registerLatencyMetrics } from '../observability/latencyMetrics.js'
+import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
 import { registerPoolMetrics } from '../observability/index.js'
+import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import { pool, workerPool } from '../db/pool.js'
 
 // Create a Registry to register metrics
@@ -23,6 +24,10 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register circuit breaker metrics
+import { registerCircuitBreakerMetrics } from '../clients/circuitBreaker.js'
+registerCircuitBreakerMetrics(register)
 
 // Add default Node.js metrics (CPU, memory, event loop, etc.)
 client.collectDefaultMetrics({ 
@@ -153,6 +158,13 @@ export const idempotencyDuplicatesDetected = new client.Counter({
 export const settlementDuplicatesDetected = new client.Counter({
   name: 'settlement_duplicates_detected_total',
   help: 'Total number of settlement duplicates detected and collapsed via transaction_hash idempotency',
+  registers: [register]
+})
+
+export const settlementDriftTotal = new client.Counter({
+  name: 'settlement_drift_total',
+  help: 'Total number of settlement reconciliation drifts detected',
+  labelNames: ['finding_type'],
   registers: [register]
 })
 
@@ -338,6 +350,27 @@ export function recordStaleCacheRead(namespace: string) {
  */
 export function recordSettlementDuplicate() {
   settlementDuplicatesDetected.inc()
+}
+
+export function recordIdempotencyCheck(handlerType: string, result: 'duplicate' | 'executed' | 'error'): void {
+  idempotencyGuardChecks.inc({ handler_type: handlerType, result })
+  if (result === 'duplicate') {
+    idempotencyDuplicatesDetected.inc({ handler_type: handlerType })
+  }
+}
+
+/**
+ * Record settlement reconciliation drift
+ * 
+ * Usage:
+ * ```typescript
+ * import { recordSettlementDrift } from './middleware/metrics.js'
+ * 
+ * recordSettlementDrift('state_mismatch')
+ * ```
+ */
+export function recordSettlementDrift(findingType: 'state_mismatch' | 'missing_on_chain') {
+  settlementDriftTotal.inc({ finding_type: findingType })
 }
 
 /**

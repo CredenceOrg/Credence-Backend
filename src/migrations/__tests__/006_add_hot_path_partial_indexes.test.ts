@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { up, down } from './006_add_hot_path_partial_indexes.js'
+import { up, down } from '../006_add_hot_path_partial_indexes.js'
 import type { MigrationBuilder } from 'node-pg-migrate'
 
 function createMockPgm(): MigrationBuilder {

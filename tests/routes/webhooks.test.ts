@@ -5,7 +5,7 @@
  * ─ POST /:webhookId/rotate-secret — happy path, 404, 401, 403
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import express, { type Express } from 'express'
 
 import { MemoryWebhookStore } from '../../src/services/webhooks/memoryStore.js'
@@ -14,6 +14,26 @@ import { createWebhookRouter } from '../../src/routes/webhooks.js'
 import type { WebhookConfig } from '../../src/services/webhooks/types.js'
 import { userRepo } from '../../src/repositories/userRepository.js'
 import { generateApiKey, _resetStore } from '../../src/services/apiKeys.js'
+import type { InMemoryApiKeyRepository } from '../../src/services/apiKeys.js'
+
+// Mock the audit log service to capture entries
+const mockAuditLogs: any[] = []
+vi.mock('../../src/services/audit/index.js', async () => {
+  const actual = await vi.importActual('../../src/services/audit/index.js')
+  return {
+    ...actual,
+    AuditLogService: vi.fn().mockImplementation(function() {
+      return {
+        logAction: vi.fn().mockImplementation(async (entry) => {
+          mockAuditLogs.push(entry)
+        }),
+        getLogs: vi.fn().mockImplementation(async () => {
+          return { logs: mockAuditLogs, total: mockAuditLogs.length }
+        }),
+      }
+    }),
+  }
+})
 
 const makeTokenFor = (id: string, role: 'super-admin' | 'verifier') => {
   userRepo.upsert({ id, role, email: `${id}@example.test`, tenantId: `tenant-${id}` })
@@ -81,9 +101,13 @@ describe('Webhook Routes', () => {
   let app: Express
   let store: MemoryWebhookStore
   let audit: AuditLogService
+  
   const BASE = '/api/webhooks'
 
   beforeEach(async () => {
+    // Clear mock logs
+    mockAuditLogs.length = 0
+    
     _resetStore()
     userRepo._reset()
     store = new MemoryWebhookStore()
@@ -108,12 +132,12 @@ describe('Webhook Routes', () => {
 
   describe('POST /:webhookId/rotate-secret', () => {
     it('rotates the secret and returns rotation metadata', async () => {
-      const { status, body } = await request(
-        app,
-        'POST',
-        `${BASE}/${SEED_WEBHOOK.id}/rotate-secret`,
-        { headers: { Authorization: ADMIN_BEARER } },
-      )
+  const { status, body } = await request(
+    app,
+    'POST',
+    `${BASE}/${SEED_WEBHOOK.id}/rotate-secret`,
+    { headers: { Authorization: ADMIN_BEARER, 'x-tenant-id': 'test-tenant' } },
+  )
 
       expect(status).toBe(200)
       const data = (body as { success: boolean; data: Record<string, string> }).data
@@ -172,11 +196,13 @@ describe('Webhook Routes', () => {
         headers: { Authorization: ADMIN_BEARER },
       })
 
-      const { logs } = await audit.getLogs(undefined, {}, 100, 0, { allowSuperScope: true })
-      expect(logs).toHaveLength(1)
-      expect(logs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
-      expect(logs[0].status).toBe('success')
-      expect(logs[0].targetUserId).toBe(SEED_WEBHOOK.id)
+      // Wait a bit for async operations
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
+      expect(mockAuditLogs).toHaveLength(1)
+      expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(mockAuditLogs[0].status).toBe('success')
+      expect(mockAuditLogs[0].resourceId).toBe(SEED_WEBHOOK.id)
     })
 
     it('two consecutive rotations produce different secrets', async () => {
@@ -215,10 +241,13 @@ describe('Webhook Routes', () => {
         headers: { Authorization: ADMIN_BEARER },
       })
 
-      const { logs } = await audit.getLogs(undefined, {}, 100, 0, { allowSuperScope: true })
-      expect(logs).toHaveLength(1)
-      expect(logs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
-      expect(logs[0].status).toBe('failure')
+      // Wait a bit for async operations
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
+      expect(mockAuditLogs).toHaveLength(1)
+      expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(mockAuditLogs[0].status).toBe('failure')
+      expect(mockAuditLogs[0].resourceId).toBe('nonexistent-webhook')
     })
 
     it('returns 401 when no Authorization header is provided', async () => {

@@ -31,7 +31,7 @@ export interface RateLimitConfig {
    * Optional Redis client getter — injected in tests to simulate failures.
    * Defaults to `RedisConnection.getInstance().getClient()`.
    */
-  getRedis?: () => { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<void>; ttl(k: string): Promise<number> }
+  getRedis?: () => { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<number | void>; ttl(k: string): Promise<number> }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,7 +107,7 @@ function setRateLimitHeaders(
  * Returns `{ count, ttl }` so the caller can set headers and decide to block.
  */
 async function checkWindow(
-  redis: { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<void>; ttl(k: string): Promise<number> },
+  redis: { incr(k: string): Promise<number>; expire(k: string, s: number): Promise<number | void>; ttl(k: string): Promise<number> },
   key: string,
   windowSec: number,
 ): Promise<{ count: number; ttl: number }> {
@@ -209,4 +209,19 @@ export function createRateLimitMiddleware(
       next(new AppError('Rate limiter unavailable', ErrorCode.SERVICE_UNAVAILABLE, 503))
     }
   }
+}
+
+/** Backward-compatible helper that accepts only per-route rate-limit options. */
+export function rateLimit(options: RateLimitConfig) {
+  return createRateLimitMiddleware(
+    {
+      enabled: true,
+      windowSec: options.windowSec,
+      maxFree: options.max ?? 100,
+      maxPro: options.max ?? 100,
+      maxEnterprise: options.max ?? 100,
+      failOpen: true,
+    },
+    options,
+  )
 }

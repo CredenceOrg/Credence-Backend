@@ -1,0 +1,246 @@
+// proto/credence/v1/governance.proto
+//
+// GovernanceService — internal gRPC contract for disputes and slash-request
+// voting.
+//
+// PII policy:
+//   - `filed_by`, `respondent`, `requested_by`, `target_address` are
+//     blockchain addresses — classified PUBLIC.
+//   - `reason` and `resolution` are free-form text that may contain PII;
+//     treat as SENSITIVE.
+//   - `evidence` items may contain PII — treat as SENSITIVE.
+
+syntax = "proto3";
+
+package credence.v1;
+
+import "credence/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+// DisputeStatus mirrors the lifecycle states of a dispute.
+enum DisputeStatus {
+  DISPUTE_STATUS_UNSPECIFIED  = 0;
+  DISPUTE_STATUS_OPEN         = 1;
+  DISPUTE_STATUS_UNDER_REVIEW = 2;
+  DISPUTE_STATUS_RESOLVED     = 3;
+  DISPUTE_STATUS_DISMISSED    = 4;
+}
+
+// SlashRequestStatus mirrors the lifecycle states of a slash request.
+enum SlashRequestStatus {
+  SLASH_REQUEST_STATUS_UNSPECIFIED = 0;
+  SLASH_REQUEST_STATUS_PENDING     = 1;
+  SLASH_REQUEST_STATUS_APPROVED    = 2;
+  SLASH_REQUEST_STATUS_REJECTED    = 3;
+}
+
+// VoteChoice enumerates the valid vote options.
+enum VoteChoice {
+  VOTE_CHOICE_UNSPECIFIED = 0;
+  VOTE_CHOICE_APPROVE     = 1;
+  VOTE_CHOICE_REJECT      = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Dispute messages
+// ---------------------------------------------------------------------------
+
+// Dispute represents a governance dispute record.
+message Dispute {
+  // Unique dispute identifier.
+  string id = 1;
+
+  // Address of the party that filed the dispute.
+  string filed_by = 2;
+
+  // Address of the party being disputed.
+  string respondent = 3;
+
+  // Free-form evidence items.  May contain PII — treat as SENSITIVE.
+  repeated string evidence = 4;
+
+  // Current lifecycle status.
+  DisputeStatus status = 5;
+
+  // Timestamp when the dispute was submitted.
+  google.protobuf.Timestamp created_at = 6;
+
+  // Timestamp of the most recent status change.
+  google.protobuf.Timestamp updated_at = 7;
+
+  // Resolution text set when the dispute is resolved or dismissed.
+  // May contain PII — treat as SENSITIVE.
+  string resolution = 8;
+}
+
+// SubmitDisputeRequest is the input to GovernanceService.SubmitDispute.
+message SubmitDisputeRequest {
+  // Address of the party filing the dispute.
+  string filed_by = 1;
+
+  // Address of the respondent.
+  string respondent = 2;
+
+  // Supporting evidence items.
+  repeated string evidence = 3;
+}
+
+// SubmitDisputeResponse wraps the newly created dispute.
+message SubmitDisputeResponse {
+  Dispute dispute = 1;
+}
+
+// GetDisputeRequest is the input to GovernanceService.GetDispute.
+message GetDisputeRequest {
+  string id = 1;
+}
+
+// GetDisputeResponse wraps the dispute record.
+message GetDisputeResponse {
+  Dispute dispute = 1;
+}
+
+// UpdateDisputeStatusRequest is used for review/resolve/dismiss transitions.
+message UpdateDisputeStatusRequest {
+  string id = 1;
+
+  // Target status.  Only valid transitions are accepted:
+  //   OPEN → UNDER_REVIEW, UNDER_REVIEW → RESOLVED | DISMISSED
+  DisputeStatus status = 2;
+
+  // Required when transitioning to RESOLVED or DISMISSED.
+  // May contain PII — treat as SENSITIVE.
+  string resolution = 3;
+}
+
+// UpdateDisputeStatusResponse wraps the updated dispute.
+message UpdateDisputeStatusResponse {
+  Dispute dispute = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Slash-request messages
+// ---------------------------------------------------------------------------
+
+// SlashRequest represents a governance request to slash a bond.
+message SlashRequest {
+  // Unique slash-request identifier.
+  string id = 1;
+
+  // Address of the entity that submitted the request.
+  string requested_by = 2;
+
+  // Address of the bond holder to be slashed.
+  string target_address = 3;
+
+  // Human-readable reason for the slash request.
+  // May contain PII — treat as SENSITIVE.
+  string reason = 4;
+
+  // Current lifecycle status.
+  SlashRequestStatus status = 5;
+
+  // Number of approve votes cast.
+  uint32 approve_count = 6;
+
+  // Number of reject votes cast.
+  uint32 reject_count = 7;
+
+  // Timestamp when the request was created.
+  google.protobuf.Timestamp created_at = 8;
+}
+
+// CreateSlashRequestRequest is the input to
+// GovernanceService.CreateSlashRequest.
+message CreateSlashRequestRequest {
+  string requested_by  = 1;
+  string target_address = 2;
+  string reason        = 3;
+}
+
+// CreateSlashRequestResponse wraps the newly created slash request.
+message CreateSlashRequestResponse {
+  SlashRequest slash_request = 1;
+}
+
+// SubmitVoteRequest is the input to GovernanceService.SubmitVote.
+message SubmitVoteRequest {
+  // ID of the slash request being voted on.
+  string slash_request_id = 1;
+
+  // ID of the voter.
+  string voter_id = 2;
+
+  // The vote choice.
+  VoteChoice choice = 3;
+}
+
+// SubmitVoteResponse wraps the updated slash request after the vote.
+message SubmitVoteResponse {
+  SlashRequest slash_request = 1;
+}
+
+// GetSlashRequestRequest is the input to GovernanceService.GetSlashRequest.
+message GetSlashRequestRequest {
+  string id = 1;
+}
+
+// GetSlashRequestResponse wraps the slash request record.
+message GetSlashRequestResponse {
+  SlashRequest slash_request = 1;
+}
+
+// ListSlashRequestsRequest is the input to
+// GovernanceService.ListSlashRequests.
+message ListSlashRequestsRequest {
+  // Optional status filter.  Omit to return all statuses.
+  SlashRequestStatus status_filter = 1;
+
+  // Pagination parameters.
+  PageRequest page = 2;
+}
+
+// ListSlashRequestsResponse wraps the paginated result set.
+message ListSlashRequestsResponse {
+  repeated SlashRequest slash_requests = 1;
+  PageResponse page = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// GovernanceService exposes dispute and slash-request operations for internal
+// service-to-service communication.  Callers must present a valid
+// shared-secret in the `x-credence-internal-token` metadata header.
+service GovernanceService {
+  // SubmitDispute creates a new dispute record.
+  rpc SubmitDispute(SubmitDisputeRequest) returns (SubmitDisputeResponse);
+
+  // GetDispute retrieves a dispute by ID.
+  // Returns NOT_FOUND when the ID does not exist.
+  rpc GetDispute(GetDisputeRequest) returns (GetDisputeResponse);
+
+  // UpdateDisputeStatus transitions a dispute through its lifecycle.
+  // Returns FAILED_PRECONDITION for invalid transitions.
+  rpc UpdateDisputeStatus(UpdateDisputeStatusRequest) returns (UpdateDisputeStatusResponse);
+
+  // CreateSlashRequest submits a new slash request for governance voting.
+  rpc CreateSlashRequest(CreateSlashRequestRequest) returns (CreateSlashRequestResponse);
+
+  // SubmitVote casts a vote on an open slash request.
+  // Returns NOT_FOUND when the slash request ID does not exist.
+  rpc SubmitVote(SubmitVoteRequest) returns (SubmitVoteResponse);
+
+  // GetSlashRequest retrieves a slash request by ID.
+  rpc GetSlashRequest(GetSlashRequestRequest) returns (GetSlashRequestResponse);
+
+  // ListSlashRequests returns a paginated list of slash requests.
+  rpc ListSlashRequests(ListSlashRequestsRequest) returns (ListSlashRequestsResponse);
+}

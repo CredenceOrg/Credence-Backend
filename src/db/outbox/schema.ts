@@ -20,7 +20,10 @@ export const OUTBOX_TABLE_SCHEMA = `
     next_attempt_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     processed_at TIMESTAMPTZ,
-    error_message TEXT
+    error_message TEXT,
+    trace_id TEXT,
+    span_id TEXT,
+    tracestate TEXT
   )
 ` as const
 
@@ -54,6 +57,18 @@ export async function createOutboxSchema(db: Queryable): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                      WHERE table_name = 'event_outbox' AND column_name = 'next_attempt_at') THEN
         ALTER TABLE event_outbox ADD COLUMN next_attempt_at TIMESTAMPTZ;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'trace_id') THEN
+        ALTER TABLE event_outbox ADD COLUMN trace_id TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'span_id') THEN
+        ALTER TABLE event_outbox ADD COLUMN span_id TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'tracestate') THEN
+        ALTER TABLE event_outbox ADD COLUMN tracestate TEXT;
       END IF;
 
       -- Ensure the status CHECK constraint allows the new 'dead_letter' value.

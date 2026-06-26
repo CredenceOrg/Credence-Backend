@@ -18,10 +18,13 @@
  *  - Invalid UTF-8 encoding → 400 InvalidEncoding
  */
 
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import request from 'supertest'
 import express from 'express'
-import importsRouter from './imports.js'
+import importsRouter, { createImportsRouter } from './imports.js'
+import { InMemoryMappingPresetRepository } from '../services/imports/mapping.js'
+import { InMemoryImportCommitter } from '../services/imports/commit.js'
+import { runWithTenant } from '../utils/tenantContext.js'
 import {
   IMPORT_PREVIEW_MAX_FILE_BYTES,
   IMPORT_PREVIEW_MAX_ROWS,
@@ -651,5 +654,668 @@ describe('previewImportFile — unit', () => {
       expect(result.summary.totalRowsScanned).toBe(0)
       expect(result.summary.validRows).toBe(0)
     }
+  })
+})
+
+// ===========================================================================
+// Mapping Presets — route-level tests
+// ===========================================================================
+
+function createPresetApp() {
+  const repo = new InMemoryMappingPresetRepository()
+  const committer = new InMemoryImportCommitter()
+  const app = express()
+  app.use(express.json())
+  app.use((_req, _res, next) => runWithTenant('default-tenant', () => next()))
+  app.use('/api/imports', createImportsRouter(repo, committer))
+  app.use((err: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+    res.status(500).json({ error: 'InternalServerError', message: String(err) })
+  })
+  return { app, repo, committer }
+}
+
+describe('POST /api/imports/presets', () => {
+  it('creates a preset and returns 201', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Standard', columnMappings: { 'Wallet': 'address' } })
+
+    expect(res.status).toBe(201)
+    expect(res.body.preset).toBeDefined()
+    expect(res.body.preset.name).toBe('Standard')
+    expect(res.body.preset.version).toBe(1)
+    expect(res.body.preset.columnMappings).toEqual({ 'Wallet': 'address' })
+  })
+
+  it('returns 400 when name is missing', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ columnMappings: { 'W': 'address' } })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('ValidationError')
+  })
+
+  it('returns 400 when columnMappings is missing', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Test' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('ValidationError')
+  })
+
+  it('returns 400 when columnMappings is not an object', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Test', columnMappings: 'not-an-object' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('ValidationError')
+  })
+
+  it('creates version 2 when same name exists', async () => {
+    const { app } = createPresetApp()
+    await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Standard', columnMappings: { 'W': 'address' } })
+
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Standard', columnMappings: { 'W': 'address', 'E': 'email' } })
+
+    expect(res.status).toBe(201)
+    expect(res.body.preset.version).toBe(2)
+  })
+
+  it('enforces auth', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .send({ name: 'Test', columnMappings: { 'W': 'address' } })
+
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /api/imports/presets', () => {
+  it('lists presets for the org', async () => {
+    const { app, repo } = createPresetApp()
+    await repo.create({ orgId: 'default-tenant', name: 'A', columnMappings: { 'X': 'address' } })
+    await repo.create({ orgId: 'default-tenant', name: 'B', columnMappings: { 'Y': 'email' } })
+
+    const res = await request(app)
+      .get('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(200)
+    expect(res.body.presets).toHaveLength(2)
+  })
+
+  it('returns empty list when no presets exist', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .get('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(200)
+    expect(res.body.presets).toEqual([])
+  })
+
+  it('enforces auth', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app).get('/api/imports/presets')
+    expect(res.status).toBe(401)
+  })
+})
+
+describe('GET /api/imports/presets/:id', () => {
+  it('returns a preset by id', async () => {
+    const { app, repo } = createPresetApp()
+    const created = await repo.create({ orgId: 'default-tenant', name: 'Test', columnMappings: { 'W': 'address' } })
+
+    const res = await request(app)
+      .get(`/api/imports/presets/${created.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(200)
+    expect(res.body.preset.id).toBe(created.id)
+    expect(res.body.preset.name).toBe('Test')
+  })
+
+  it('returns 404 for nonexistent id', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .get('/api/imports/presets/nonexistent-id')
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
+  })
+})
+
+describe('PUT /api/imports/presets/:id', () => {
+  it('updates a preset and bumps the version', async () => {
+    const { app, repo } = createPresetApp()
+    const created = await repo.create({ orgId: 'default-tenant', name: 'Original', columnMappings: { 'W': 'address' } })
+
+    const res = await request(app)
+      .put(`/api/imports/presets/${created.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Updated' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.preset.name).toBe('Updated')
+    expect(res.body.preset.version).toBe(2)
+  })
+
+  it('returns 404 for nonexistent id', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .put('/api/imports/presets/nonexistent-id')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Nope' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
+  })
+
+  it('returns 400 for invalid name', async () => {
+    const { app, repo } = createPresetApp()
+    const created = await repo.create({ orgId: 'default-tenant', name: 'Test', columnMappings: { 'W': 'address' } })
+
+    const res = await request(app)
+      .put(`/api/imports/presets/${created.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: '' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('ValidationError')
+  })
+})
+
+describe('DELETE /api/imports/presets/:id', () => {
+  it('deletes a preset and returns 204', async () => {
+    const { app, repo } = createPresetApp()
+    const created = await repo.create({ orgId: 'default-tenant', name: 'ToDelete', columnMappings: { 'W': 'address' } })
+
+    const res = await request(app)
+      .delete(`/api/imports/presets/${created.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(204)
+  })
+
+  it('returns 404 for nonexistent id', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .delete('/api/imports/presets/nonexistent-id')
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
+  })
+})
+
+describe('POST /api/imports/preview/:presetId', () => {
+  it('returns 404 when preset does not exist', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/preview/nonexistent')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .attach('file', Buffer.from('address\nGAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN\n', 'utf8'), {
+        filename: 'import.csv',
+        contentType: 'text/csv',
+      })
+
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
+  })
+
+  it('returns 200 with preset info when preset exists', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Standard',
+      columnMappings: { 'Wallet': 'address' },
+    })
+
+    const validAddress = 'GAAZI4TCR3TY5OJHCTJC2A4QSY6CJWJH5IAJTGKIN2ER7LBNVKOCCWN'
+    const res = await request(app)
+      .post(`/api/imports/preview/${preset.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .attach('file', Buffer.from(`address\n${validAddress}\n`, 'utf8'), {
+        filename: 'import.csv',
+        contentType: 'text/csv',
+      })
+
+    expect(res.status).toBe(200)
+    expect(res.body.preset).toBeDefined()
+    expect(res.body.preset.id).toBe(preset.id)
+    expect(res.body.summary).toBeDefined()
+  })
+
+  it('returns 400 when no file is attached', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Standard',
+      columnMappings: {},
+    })
+
+    const res = await request(app)
+      .post(`/api/imports/preview/${preset.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('MissingFile')
+  })
+
+  it('enforces auth', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/preview/some-id')
+      .attach('file', Buffer.from('a\nb', 'utf8'), {
+        filename: 'import.csv',
+        contentType: 'text/csv',
+      })
+
+    expect(res.status).toBe(401)
+  })
+})
+
+// ===========================================================================
+// Dry-run endpoint tests
+// ===========================================================================
+
+function postDryRun(
+  app: ReturnType<typeof createApp> | express.Express,
+  opts: {
+    apiKey?: string
+    fileBuffer?: Buffer
+    filename?: string
+    mimeType?: string
+    presetId?: string
+  } = {},
+) {
+  const {
+    apiKey = ENTERPRISE_KEY,
+    fileBuffer = csvBuffer([VALID_ADDRESS]),
+    filename = 'import.csv',
+    mimeType = 'text/csv',
+    presetId,
+  } = opts
+
+  const path = presetId ? `/api/imports/dry-run/${presetId}` : '/api/imports/dry-run'
+  return request(app)
+    .post(path)
+    .set('X-API-Key', apiKey)
+    .attach('file', fileBuffer, { filename, contentType: mimeType })
+}
+
+describe('POST /api/imports/dry-run', () => {
+  it('returns valid=true for a clean file', async () => {
+    const app = createApp()
+    const res = await postDryRun(app)
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(true)
+    expect(res.body.totalRows).toBe(1)
+    expect(res.body.errors).toEqual([])
+    expect(res.body.errorsTruncated).toBe(false)
+  })
+
+  it('returns per-row errors for invalid rows', async () => {
+    const app = createApp()
+    const res = await postDryRun(app, {
+      fileBuffer: csvBuffer(['not-a-stellar-address']),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(false)
+    expect(res.body.errors).toHaveLength(1)
+    expect(res.body.errors[0]).toMatchObject({
+      row: 2,
+      column: 'address',
+      code: 'INVALID_ADDRESS',
+    })
+  })
+
+  it('returns zero rows for header-only CSV', async () => {
+    const app = createApp()
+    const res = await postDryRun(app, {
+      fileBuffer: Buffer.from('address\n', 'utf8'),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(true)
+    expect(res.body.totalRows).toBe(0)
+  })
+
+  it('returns 400 SchemaError when address column is missing', async () => {
+    const app = createApp()
+    const res = await postDryRun(app, {
+      fileBuffer: Buffer.from('name,email\nAlice,a@b.com\n', 'utf8'),
+    })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('SchemaError')
+  })
+
+  it('returns 413 for oversized files', async () => {
+    const app = createApp()
+    const oversized = Buffer.alloc(IMPORT_PREVIEW_MAX_FILE_BYTES + 1, 'a')
+    const res = await postDryRun(app, { fileBuffer: oversized })
+
+    expect(res.status).toBe(413)
+    expect(res.body.code).toBe('FileTooLarge')
+  })
+
+  it('returns 415 for non-CSV files', async () => {
+    const app = createApp()
+    const res = await postDryRun(app, {
+      mimeType: 'application/json',
+      filename: 'data.json',
+    })
+
+    expect(res.status).toBe(415)
+    expect(res.body.code).toBe('InvalidFileType')
+  })
+
+  it('enforces auth', async () => {
+    const app = createApp()
+    const res = await request(app)
+      .post('/api/imports/dry-run')
+      .attach('file', csvBuffer([VALID_ADDRESS]), {
+        filename: 'import.csv',
+        contentType: 'text/csv',
+      })
+
+    expect(res.status).toBe(401)
+  })
+
+  it('does not persist data (no side effects on preset repo)', async () => {
+    const { app, repo } = createPresetApp()
+    const before = await repo.findByOrg('default-tenant')
+
+    const res = await postDryRun(app, {
+      fileBuffer: csvBuffer([VALID_ADDRESS, 'bad-address']),
+    })
+
+    expect(res.status).toBe(200)
+    const after = await repo.findByOrg('default-tenant')
+    expect(after).toEqual(before)
+  })
+})
+
+describe('POST /api/imports/dry-run/:presetId', () => {
+  it('returns 404 when preset does not exist', async () => {
+    const { app } = createPresetApp()
+    const res = await postDryRun(app, { presetId: 'nonexistent' })
+
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
+  })
+
+  it('validates using preset column mapping', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Exchange',
+      columnMappings: { Wallet: 'address' },
+    })
+
+    const res = await postDryRun(app, {
+      presetId: preset.id,
+      fileBuffer: Buffer.from(`Wallet\n${VALID_ADDRESS}\n`, 'utf8'),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(true)
+    expect(res.body.preset.id).toBe(preset.id)
+  })
+
+  it('returns SchemaError when preset-mapped header is absent', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Exchange',
+      columnMappings: { Wallet: 'address' },
+    })
+
+    const res = await postDryRun(app, {
+      presetId: preset.id,
+      fileBuffer: Buffer.from('address\nGAA\n', 'utf8'),
+    })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('SchemaError')
+  })
+
+  it('detects duplicate keys across rows', async () => {
+    const { app } = createPresetApp()
+    const res = await postDryRun(app, {
+      fileBuffer: csvBuffer([VALID_ADDRESS, VALID_ADDRESS]),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(false)
+    expect(res.body.errors[0].code).toBe('DUPLICATE_KEY')
+  })
+
+  it('returns 400 MissingFile when no file is attached', async () => {
+    const { app } = createPresetApp()
+    const res = await request(app)
+      .post('/api/imports/dry-run')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .field('dummy', 'value')
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('MissingFile')
+  })
+
+  it('returns 400 InvalidEncoding for non-UTF-8 content', async () => {
+    const { app } = createPresetApp()
+    const invalidUtf8 = Buffer.from([
+      0x61, 0x64, 0x64, 0x72, 0x65, 0x73, 0x73, 0x0a,
+      0x80, 0x81, 0x82, 0x0a,
+    ])
+    const res = await postDryRun(app, { fileBuffer: invalidUtf8 })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('InvalidEncoding')
+  })
+
+  it('returns 400 CellTooLarge for oversized cells', async () => {
+    const { app } = createPresetApp()
+    const huge = 'x'.repeat(IMPORT_PREVIEW_MAX_CELL_BYTES + 1)
+    const res = await postDryRun(app, {
+      fileBuffer: Buffer.from(`address\n${huge}\n`, 'utf8'),
+    })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('CellTooLarge')
+  })
+
+  it('returns 400 MissingFile on preset dry-run without file', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Standard',
+      columnMappings: { Wallet: 'address' },
+    })
+
+    const res = await request(app)
+      .post(`/api/imports/dry-run/${preset.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('MissingFile')
+  })
+
+  it('returns service error payload with row when dry-run fails at file level', async () => {
+    const { app } = createPresetApp()
+    const res = await postDryRun(app, {
+      fileBuffer: Buffer.from('name,email\nAlice,a@b.com\n', 'utf8'),
+    })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('SchemaError')
+    expect(res.body.row).toBe(1)
+  })
+})
+
+describe('POST /api/imports/presets — tenant context', () => {
+  it('returns 400 MissingTenant when tenant context is absent', async () => {
+    const repo = new InMemoryMappingPresetRepository()
+    const app = express()
+    app.use(express.json())
+    app.use('/api/imports', createImportsRouter(repo))
+
+    const res = await request(app)
+      .post('/api/imports/presets')
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ name: 'Standard', columnMappings: { Wallet: 'address' } })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('MissingTenant')
+  })
+})
+
+describe('PUT /api/imports/presets/:id — columnMappings validation', () => {
+  it('returns 400 when columnMappings is not an object', async () => {
+    const { app, repo } = createPresetApp()
+    const created = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Test',
+      columnMappings: { Wallet: 'address' },
+    })
+
+    const res = await request(app)
+      .put(`/api/imports/presets/${created.id}`)
+      .set('X-API-Key', ENTERPRISE_KEY)
+      .send({ columnMappings: 'not-an-object' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('ValidationError')
+  })
+})
+
+// ===========================================================================
+// Commit endpoint tests
+// ===========================================================================
+
+function postCommit(
+  app: express.Express,
+  opts: {
+    apiKey?: string
+    fileBuffer?: Buffer
+    filename?: string
+    mimeType?: string
+    presetId?: string
+    dryRun?: boolean
+  } = {},
+) {
+  const {
+    apiKey = ENTERPRISE_KEY,
+    fileBuffer = csvBuffer([VALID_ADDRESS]),
+    filename = 'import.csv',
+    mimeType = 'text/csv',
+    presetId,
+    dryRun,
+  } = opts
+
+  const path = presetId ? `/api/imports/commit/${presetId}` : '/api/imports/commit'
+  let req = request(app)
+    .post(path)
+    .set('X-API-Key', apiKey)
+
+  if (dryRun === true) {
+    req = req.query({ dryRun: 'true' })
+  }
+
+  return req.attach('file', fileBuffer, { filename, contentType: mimeType })
+}
+
+describe('POST /api/imports/commit', () => {
+  it('returns dry-run response when ?dryRun=true', async () => {
+    const { app } = createPresetApp()
+    const res = await postCommit(app, {
+      dryRun: true,
+      fileBuffer: csvBuffer(['not-a-stellar-address']),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(false)
+    expect(res.body.errors).toHaveLength(1)
+    expect(res.body.committed).toBeUndefined()
+  })
+
+  it('does not persist when ?dryRun=true', async () => {
+    const { app, committer } = createPresetApp()
+    const res = await postCommit(app, { dryRun: true })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(true)
+    expect(committer.rows).toHaveLength(0)
+  })
+
+  it('persists valid rows on commit', async () => {
+    const { app, committer } = createPresetApp()
+    const res = await postCommit(app)
+
+    expect(res.status).toBe(201)
+    expect(res.body.committed).toBe(true)
+    expect(res.body.imported).toBe(1)
+    expect(committer.rows).toHaveLength(1)
+  })
+
+  it('returns 422 when commit file has validation errors', async () => {
+    const { app, committer } = createPresetApp()
+    const res = await postCommit(app, {
+      fileBuffer: csvBuffer(['not-a-stellar-address']),
+    })
+
+    expect(res.status).toBe(422)
+    expect(res.body.code).toBe('ImportValidationFailed')
+    expect(committer.rows).toHaveLength(0)
+  })
+})
+
+describe('POST /api/imports/commit/:presetId', () => {
+  it('returns dry-run response with preset when ?dryRun=true', async () => {
+    const { app, repo } = createPresetApp()
+    const preset = await repo.create({
+      orgId: 'default-tenant',
+      name: 'Exchange',
+      columnMappings: { Wallet: 'address' },
+    })
+
+    const res = await postCommit(app, {
+      presetId: preset.id,
+      dryRun: true,
+      fileBuffer: Buffer.from(`Wallet\n${VALID_ADDRESS}\n`, 'utf8'),
+    })
+
+    expect(res.status).toBe(200)
+    expect(res.body.valid).toBe(true)
+    expect(res.body.preset.id).toBe(preset.id)
+  })
+
+  it('returns 404 when preset does not exist', async () => {
+    const { app } = createPresetApp()
+    const res = await postCommit(app, { presetId: 'missing-id' })
+    expect(res.status).toBe(404)
+    expect(res.body.code).toBe('PresetNotFound')
   })
 })

@@ -9,15 +9,18 @@ function appWithHealth(probes: Parameters<typeof createHealthRouter>[0] = {}) {
   return app
 }
 
+const allUp: Parameters<typeof createHealthRouter>[0] = {
+  postgres: async () => ({ status: 'up', latencyMs: 2 }),
+  redis: async () => ({ status: 'up', latencyMs: 1 }),
+  horizonListener: async () => ({ status: 'up', latencyMs: 1 }),
+  outboxPublisher: async () => ({ status: 'up', latencyMs: 1 }),
+  horizon: async () => ({ status: 'up', latencyMs: 3 }),
+}
+
 describe('Health routes', () => {
   describe('GET /api/health (readiness)', () => {
     it('returns 200 and ok when all critical deps are up', async () => {
-      const app = appWithHealth({
-        postgres: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'up' }),
-        horizonListener: async () => ({ status: 'up' }),
-        outboxPublisher: async () => ({ status: 'up' }),
-      })
+      const app = appWithHealth(allUp)
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(200)
       expect(res.body.status).toBe('ok')
@@ -25,6 +28,15 @@ describe('Health routes', () => {
       expect(res.body.dependencies.redis.status).toBe('up')
       expect(res.body.dependencies.horizonListener.status).toBe('up')
       expect(res.body.dependencies.outboxPublisher.status).toBe('up')
+      expect(res.body.dependencies.horizon.status).toBe('up')
+    })
+
+    it('response includes latencyMs per dependency', async () => {
+      const app = appWithHealth(allUp)
+      const res = await request(app).get('/api/health')
+      expect(typeof res.body.dependencies.postgres.latencyMs).toBe('number')
+      expect(typeof res.body.dependencies.redis.latencyMs).toBe('number')
+      expect(typeof res.body.dependencies.horizon.latencyMs).toBe('number')
     })
 
     it('returns 200 degraded when no deps configured', async () => {
@@ -36,14 +48,13 @@ describe('Health routes', () => {
       expect(res.body.dependencies.redis.status).toBe('not_configured')
       expect(res.body.dependencies.horizonListener.status).toBe('not_configured')
       expect(res.body.dependencies.outboxPublisher.status).toBe('not_configured')
+      expect(res.body.dependencies.horizon.status).toBe('not_configured')
     })
 
     it('returns 503 when postgres is down', async () => {
       const app = appWithHealth({
+        ...allUp,
         postgres: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'up' }),
-        horizonListener: async () => ({ status: 'up' }),
-        outboxPublisher: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
@@ -52,10 +63,8 @@ describe('Health routes', () => {
 
     it('returns 503 when redis is down', async () => {
       const app = appWithHealth({
-        postgres: async () => ({ status: 'up' }),
+        ...allUp,
         redis: async () => ({ status: 'down' }),
-        horizonListener: async () => ({ status: 'up' }),
-        outboxPublisher: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
@@ -64,10 +73,8 @@ describe('Health routes', () => {
 
     it('returns 503 when horizon listener heartbeat is stale', async () => {
       const app = appWithHealth({
-        postgres: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'up' }),
+        ...allUp,
         horizonListener: async () => ({ status: 'down', reason: 'stale_heartbeat' }),
-        outboxPublisher: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health')
       expect(res.status).toBe(503)
@@ -76,9 +83,7 @@ describe('Health routes', () => {
 
     it('returns 503 when outbox publisher is not running', async () => {
       const app = appWithHealth({
-        postgres: async () => ({ status: 'up' }),
-        redis: async () => ({ status: 'up' }),
-        horizonListener: async () => ({ status: 'up' }),
+        ...allUp,
         outboxPublisher: async () => ({ status: 'down', reason: 'not_running' }),
       })
       const res = await request(app).get('/api/health')
@@ -86,34 +91,67 @@ describe('Health routes', () => {
       expect(res.body.status).toBe('unhealthy')
       expect(res.body.dependencies.outboxPublisher.reason).toBe('not_running')
     })
+
+    it('returns 503 when horizon circuit breaker is OPEN', async () => {
+      const app = appWithHealth({
+        ...allUp,
+        horizon: async () => ({ status: 'down', reason: 'circuit_open' }),
+      })
+      const res = await request(app).get('/api/health')
+      expect(res.status).toBe(503)
+      expect(res.body.status).toBe('unhealthy')
+      expect(res.body.dependencies.horizon.reason).toBe('circuit_open')
+    })
+
+    it('returns 200 ok when horizon is HALF_OPEN (not fully open)', async () => {
+      const app = appWithHealth({
+        ...allUp,
+        horizon: async () => ({ status: 'up', details: { circuitState: 'HALF_OPEN' } }),
+      })
+      const res = await request(app).get('/api/health')
+      expect(res.status).toBe(200)
+      expect(res.body.dependencies.horizon.details.circuitState).toBe('HALF_OPEN')
+    })
   })
 
   describe('GET /api/health/ready', () => {
     it('behaves like GET /api/health', async () => {
       const app = appWithHealth({
+        ...allUp,
         postgres: async () => ({ status: 'down' }),
-        redis: async () => ({ status: 'up' }),
-        horizonListener: async () => ({ status: 'up' }),
-        outboxPublisher: async () => ({ status: 'up' }),
       })
       const res = await request(app).get('/api/health/ready')
       expect(res.status).toBe(503)
       expect(res.body.status).toBe('unhealthy')
     })
+
+    it('includes horizon dependency in /ready response', async () => {
+      const app = appWithHealth(allUp)
+      const res = await request(app).get('/api/health/ready')
+      expect(res.status).toBe(200)
+      expect(res.body.dependencies).toHaveProperty('horizon')
+    })
   })
 
   describe('GET /api/health/live (liveness)', () => {
-    it('returns 200 always', async () => {
+    it('returns 200 always even when all deps are down', async () => {
       const app = appWithHealth({
         postgres: async () => ({ status: 'down' }),
         redis: async () => ({ status: 'down' }),
         horizonListener: async () => ({ status: 'down' }),
         outboxPublisher: async () => ({ status: 'down' }),
+        horizon: async () => ({ status: 'down' }),
       })
       const res = await request(app).get('/api/health/live')
       expect(res.status).toBe(200)
       expect(res.body.status).toBe('ok')
       expect(res.body.service).toBe('credence-backend')
+    })
+
+    it('does not include dependencies in /live response', async () => {
+      const app = appWithHealth(allUp)
+      const res = await request(app).get('/api/health/live')
+      expect(res.body).not.toHaveProperty('dependencies')
     })
   })
 })

@@ -1,8 +1,9 @@
-import { Request, Response, NextFunction } from 'express'
-import type { StoredApiKey } from '../services/apiKeys.js'
-import { validateApiKey } from '../services/apiKeys.js'
-import { userRepo } from '../repositories/userRepository.js'
-import { requireApiKey as requireApiKeyFromApiKeyMiddleware } from './apiKey.js'
+import { Request, Response, NextFunction } from "express";
+import type { StoredApiKey } from "../services/apiKeys.js";
+import { validateApiKey } from "../services/apiKeys.js";
+import { userRepo } from "../repositories/userRepository.js";
+import { requireApiKey as requireApiKeyFromApiKeyMiddleware } from "./apiKey.js";
+import { runWithTenant } from "../utils/tenantContext.js";
 
 /**
  * Granular API key scopes for per-endpoint authorization.
@@ -16,6 +17,7 @@ import { requireApiKey as requireApiKeyFromApiKeyMiddleware } from './apiKey.js'
  * reports:generate  – Trigger and poll report generation jobs
  * exports:read      – Download report artifacts and audit-log exports
  * webhooks:admin    – Manage webhook signing secrets (rotate / revoke)
+ * outbox:reinject   – Reinsert fixed quarantined outbox events
  * admin:read        – Read admin resources (users, audit logs, failed events)
  * admin:write       – Mutate admin resources (assign roles, revoke keys, replay events, impersonate)
  *
@@ -33,12 +35,15 @@ export enum ApiScope {
   REPORTS_GENERATE = 'reports:generate',
   EXPORTS_READ = 'exports:read',
   WEBHOOKS_ADMIN = 'webhooks:admin',
+  OUTBOX_REINJECT = 'outbox:reinject',
   ADMIN_READ = 'admin:read',
   ADMIN_WRITE = 'admin:write',
+  FLAGS_READ = 'flags:read',
+  FLAGS_WRITE = 'flags:write',
 
   // Legacy aliases (backward-compatible)
-  PUBLIC = 'public',
-  ENTERPRISE = 'enterprise',
+  PUBLIC = "public",
+  ENTERPRISE = "enterprise",
 }
 
 /**
@@ -47,10 +52,7 @@ export enum ApiScope {
  * A PUBLIC key holds the read-only subset.
  */
 export const SCOPE_SETS: Record<string, ReadonlySet<ApiScope>> = {
-  [ApiScope.PUBLIC]: new Set([
-    ApiScope.TRUST_READ,
-    ApiScope.ATTESTATIONS_READ,
-  ]),
+  [ApiScope.PUBLIC]: new Set([ApiScope.TRUST_READ, ApiScope.ATTESTATIONS_READ]),
   [ApiScope.ENTERPRISE]: new Set([
     ApiScope.TRUST_READ,
     ApiScope.ATTESTATIONS_READ,
@@ -59,10 +61,13 @@ export const SCOPE_SETS: Record<string, ReadonlySet<ApiScope>> = {
     ApiScope.REPORTS_GENERATE,
     ApiScope.EXPORTS_READ,
     ApiScope.WEBHOOKS_ADMIN,
+    ApiScope.OUTBOX_REINJECT,
     ApiScope.ADMIN_READ,
     ApiScope.ADMIN_WRITE,
+    ApiScope.FLAGS_READ,
+    ApiScope.FLAGS_WRITE,
   ]),
-}
+};
 
 /**
  * Return true when the granted scope set satisfies the required scope.
@@ -77,47 +82,48 @@ export function scopeSatisfies(
   grantedScopes: ReadonlySet<ApiScope> | ApiScope[],
   requiredScope: ApiScope,
 ): boolean {
-  const scopes: ReadonlySet<ApiScope> =
-    Array.isArray(grantedScopes) ? new Set(grantedScopes) : grantedScopes
+  const scopes: ReadonlySet<ApiScope> = Array.isArray(grantedScopes)
+    ? new Set(grantedScopes)
+    : grantedScopes;
 
   // Direct match
-  if (scopes.has(requiredScope)) return true
+  if (scopes.has(requiredScope)) return true;
 
   // ENTERPRISE is a superset of everything
-  if (scopes.has(ApiScope.ENTERPRISE)) return true
+  if (scopes.has(ApiScope.ENTERPRISE)) return true;
 
   // Expand legacy scope sets and re-check
   for (const legacyScope of [ApiScope.PUBLIC, ApiScope.ENTERPRISE]) {
     if (scopes.has(legacyScope)) {
-      const expanded = SCOPE_SETS[legacyScope]
-      if (expanded?.has(requiredScope)) return true
+      const expanded = SCOPE_SETS[legacyScope];
+      if (expanded?.has(requiredScope)) return true;
     }
   }
 
-  return false
+  return false;
 }
 
 /**
  * User roles for role-based access control
  */
 export enum UserRole {
-  SUPER_ADMIN = 'super-admin',
-  ADMIN = 'admin',
-  VERIFIER = 'verifier',
-  USER = 'user',
+  SUPER_ADMIN = "super-admin",
+  ADMIN = "admin",
+  VERIFIER = "verifier",
+  USER = "user",
 }
 
 /**
  * Extended Express Request with API key and user metadata
  */
 export interface AuthenticatedRequest extends Request {
-  apiKey?: StoredApiKey
+  apiKey?: StoredApiKey;
   user?: {
-    id: string
-    role: UserRole
-    email: string
-    tenantId: string
-  }
+    id: string;
+    role: UserRole;
+    email: string;
+    tenantId: string;
+  };
 }
 
 /**
@@ -129,8 +135,8 @@ export interface AuthenticatedRequest extends Request {
  */
 const API_KEYS: Record<string, ApiScope[]> = {
   // Legacy keys — kept for backward compatibility
-  'test-enterprise-key-12345': [ApiScope.ENTERPRISE],
-  'test-public-key-67890': [ApiScope.PUBLIC],
+  "test-enterprise-key-12345": [ApiScope.ENTERPRISE],
+  "test-public-key-67890": [ApiScope.PUBLIC],
 
   // Granular-scope test keys (used in auth.scopes.test.ts)
   'test-trust-read-key': [ApiScope.TRUST_READ],
@@ -138,38 +144,50 @@ const API_KEYS: Record<string, ApiScope[]> = {
   'test-payouts-write-key': [ApiScope.PAYOUTS_WRITE],
   'test-reports-key': [ApiScope.REPORTS_GENERATE, ApiScope.EXPORTS_READ],
   'test-webhooks-admin-key': [ApiScope.WEBHOOKS_ADMIN],
+  'test-outbox-reinject-key': [ApiScope.OUTBOX_REINJECT],
   'test-admin-read-key': [ApiScope.ADMIN_READ],
   'test-admin-write-key': [ApiScope.ADMIN_READ, ApiScope.ADMIN_WRITE],
+  'test-flags-read-key': [ApiScope.FLAGS_READ],
+  'test-flags-write-key': [ApiScope.FLAGS_READ, ApiScope.FLAGS_WRITE],
 }
 
 /**
  * Mock user store - in production, use database or identity provider
  * Format: { userId: { id, role, email, apiKey } }
  */
-export const MOCK_USERS: Record<string, { id: string; role: UserRole; email: string; apiKey: string; tenantId: string }> = {
-  'admin-user-1': {
-    id: 'admin-user-1',
+export const MOCK_USERS: Record<
+  string,
+  {
+    id: string;
+    role: UserRole;
+    email: string;
+    apiKey: string;
+    tenantId: string;
+  }
+> = {
+  "admin-user-1": {
+    id: "admin-user-1",
     role: UserRole.SUPER_ADMIN,
-    email: 'admin@credence.org',
-    apiKey: 'admin-key-12345',
-    tenantId: 'tenant-admin',
+    email: "admin@credence.org",
+    apiKey: "admin-key-12345",
+    tenantId: "tenant-admin",
   },
-  'verifier-user-1': {
-    id: 'verifier-user-1',
+  "verifier-user-1": {
+    id: "verifier-user-1",
     role: UserRole.VERIFIER,
-    email: 'verifier@credence.org',
-    apiKey: 'verifier-key-67890',
-    tenantId: 'tenant-verifier',
+    email: "verifier@credence.org",
+    apiKey: "verifier-key-67890",
+    tenantId: "tenant-verifier",
   },
-}
+};
 
 /**
  * Mock API key to user mapping - in production, use database
  */
 export const API_KEY_TO_USER: Record<string, string> = {
-  'admin-key-12345': 'admin-user-1',
-  'verifier-key-67890': 'verifier-user-1',
-}
+  "admin-key-12345": "admin-user-1",
+  "verifier-key-67890": "verifier-user-1",
+};
 
 /**
  * Middleware to validate API key and enforce a required scope.
@@ -197,54 +215,73 @@ export const API_KEY_TO_USER: Record<string, string> = {
 export function requireApiKey(requiredScope: ApiScope) {
   return (req: Request, res: Response, next: NextFunction): void => {
     // Accept key from X-API-Key header or Authorization: Bearer <key>
-    let apiKey = req.headers['x-api-key'] as string | undefined
+    let apiKey = req.headers["x-api-key"] as string | undefined;
     if (!apiKey) {
-      const authHeader = req.headers['authorization']
-      if (authHeader?.startsWith('Bearer ')) {
-        apiKey = authHeader.slice(7)
+      const authHeader = req.headers["authorization"];
+      if (authHeader?.startsWith("Bearer ")) {
+        apiKey = authHeader.slice(7);
       }
     }
 
     if (!apiKey) {
       res.status(401).json({
-        error: 'Unauthorized',
-        message: 'API key is required',
-      })
-      return
+        error: "Unauthorized",
+        message: "API key is required",
+      });
+      return;
     }
 
-    const grantedScopes = API_KEYS[apiKey]
+    let grantedScopes = API_KEYS[apiKey]
+    let dbKey: StoredApiKey | null = null
+
+    if (!grantedScopes) {
+      dbKey = validateApiKey(apiKey)
+      if (dbKey) {
+        grantedScopes = dbKey.scopes.map((s): ApiScope => {
+          if (s === 'full') return ApiScope.ENTERPRISE
+          if (s === 'read') return ApiScope.PUBLIC
+          return s as ApiScope
+        })
+      }
+    }
 
     if (!grantedScopes) {
       res.status(401).json({
-        error: 'Unauthorized',
-        message: 'Invalid API key',
-      })
-      return
+        error: "Unauthorized",
+        message: "Invalid API key",
+      });
+      return;
     }
 
     // Deny-by-default: key must satisfy the required scope
     if (!scopeSatisfies(grantedScopes, requiredScope)) {
-      res.status(403).json({
-        error: 'Forbidden',
-        message: `Insufficient scope: '${requiredScope}' is required`,
-        requiredScope,
-        grantedScopes,
-      })
+      if (requiredScope === ApiScope.ENTERPRISE) {
+        res.status(403).json({
+          error: 'Forbidden',
+          message: 'Enterprise API key required',
+        })
+      } else {
+        res.status(403).json({
+          error: 'Forbidden',
+          message: `Insufficient scope: '${requiredScope}' is required`,
+          requiredScope,
+          grantedScopes,
+        })
+      }
       return
     }
 
     // Attach metadata to request for downstream handlers.
-    // `scope` (singular) is kept for backward compatibility with existing
-    // route handlers that read `req.apiKey.scope`.
-    ;(req as any).apiKey = {
-      key: apiKey,
-      scopes: grantedScopes,
-      // Legacy single-scope field: use ENTERPRISE when the key holds it,
-      // otherwise fall back to the first granted scope.
-      scope: grantedScopes.includes(ApiScope.ENTERPRISE)
-        ? ApiScope.ENTERPRISE
-        : grantedScopes[0],
+    if (dbKey) {
+      ;(req as any).apiKey = dbKey
+    } else {
+      ;(req as any).apiKey = {
+        key: apiKey,
+        scopes: grantedScopes,
+        scope: grantedScopes.includes(ApiScope.ENTERPRISE)
+          ? ApiScope.ENTERPRISE
+          : grantedScopes[0],
+      }
     }
     next()
   }
@@ -253,89 +290,100 @@ export function requireApiKey(requiredScope: ApiScope) {
 /**
  * Middleware to check if user has admin role
  * Should be used after user authentication is established
- * 
+ *
  * @returns Express middleware function
- * 
+ *
  * @example
  * ```typescript
  * app.post('/api/admin/users', requireAdminRole, handler)
  * ```
  */
-export function requireAdminRole(req: Request, res: Response, next: NextFunction): void {
-  const authReq = req as AuthenticatedRequest
+export function requireAdminRole(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const authReq = req as AuthenticatedRequest;
 
   if (!authReq.user) {
     res.status(401).json({
-      error: 'Unauthorized',
-      message: 'User authentication required',
-    })
-    return
+      error: "Unauthorized",
+      message: "User authentication required",
+    });
+    return;
   }
 
-  if (authReq.user.role !== UserRole.ADMIN && authReq.user.role !== UserRole.SUPER_ADMIN) {
+  if (
+    authReq.user.role !== UserRole.ADMIN &&
+    authReq.user.role !== UserRole.SUPER_ADMIN
+  ) {
     res.status(403).json({
-      error: 'Forbidden',
-      message: 'Admin role required',
-    })
-    return
+      error: "Forbidden",
+      message: "Admin role required",
+    });
+    return;
   }
 
-  next()
+  next();
 }
 
 /**
  * Middleware to authenticate user from Authorization header (Bearer token format)
  * Should be used before requireAdminRole
- * 
+ *
  * @returns Express middleware function
- * 
+ *
  * @example
  * ```typescript
  * app.use('/api/admin', requireUserAuth, requireAdminRole, adminRouter)
  * ```
  */
-export function requireUserAuth(req: Request, res: Response, next: NextFunction): void {
-  const authReq = req as AuthenticatedRequest
-  const authHeader = req.headers.authorization
+export function requireUserAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+): void {
+  const authReq = req as AuthenticatedRequest;
+  const authHeader = req.headers.authorization;
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
     res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Bearer token required',
-    })
-    return
+      error: "Unauthorized",
+      message: "Bearer token required",
+    });
+    return;
   }
 
-  const raw = authHeader.substring(7) // Remove 'Bearer ' prefix
+  const raw = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-  const key = validateApiKey(raw)
+  const key = validateApiKey(raw);
   if (!key) {
     res.status(401).json({
-      error: 'Unauthorized',
-      message: 'Invalid or expired token',
-    })
-    return
+      error: "Unauthorized",
+      message: "Invalid or expired token",
+    });
+    return;
   }
 
   // Resolve the user record from the repository. Tests and runtime should
   // seed `userRepo` with the expected records. If not found, treat as
   // unauthorized rather than silently creating a user.
-  const user = userRepo.findById(key.ownerId)
+  const user = userRepo.findById(key.ownerId);
   if (!user) {
     res.status(401).json({
-      error: 'Unauthorized',
-      message: 'User not found',
-    })
-    return
+      error: "Unauthorized",
+      message: "User not found",
+    });
+    return;
   }
 
-  authReq.apiKey = key
+  authReq.apiKey = key;
   authReq.user = {
     id: user.id,
     role: user.role as UserRole,
     email: user.email,
     tenantId: user.tenantId,
-  }
-
-  next()
+  };
+  // Run the remainder of the request handling within the tenant async context
+  runWithTenant(authReq.user.tenantId, () => next());
 }

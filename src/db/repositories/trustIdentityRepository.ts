@@ -34,7 +34,7 @@ export class PgTrustIdentityRepository implements TrustIdentityRepository {
     )
 
     const row = result.rows[0]
-    if (!row) return null
+    if (!row || !row.address) return null
 
     return {
       address: row.address,

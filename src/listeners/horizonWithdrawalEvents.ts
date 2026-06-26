@@ -1,4 +1,8 @@
 import { Horizon } from '@stellar/stellar-sdk'
+import type { Pool } from 'pg'
+import { Gauge, register } from 'prom-client'
+import { pool as defaultPool } from '../db/pool.js'
+import { CursorRepository } from '../db/repositories/cursorRepository.js'
 import {
   recordHorizonListenerHeartbeat,
   setHorizonListenerConfigured,
@@ -48,6 +52,24 @@ export interface ScoreHistorySnapshot {
   transactionHash: string
 }
 
+const STREAM_NAME = 'bond_withdrawal'
+
+const cursorLagGauge = (register.getSingleMetric('horizon_listener_cursor_lag_seconds') as Gauge<string> | undefined)
+  ?? new Gauge({
+    name: 'horizon_listener_cursor_lag_seconds',
+    help: 'Time elapsed since last Horizon cursor checkpoint',
+    labelNames: ['stream_name'],
+    registers: [register],
+  })
+
+const lastCheckpointGauge = (register.getSingleMetric('horizon_listener_last_checkpoint_timestamp') as Gauge<string> | undefined)
+  ?? new Gauge({
+    name: 'horizon_listener_last_checkpoint_timestamp',
+    help: 'Unix timestamp of last Horizon cursor checkpoint',
+    labelNames: ['stream_name'],
+    registers: [register],
+  })
+
 /**
  * Configuration for the Horizon withdrawal listener
  */
@@ -76,12 +98,15 @@ export class HorizonWithdrawalListener {
   private pollTimer?: NodeJS.Timeout
   private lastCursor: string
   private replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }
+  private readonly pool: Pool
+  private readonly cursorRepo: CursorRepository
 
   constructor(
     config: HorizonListenerConfig,
     replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> } = {
       captureFailure: async () => ({}),
     },
+    pool: Pool = defaultPool,
   ) {
     this.config = config
     this.server = new Horizon.Server(config.horizonUrl)
@@ -480,8 +505,8 @@ export class HorizonWithdrawalListener {
  */
 export function createHorizonWithdrawalListener(
   config: Partial<HorizonListenerConfig> = {},
-  pool: Pool,
-  replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }
+  pool: Pool = defaultPool,
+  replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> } = { captureFailure: async () => ({}) }
 ): HorizonWithdrawalListener {
   const defaultConfig: HorizonListenerConfig = {
     horizonUrl: process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org',
@@ -492,3 +517,6 @@ export function createHorizonWithdrawalListener(
 
   return new HorizonWithdrawalListener({ ...defaultConfig, ...config }, replayService, pool)
 }
+
+export const horizonWithdrawalListener = createHorizonWithdrawalListener()
+

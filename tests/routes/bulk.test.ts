@@ -2,9 +2,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { VerificationService } from '../../src/services/verificationService.js';
 
 vi.mock('../../src/services/identityService.js', () => ({
-  IdentityService: vi.fn().mockImplementation(() => ({
-    verifyBulk: vi.fn().mockResolvedValue({ results: [{ status: 'verified' }], errors: [] })
-  }))
+  IdentityService: class {
+    verifyBulk = vi.fn().mockImplementation((addresses: string[]) => {
+      return Promise.resolve({
+        results: addresses.map(addr => ({ status: 'verified', address: addr })),
+        errors: []
+      });
+    });
+  }
 }));
 
 describe('VerificationService', () => {

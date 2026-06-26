@@ -1,6 +1,6 @@
 # API Key Authentication
 
-Credence API supports API key authentication for programmatic access.
+Credence API supports API key authentication for programmatic access with fine-grained scope-based access control.
 
 ## Key Format
 
@@ -89,8 +89,9 @@ Keys issued before the granular scope model was introduced carry one of two lega
 ### Issue a key
 
 ```http
-POST /api/keys
+POST /api/api-keys
 Content-Type: application/json
+Authorization: Bearer <key_with_bond:write_scope>
 
 {
   "ownerId": "user_abc",
@@ -118,7 +119,8 @@ Response (201 — the raw key is **only returned here**):
 ### List keys for an owner
 
 ```http
-GET /api/keys?ownerId=user_abc
+GET /api/api-keys/:ownerId
+Authorization: Bearer <valid_api_key>
 ```
 
 Response omits the raw key and the stored hash:
@@ -144,7 +146,8 @@ Response omits the raw key and the stored hash:
 Revokes the current key and issues a new one with the same scopes and tier:
 
 ```http
-POST /api/keys/:id/rotate
+POST /api/api-keys/:id/rotate
+Authorization: Bearer <valid_api_key>
 ```
 
 Response: same shape as key creation (201), including the new raw key.
@@ -152,7 +155,8 @@ Response: same shape as key creation (201), including the new raw key.
 ### Revoke a key
 
 ```http
-DELETE /api/keys/:id
+DELETE /api/api-keys/:id
+Authorization: Bearer <valid_api_key>
 ```
 
 Response: **204 No Content**. Subsequent requests using the revoked key receive **401 Unauthorized**.
@@ -162,6 +166,7 @@ Response: **204 No Content**. Subsequent requests using the revoked key receive 
 - Keys are stored as **SHA-256 hashes** — the raw key is never persisted and is shown exactly once.
 - Issue keys with the **minimum scopes required** for the integration. Do not use `enterprise` unless all operations are needed.
 - Rotate keys periodically; compromised keys can be revoked at any time.
+- All key operations (create, revoke, rotate) are logged to the audit log.
 - Rate limits are enforced per tier (integration at the infrastructure layer, e.g. via a reverse proxy or Redis-based limiter).
 - The middleware is **deny-by-default**: if a key does not carry the required scope, the request is rejected with `403 Forbidden` before reaching the handler.
 

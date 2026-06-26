@@ -24,12 +24,14 @@ function createMockDb(): Queryable {
       }
 
       if (sql.includes('INSERT INTO idempotency_keys')) {
-        const [key, requestHash, responseCode, responseBody, expiresAt] = params
+        const [key, actorId, requestHash, responseCode, responseBody, ttlSeconds, expiresAt] = params
         storage.set(key, {
           key,
+          actor_id: actorId,
           request_hash: requestHash,
           response_code: responseCode,
           response_body: responseBody,
+          ttl_seconds: ttlSeconds,
           expires_at: expiresAt,
           created_at: new Date(),
         })

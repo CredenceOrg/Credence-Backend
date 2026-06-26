@@ -183,7 +183,7 @@ export const bondOperationSchema = z.object({
   source_account: z.string().refine(
     (account): boolean => {
       try {
-        return StrKey.isValidEd25519PublicKey(account) || StrKey.isValidMuxedAccount(account);
+        return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
       } catch {
         return false;
       }
@@ -209,7 +209,7 @@ export const bondWithdrawalOperationSchema = z.object({
   source_account: z.string().refine(
     (account): boolean => {
       try {
-        return StrKey.isValidEd25519PublicKey(account) || StrKey.isValidMuxedAccount(account);
+        return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
       } catch {
         return false;
       }

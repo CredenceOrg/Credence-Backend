@@ -6,8 +6,9 @@ const SERVICE_NAME = 'credence-backend'
  * Runs all health probes and computes overall status.
  * Returns "unhealthy" when any critical dependency or background worker is down.
  * Returns "degraded" when one or more checks are not configured.
+ * Each dependency result includes latencyMs when the probe ran.
  *
- * @param probes - Object with optional probes for postgres, redis, horizon listener, and outbox publisher
+ * @param probes - Object with optional probes for postgres, redis, horizon listener, outbox publisher, and horizon client
  * @returns Aggregated health result (no internal details exposed)
  */
 export async function runHealthChecks(probes: {
@@ -15,6 +16,7 @@ export async function runHealthChecks(probes: {
   redis?: HealthProbe
   horizonListener?: HealthProbe
   outboxPublisher?: HealthProbe
+  horizon?: HealthProbe
 }): Promise<{
   status: 'ok' | 'degraded' | 'unhealthy'
   service: string
@@ -23,9 +25,10 @@ export async function runHealthChecks(probes: {
     redis: DependencyHealth
     horizonListener: DependencyHealth
     outboxPublisher: DependencyHealth
+    horizon: DependencyHealth
   }
 }> {
-  const [postgres, redis, horizonListener, outboxPublisher] = await Promise.all([
+  const [postgres, redis, horizonListener, outboxPublisher, horizon] = await Promise.all([
     probes.postgres ? probes.postgres() : Promise.resolve({ status: 'not_configured' as const }),
     probes.redis ? probes.redis() : Promise.resolve({ status: 'not_configured' as const }),
     probes.horizonListener
@@ -34,20 +37,15 @@ export async function runHealthChecks(probes: {
     probes.outboxPublisher
       ? probes.outboxPublisher()
       : Promise.resolve({ status: 'not_configured' as const }),
+    probes.horizon
+      ? probes.horizon()
+      : Promise.resolve({ status: 'not_configured' as const }),
   ])
 
-  const deps = { postgres, redis, horizonListener, outboxPublisher }
+  const deps = { postgres, redis, horizonListener, outboxPublisher, horizon }
 
-  const criticalDown =
-    (postgres.status === 'down') ||
-    (redis.status === 'down') ||
-    (horizonListener.status === 'down') ||
-    (outboxPublisher.status === 'down')
-  const anyNotConfigured =
-    (postgres.status === 'not_configured') ||
-    (redis.status === 'not_configured') ||
-    (horizonListener.status === 'not_configured') ||
-    (outboxPublisher.status === 'not_configured')
+  const criticalDown = Object.values(deps).some(d => d.status === 'down')
+  const anyNotConfigured = Object.values(deps).some(d => d.status === 'not_configured')
 
   let status: 'ok' | 'degraded' | 'unhealthy'
   if (criticalDown) {

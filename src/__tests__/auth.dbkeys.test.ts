@@ -1,8 +1,8 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import express from 'express'
-import { requireApiKey } from '../../middleware/apiKey.js'
-import { generateApiKey, _resetStore, revokeApiKey } from '../../services/apiKeys.js'
-import { userRepo } from '../../repositories/userRepository.js'
+import { requireApiKey } from '../middleware/apiKey.js'
+import { generateApiKey, _resetStore, revokeApiKey } from '../services/apiKeys.js'
+import { userRepo } from '../repositories/userRepository.js'
 
 async function req(app: express.Express, token?: string) {
   return new Promise<{ status: number; body: any }>((resolve, reject) => {

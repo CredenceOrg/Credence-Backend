@@ -124,7 +124,7 @@ export function analyzeMigration(filePath: string): PreflightResult {
     const lines = content.split('\n')
 
     // Check each pattern against the migration content
-    const allPatterns = [...BLOCKING_PATTERNS, ...LONG_RUNNING_PATTERNS, ...UNSAFE_PATTERNS]
+    const allPatterns: Array<{ pattern: RegExp; type: MigrationIssue['type']; message: string; suggestion: string }> = [...BLOCKING_PATTERNS, ...LONG_RUNNING_PATTERNS, ...UNSAFE_PATTERNS]
 
     lines.forEach((line, index) => {
       allPatterns.forEach(({ pattern, type, message, suggestion }) => {

@@ -215,7 +215,7 @@ export class AdminService {
       AuditAction.REVOKE_API_KEY,
       userId,
       user.email,
-      { revokedKey: oldKey, newKey, targetUserEmail: user.email },
+      { revokedKey: apiKey, targetUserEmail: user.email },
       'success'
     )
 

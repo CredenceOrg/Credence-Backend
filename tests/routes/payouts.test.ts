@@ -7,17 +7,30 @@ vi.mock('../../src/db/pool.js', () => ({
   pool: {
     query: vi.fn(),
   },
+  workerPool: {
+    query: vi.fn(),
+  }
 }))
 
 vi.mock('../../src/middleware/idempotency.js', () => ({
   idempotencyMiddleware: () => (req: any, res: any, next: any) => next(),
 }))
 
+vi.mock('../../src/middleware/auth.js', () => ({
+  requireApiKey: () => (req: any, res: any, next: any) => {
+    req.apiKey = { key: 'mock-key', scopes: ['payouts:write'] }
+    next()
+  },
+  ApiScope: {
+    PAYOUTS_WRITE: 'payouts:write'
+  }
+}))
+
 vi.mock('../../src/services/settlementService.js', () => {
   return {
-    SettlementService: vi.fn().mockImplementation(() => ({
-      upsertSettlementStatus: vi.fn().mockResolvedValue({ id: '1', status: 'settled' }),
-    })),
+    SettlementService: class {
+      upsertSettlementStatus = vi.fn().mockResolvedValue({ id: '1', status: 'settled' });
+    }
   }
 })
 
@@ -50,7 +63,7 @@ describe('Payouts route validation (#325)', () => {
     expect(res.status).toBe(400)
     expect(res.body.details).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: 'body.amount' })
+        expect.objectContaining({ path: 'amount' })
       ])
     )
   })
@@ -67,7 +80,7 @@ describe('Payouts route validation (#325)', () => {
     expect(res.status).toBe(400)
     expect(res.body.details).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: 'body.status' })
+        expect.objectContaining({ path: 'status' })
       ])
     )
   })
@@ -85,7 +98,7 @@ describe('Payouts route validation (#325)', () => {
     expect(res.status).toBe(400)
     expect(res.body.details).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ path: 'body.settledAt' })
+        expect.objectContaining({ path: 'settledAt' })
       ])
     )
   })

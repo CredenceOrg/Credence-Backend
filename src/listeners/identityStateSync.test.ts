@@ -1,4 +1,10 @@
 import { describe, it, expect, vi } from 'vitest'
+
+// Mock reputationService to avoid real Redis connections during cache invalidation in tests
+vi.mock('../services/reputationService.js', () => ({
+  invalidateTrustScoreCache: vi.fn().mockResolvedValue(undefined),
+}))
+
 import {
   IdentityStateSync,
   createIdentityStateSync,

@@ -1,22 +1,43 @@
 import { Router, type Request, type Response } from 'express'
 import { type AuthenticatedRequest, requireUserAuth } from '../middleware/auth.js'
+import { ErrorCode, getErrorCatalogEntry } from '../lib/errorCatalog.js'
 import {
   dismissDispute,
   getDispute,
   markUnderReview,
   resolveDispute,
   submitDispute,
+  listDisputes,
 } from '../services/governance/disputes.js'
+import {
+  parsePaginationParams,
+  buildCursorEnvelope,
+  encodeCursor,
+  MAX_LIMIT,
+  PaginationValidationError,
+} from '../lib/pagination.js'
+import { DISPUTE_STATES } from '../services/governance/disputeStateMachine.js'
+import type { DisputeStatus } from '../services/governance/types.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 
 const router = Router()
+
+function invalidTransitionResponse(message: string) {
+  const catalog = getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION)
+  return {
+    error: catalog.defaultMessage,
+    code: catalog.code,
+    error_code: catalog.code,
+    message,
+  }
+}
 
 router.post('/', requireUserAuth, async (req: Request, res: Response) => {
   const authReq = req as AuthenticatedRequest
   const actor = authReq.user!
 
   try {
-    const dispute = submitDispute(req.body)
+    const dispute = submitDispute(req.body, actor.tenantId)
 
     await auditLogService.logAction({
       tenantId: actor.tenantId,
@@ -48,6 +69,44 @@ router.post('/', requireUserAuth, async (req: Request, res: Response) => {
     })
     res.status(400).json({ error: 'BadRequest', message })
   }
+})
+
+router.get('/', requireUserAuth, (req: Request, res: Response) => {
+  const authReq = req as AuthenticatedRequest
+  const actor = authReq.user!
+
+  const status = req.query.status as string | undefined
+  if (status && !DISPUTE_STATES.includes(status as any)) {
+    res.status(400).json({ error: 'BadRequest', message: `Invalid status: ${status}` })
+    return
+  }
+
+  let pag
+  try {
+    pag = parsePaginationParams(req.query, { maxLimit: MAX_LIMIT })
+  } catch (error) {
+    if (error instanceof PaginationValidationError) {
+      res.status(400).json({ error: 'BadRequest', message: error.details[0]?.message || 'Invalid pagination parameters' })
+      return
+    }
+    res.status(400).json({ error: 'BadRequest', message: 'Invalid pagination parameters' })
+    return
+  }
+
+  const result = listDisputes(
+    { tenantId: actor.tenantId, status: status as DisputeStatus },
+    { limit: pag.limit, cursor: pag.decodedCursor }
+  )
+
+  const envelope = buildCursorEnvelope(result.data, {
+    limit: pag.limit,
+    hasMore: result.hasMore,
+    nextCursor: result.hasMore && result.data.length > 0
+      ? encodeCursor(result.data[result.data.length - 1].createdAt, result.data[result.data.length - 1].id)
+      : null,
+  })
+
+  res.status(200).json(envelope)
 })
 
 router.get('/:id', requireUserAuth, (req: Request, res: Response) => {
@@ -92,7 +151,9 @@ router.post('/:id/review', requireUserAuth, async (req: Request, res: Response) 
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -129,7 +190,9 @@ router.post('/:id/resolve', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
@@ -166,7 +229,9 @@ router.post('/:id/dismiss', requireUserAuth, async (req: Request, res: Response)
       status: 'failure',
       errorMessage: message,
     })
-    res.status(409).json({ error: 'Conflict', message })
+    res.status(getErrorCatalogEntry(ErrorCode.INVALID_DISPUTE_TRANSITION).httpStatus!).json(
+      invalidTransitionResponse(message),
+    )
   }
 })
 
