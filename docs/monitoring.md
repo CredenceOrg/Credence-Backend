@@ -804,6 +804,7 @@ open http://localhost:3001
 | `identity_verifications_total` | Counter | status | Total identity verifications |
 | `bulk_verifications_total` | Counter | status | Total bulk verification requests |
 | `bulk_verification_batch_size` | Histogram | - | Batch size distribution |
+| `rate_limit_hits_total` | Counter | tenant, tier | Total rate limit hits grouped by tenant and tier |
 | `identity_sync_duration_seconds` | Histogram | operation | Identity sync duration |
 
 ### Default Metrics (from prom-client)

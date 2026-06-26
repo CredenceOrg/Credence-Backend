@@ -146,6 +146,13 @@ The catch-block fallback in `src/app.ts` also derives `failOpen` from `NODE_ENV`
 | `key_id` | API key id, or `none` |
 | `reason` | `tenant_limit`, `key_limit`, `redis_unavailable` |
 
+`rate_limit_hits_total` (counter) is emitted for each request that exceeds either the tenant or per-key quota. Labels:
+
+| Label | Values |
+|-------|--------|
+| `tenant` | Resolved tenant identifier, or `unknown` for unauthenticated requests |
+| `tier` | `free`, `pro`, `enterprise` |
+
 ### Environment variables
 
 | Variable | Default | Description |
