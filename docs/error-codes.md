@@ -39,6 +39,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `value_too_large` | 400 | validation | The request contains a value above the allowed maximum |
 | `value_too_small` | 400 | validation | The request contains a value below the allowed minimum |
 | `batch_size_exceeded` | 413 | validation | The batch size exceeds the allowed maximum |
+| `request_too_large` | 413 | validation | The request body exceeds the maximum allowed size |
 
 ## Localization catalog
 
@@ -46,7 +47,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 
 | Locale | Coverage | Notes |
 | --- | ---: | --- |
-| `en` | 27 messages | Catalog default messages for active codes. |
+| `en` | 28 messages | Catalog default messages for active codes. |
 
 ## Deprecated codes
 

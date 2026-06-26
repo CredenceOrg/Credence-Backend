@@ -139,3 +139,12 @@ export class ServiceUnavailableError extends AppError {
     super(message, ErrorCodeRegistry.SERVICE_UNAVAILABLE)
   }
 }
+
+/**
+ * Specific error for request bodies that exceed the configured size limit.
+ */
+export class RequestTooLargeError extends AppError {
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.REQUEST_TOO_LARGE).defaultMessage) {
+    super(message, ErrorCodeRegistry.REQUEST_TOO_LARGE)
+  }
+}

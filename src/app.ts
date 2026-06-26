@@ -28,6 +28,10 @@ import {
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
+import {
+  jsonBodyParser,
+  requestSizeLimitErrorHandler,
+} from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
 
 const app = express();
@@ -68,7 +72,8 @@ app.get("/metrics", async (_req, res) => {
 app.use(metricsMiddleware);
 app.use(compressionMetricsMiddleware);
 app.use(compressionMiddleware);
-app.use(express.json());
+app.use(jsonBodyParser);
+app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 
 app.use("/.well-known/jwks.json", createJwksRouter());
