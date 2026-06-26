@@ -2,7 +2,7 @@
 
 To facilitate debugging in our distributed environment, every request is assigned a `Request ID` and a `Correlation ID`.
 
-- **X-Request-ID**: Unique to every single HTTP call to this service.
+- **X-Request-ID**: Unique identifier for the HTTP call. If provided in the incoming request headers, we preserve it. We also propagate it to downstream RPC calls (using Connect-RPC interceptors) and emit it automatically in every log line during the request lifecycle.
 - **X-Correlation-ID**: Persists across services. If an upstream service sends one, we propagate it.
 
 ## Log Format

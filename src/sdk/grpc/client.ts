@@ -25,7 +25,7 @@
 import { createGrpcTransport } from '@connectrpc/connect-node'
 import { createClient } from '@connectrpc/connect'
 
-import { createSharedSecretInterceptor } from './interceptors.js'
+import { createSharedSecretInterceptor, createRequestIdInterceptor } from './interceptors.js'
 
 // Generated service descriptors — populated by `buf generate`.
 // If these imports fail, run `buf generate` first.
@@ -104,6 +104,7 @@ export function createCredenceGrpcClient(config: CredenceGrpcConfig): CredenceGr
     httpVersion: '2',
     interceptors: [
       createSharedSecretInterceptor(sharedSecret),
+      createRequestIdInterceptor(),
     ],
     // Apply a default deadline to every call.  Individual callers can
     // override this by passing a signal or deadline to the RPC method.
