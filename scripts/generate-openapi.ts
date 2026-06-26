@@ -469,6 +469,21 @@ registry.registerPath({
   },
 });
 
+// Dashboard snapshot (#564)
+registry.registerPath({
+  method: 'get',
+  path: '/api/snapshot',
+  summary: 'Dashboard snapshot',
+  description: 'Single round-trip pre-computed payload combining health status and analytics metrics. Always returns 200; individual sections may be null when the underlying service is unavailable.',
+  tags: ['Snapshot'],
+  responses: {
+    200: {
+      description: 'Dashboard snapshot',
+      content: { 'application/json': { schema: schemas.DashboardSnapshotSchema } },
+    },
+  },
+});
+
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
   openapi: '3.0.0',

@@ -26,6 +26,7 @@
     "migrate:template": "tsx src/migrations/linter.ts template",
     "migrate:safety": "tsx src/migrations/linter.ts check --strict",
     "generate:openapi": "npx tsx scripts/generate-openapi.ts",
+    "openapi:check": "node scripts/openapi-drift.js",
     "drill:horizon": "tsx scripts/horizon-failover-drill.ts",
     "drill:restore": "tsx scripts/restore-verify.ts"
   },

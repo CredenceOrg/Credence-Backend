@@ -111,3 +111,4 @@ export {
   type ResolveDisputeBody,
   type DismissDisputeBody,
 } from "./disputes.js";
+export { DashboardSnapshotSchema, type DashboardSnapshot } from "./snapshot.js";
