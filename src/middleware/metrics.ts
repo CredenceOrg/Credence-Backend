@@ -12,7 +12,7 @@
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
 import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics } from '../observability/index.js'
+import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import { pool, workerPool } from '../db/pool.js'
 
@@ -24,6 +24,9 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register downstream RPC latency metrics
+registerRpcLatencyMetrics(register)
 
 // Register circuit breaker metrics
 import { registerCircuitBreakerMetrics } from '../clients/circuitBreaker.js'

@@ -17,6 +17,7 @@ import {
   noopRetryObserver,
   type RetryObserver,
 } from "../observability/retryMetrics.js";
+import { recordDownstreamRpcLatency } from "../observability/rpcLatencyMetrics.js";
 import { resolveTimeout, createTimeoutConfig } from "../lib/timeouts.js";
 import { validateConfig } from "../config/index.js";
 import { getCircuitBreaker } from "./circuitBreaker.js";
@@ -311,6 +312,21 @@ export class SorobanClient {
 
     const breaker = getCircuitBreaker(host, this.circuitBreakerConfig);
 
+    // Measure the full downstream RPC latency (including retries and any time
+    // spent gated by the circuit breaker), labelled by provider and op.
+    const callStartMs = Date.now();
+    try {
+      return await this.executeWithRetries<T>(breaker, method, params);
+    } finally {
+      recordDownstreamRpcLatency("soroban", method, Date.now() - callStartMs);
+    }
+  }
+
+  private executeWithRetries<T>(
+    breaker: ReturnType<typeof getCircuitBreaker>,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> {
     return breaker.execute(async () => {
       let attempt = 0;
       let lastError: SorobanClientError | null = null;
