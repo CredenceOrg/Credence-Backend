@@ -38,9 +38,24 @@ export interface SorobanClientConfig {
   retry?: Partial<RetryOptions>;
   retryPolicies?: ProviderRetryPolicies;
   circuitBreaker?: {
-    failureThreshold?: number;
-    cooldownPeriodMs?: number;
-  };
+    failureThreshold?: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs?: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs?: number
+    /**
+     * @deprecated Use `halfOpenAfterMs` instead.
+     * Accepted for backwards compatibility; maps to `halfOpenAfterMs` when
+     * the new field is absent.
+     */
+    cooldownPeriodMs?: number
+  }
   /**
    * TTL in milliseconds for the getIdentityState() read-through cache.
    * Set to 0 to disable caching. When omitted the value is read from
@@ -145,7 +160,8 @@ export class SorobanClient {
   );
   private readonly circuitBreakerConfig: {
     failureThreshold: number;
-    cooldownPeriodMs: number;
+    openWindowMs: number;
+    halfOpenAfterMs: number;
   };
   private readonly stateCache: SorobanStateCache;
 
@@ -174,13 +190,16 @@ export class SorobanClient {
     this.retryObserver = deps.retryObserver ?? noopRetryObserver;
 
     let defaultFailureThreshold = 5;
-    let defaultCooldownMs = 10000;
+    let defaultOpenWindowMs = 10_000;
+    let defaultHalfOpenAfterMs = 30_000;
     let defaultCacheTtlMs = 5000;
     try {
       const globalConfig = validateConfig(process.env);
       defaultFailureThreshold =
         globalConfig.sorobanCircuitBreaker.failureThreshold;
-      defaultCooldownMs = globalConfig.sorobanCircuitBreaker.cooldownPeriodMs;
+      defaultOpenWindowMs = globalConfig.sorobanCircuitBreaker.openWindowMs;
+      defaultHalfOpenAfterMs =
+        globalConfig.sorobanCircuitBreaker.halfOpenAfterMs;
       defaultCacheTtlMs = globalConfig.sorobanStateCache.ttlMs;
     } catch {
       if (process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
@@ -188,8 +207,18 @@ export class SorobanClient {
           process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         );
       }
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
-        defaultCooldownMs = Number(
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS) {
+        defaultOpenWindowMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+        );
+      }
+      // Prefer the new var; fall back to deprecated COOLDOWN_MS.
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS) {
+        defaultHalfOpenAfterMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
+        );
+      } else if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
+        defaultHalfOpenAfterMs = Number(
           process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
         );
       }
@@ -201,8 +230,12 @@ export class SorobanClient {
     this.circuitBreakerConfig = {
       failureThreshold:
         config.circuitBreaker?.failureThreshold ?? defaultFailureThreshold,
-      cooldownPeriodMs:
-        config.circuitBreaker?.cooldownPeriodMs ?? defaultCooldownMs,
+      openWindowMs:
+        config.circuitBreaker?.openWindowMs ?? defaultOpenWindowMs,
+      halfOpenAfterMs:
+        config.circuitBreaker?.halfOpenAfterMs ??
+        config.circuitBreaker?.cooldownPeriodMs ??
+        defaultHalfOpenAfterMs,
     };
 
     // Allow per-instance override via config.cacheTtlMs; fall back to env default.

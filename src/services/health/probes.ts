@@ -235,7 +235,11 @@ export function createHorizonClientProbe(
         state = options.getState();
       } else {
         const host = new URL(horizonUrl!).host;
-        const breaker = getCircuitBreaker(host, { failureThreshold: 5, cooldownPeriodMs: 10000 });
+        const breaker = getCircuitBreaker(host, {
+          failureThreshold: 5,
+          openWindowMs: 10_000,
+          halfOpenAfterMs: 30_000,
+        });
         state = breaker.getState();
       }
 

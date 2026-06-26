@@ -323,11 +323,34 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
-  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+  /**
+   * How long (ms) the breaker stays OPEN and rejects all requests immediately
+   * after tripping. Default: 10 000 ms (10 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS: z
     .string()
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  /**
+   * How long (ms) after the breaker trips before a probe is allowed.
+   * Must be ≥ SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS. Default: 30 000 ms (30 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS: z
+    .string()
+    .default('30000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  /**
+   * @deprecated Use SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS instead.
+   * Kept for backwards compatibility; maps to halfOpenAfterMs when the new
+   * variable is not set.
+   */
+  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : undefined))
+    .pipe(z.number().int().min(1000).optional()),
   /**
    * Short-TTL read-through cache for getIdentityState() responses.
    * Set to 0 to disable caching entirely.
@@ -457,7 +480,16 @@ export interface Config {
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
-    cooldownPeriodMs: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs: number
   }
   sorobanStateCache: {
     /** TTL in milliseconds. 0 = disabled. */
@@ -636,7 +668,12 @@ function mapEnvToConfig(env: Env): Config {
     },
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-      cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+      openWindowMs: env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+      // Prefer the explicit HALF_OPEN_AFTER_MS; fall back to deprecated COOLDOWN_MS.
+      halfOpenAfterMs:
+        env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS ??
+        env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS ??
+        30_000,
     },
     sorobanStateCache: {
       ttlMs: env.SOROBAN_STATE_CACHE_TTL_MS,
