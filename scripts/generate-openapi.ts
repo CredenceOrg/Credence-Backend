@@ -173,11 +173,64 @@ registry.registerPath({
   responses: { 201: { description: 'Payout created', content: { 'application/json': { schema: z.any() } } } },
 });
 
+// Wallet paths
+registry.registerPath({
+  method: 'post',
+  path: '/api/wallets',
+  summary: 'Create a wallet',
+  description: 'Creates a new wallet with an optional initial balance.',
+  tags: ['Wallets'],
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.createWalletBodySchema } },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Wallet created',
+      content: { 'application/json': { schema: schemas.walletSchema } },
+    },
+    409: {
+      description: 'A wallet with this address already exists',
+      content: { 'application/json': { schema: schemas.walletErrorSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/wallets/{id}/debit',
+  summary: 'Debit a wallet',
+  description: 'Atomically debits the specified amount from a wallet balance. Fails if the balance would go negative.',
+  tags: ['Wallets'],
+  request: {
+    params: z.object({ id: z.string().uuid() }),
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.walletDebitBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Debit successful',
+      content: { 'application/json': { schema: schemas.walletDebitResponseSchema } },
+    },
+    404: {
+      description: 'Wallet not found',
+      content: { 'application/json': { schema: schemas.walletErrorSchema } },
+    },
+    422: {
+      description: 'Insufficient balance',
+      content: { 'application/json': { schema: schemas.walletErrorSchema } },
+    },
+  },
+});
+
 // Bond paths
 registry.registerPath({
   method: 'get',
   path: '/api/bond/{address}',
-
   summary: 'Get bond status',
   description: 'Returns the current bond status and lifecycle state for a wallet address.',
   tags: ['Bond'],

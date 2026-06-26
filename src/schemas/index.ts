@@ -96,6 +96,17 @@ export {
   type SlashRequestsListResponse,
 } from "./governance.js";
 export {
+  walletSchema,
+  createWalletBodySchema,
+  walletDebitBodySchema,
+  walletDebitResponseSchema,
+  walletErrorSchema,
+  type WalletResponse,
+  type CreateWalletBody,
+  type WalletDebitBody,
+  type WalletDebitResponse,
+} from './wallet.js'
+export {
   disputeStatusSchema,
   submitDisputeBodySchema,
   disputeSchema,

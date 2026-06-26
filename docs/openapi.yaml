@@ -1007,6 +1007,42 @@ components:
                 format: safeint
             type: optional
       type: object
+    createWalletBodySchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          initialBalance:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          currency:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     dismissDisputeBodySchema:
       def:
         type: object
@@ -3000,6 +3036,174 @@ components:
             minLength: null
             maxLength: null
       type: object
+    walletDebitBodySchema:
+      def:
+        type: object
+        shape:
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    walletDebitResponseSchema:
+      def:
+        type: object
+        shape:
+          wallet:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                address:
+                  def:
+                    type: string
+                    checks:
+                      - {}
+                  type: string
+                  format: null
+                  minLength: 1
+                  maxLength: null
+                balance:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                currency:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                createdAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+                updatedAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+            type: object
+          previousBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          newBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          debitedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          balance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          currency:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
+          updatedAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
+      type: object
     withdrawalEventSchema:
       def:
         type: object
@@ -3153,6 +3357,100 @@ components:
             isFinite: true
             format: safeint
       type: object
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Wallet UUID (auto-generated by Postgres)
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address
+          example: 0xTestAddress1
+        balance:
+          type: string
+          description: Current balance as a decimal string (NUMERIC(36,18))
+          example: "100.000000000000000000"
+        currency:
+          type: string
+          description: Currency code
+          example: USD
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp when the wallet was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC timestamp of the last balance change
+      required:
+        - id
+        - address
+        - balance
+        - currency
+        - createdAt
+        - updatedAt
+    WalletError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Wallet abc not found
+      required:
+        - error
+    CreateWalletBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address (must be unique)
+          example: 0xNewAddress
+        initialBalance:
+          type: string
+          description: Optional initial balance as a decimal string. Defaults to "0".
+          example: "50"
+        currency:
+          type: string
+          description: Currency code. Defaults to "USD".
+          example: USD
+      required:
+        - address
+    WalletDebitResponse:
+      type: object
+      properties:
+        wallet:
+          $ref: "#/components/schemas/Wallet"
+        previousBalance:
+          type: string
+          description: Wallet balance before the debit
+          example: "100.000000000000000000"
+        newBalance:
+          type: string
+          description: Wallet balance after the debit
+          example: "74.500000000000000000"
+        debitedAmount:
+          type: string
+          description: Amount that was debited
+          example: "25.50"
+      required:
+        - wallet
+        - previousBalance
+        - newBalance
+        - debitedAmount
+    WalletDebitBody:
+      type: object
+      properties:
+        amount:
+          type: string
+          minLength: 1
+          description: Positive decimal string amount to deduct from the wallet balance.
+          example: "25.50"
+      required:
+        - amount
     BondResponse:
       type: object
       properties:
@@ -3893,6 +4191,70 @@ paths:
             application/json:
               schema:
                 nullable: true
+  /api/wallets:
+    post:
+      summary: Create a wallet
+      description: Creates a new wallet with an optional initial balance.
+      tags:
+        - Wallets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWalletBody"
+      responses:
+        "201":
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+        "409":
+          description: A wallet with this address already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+  /api/wallets/{id}/debit:
+    post:
+      summary: Debit a wallet
+      description: Atomically debits the specified amount from a wallet balance. Fails
+        if the balance would go negative.
+      tags:
+        - Wallets
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletDebitBody"
+      responses:
+        "200":
+          description: Debit successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletDebitResponse"
+        "404":
+          description: Wallet not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+        "422":
+          description: Insufficient balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
   /api/bond/{address}:
     get:
       summary: Get bond status
