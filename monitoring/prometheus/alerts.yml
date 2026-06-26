@@ -14,19 +14,19 @@ groups:
           summary: "Success Rate SLO Violation"
           description: "Error rate is {{ $value | humanizePercentage }} (SLO: 99.9% success)"
 
-      # Fast Burn Alert (1h budget consumed in 2m)
+      # Burn Rate Alert (burn rate > 2)
       - alert: ErrorBudgetBurnRateHigh
         expr: |
           (
             sum(rate(http_requests_status_total{status_class="5xx"}[1h])) 
             / sum(rate(http_requests_status_total[1h]))
-          ) > (14.4 * 0.001)
+          ) / 0.001 > 2
         for: 2m
         labels:
           severity: critical
         annotations:
           summary: "High Error Budget Burn Rate"
-          description: "Current burn rate is 14.4x the allowed error rate (0.1%)"
+          description: "Current burn rate is {{ $value }}x the allowed error rate (threshold: 2x)"
 
       # Per-endpoint Latency SLO (95% of requests < 250ms)
       - alert: EndpointLatencySLOViolation
