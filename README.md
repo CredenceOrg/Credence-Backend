@@ -510,6 +510,13 @@ Extend with additional Horizon event ingestion when implementing the full archit
 - Integration notes: `docs/stellar-integration.md`
 - Tests: `src/clients/soroban.test.ts`
 
+## Security
+
+For security policies, reporting, and architecture documentation:
+- **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
+- **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
+- **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
+
 ## Testing
 
 For a full walkthrough — prerequisites, pg-mem vs testcontainers, running migrations, all test commands, the chaos suite, and troubleshooting — see **[docs/CONTRIBUTING-TESTING.md](docs/CONTRIBUTING-TESTING.md)**.
@@ -522,3 +529,4 @@ pnpm run test:coverage     # with coverage (40% global threshold)
 pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evidence)
 pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
 ```
+
