@@ -2,6 +2,7 @@ import { createClient, RedisClientType } from 'redis'
 import { LRUCache } from 'lru-cache'
 import { executeCacheOperation, createMetricsAdapter } from '../lib/timeoutExecutor.js'
 import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.js'
+import { logger } from '../utils/logger.js'
 
 export type RedisClient = RedisClientType
 
@@ -26,15 +27,15 @@ export class RedisConnection {
     })
 
     this.client.on('error', (err: Error) => {
-      console.error('Redis client error:', err)
+      logger.error('Redis client error:', err)
     })
 
     this.client.on('connect', () => {
-      console.log('Redis client connected')
+      logger.info('Redis client connected')
     })
 
     this.client.on('disconnect', () => {
-      console.warn('Redis client disconnected')
+      logger.warn('Redis client disconnected')
     })
   }
 
@@ -90,7 +91,7 @@ export class RedisConnection {
       await this.client.ping()
       return true
     } catch (error) {
-      console.error('Redis health check failed:', error)
+      logger.error('Redis health check failed:', error)
       return false
     }
   }
@@ -171,7 +172,7 @@ export class CacheService {
       },
       { metrics: this.metrics }
     ).catch(error => {
-      console.error(`Cache get failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache get failed for key ${namespacedKey}:`, error)
       return null
     })
   }
@@ -213,7 +214,7 @@ export class CacheService {
 
       return true
     } catch (error) {
-      console.error(`Cache set failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache set failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -236,7 +237,7 @@ export class CacheService {
       const result = await this.redis.getClient().del(namespacedKey)
       return result > 0
     } catch (error) {
-      console.error(`Cache delete failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache delete failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -281,7 +282,7 @@ export class CacheService {
       const result = await this.redis.getClient().del(keys)
       return result
     } catch (error) {
-      console.error(`Cache clear namespace failed for ${namespace}:`, error)
+      logger.error(`Cache clear namespace failed for ${namespace}:`, error)
       return 0
     }
   }
@@ -306,7 +307,7 @@ export class CacheService {
       const result = await this.redis.getClient().exists(namespacedKey)
       return result === 1
     } catch (error) {
-      console.error(`Cache exists check failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache exists check failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -333,7 +334,7 @@ export class CacheService {
       const result = await this.redis.getClient().expire(namespacedKey, ttl)
       return result === 1
     } catch (error) {
-      console.error(`Cache expire failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache expire failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -358,7 +359,7 @@ export class CacheService {
       await this.redis.connect()
       return await this.redis.getClient().ttl(namespacedKey)
     } catch (error) {
-      console.error(`Cache TTL check failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache TTL check failed for key ${namespacedKey}:`, error)
       return -2
     }
   }

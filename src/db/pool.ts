@@ -1,5 +1,6 @@
 import { Pool, type PoolClient } from "pg";
 import dotenv from "dotenv";
+import { logger } from "../utils/logger.js";
 
 dotenv.config();
 
@@ -40,7 +41,7 @@ export const pool = new Pool({
 });
 
 pool.on("error", (err) => {
-  console.error("[pool] unexpected client error", err);
+  logger.error("[pool] unexpected client error", err);
 });
 
 /**
@@ -60,7 +61,7 @@ export const workerPool = new Pool({
 });
 
 workerPool.on("error", (err) => {
-  console.error("[workerPool] unexpected client error", err);
+  logger.error("[workerPool] unexpected client error", err);
 });
 
 /**
@@ -75,7 +76,7 @@ export const replicaPool = new Pool({
 });
 
 replicaPool.on("error", (err) => {
-  console.error("[replicaPool] unexpected client error", err);
+  logger.error("[replicaPool] unexpected client error", err);
 });
 
 /**
@@ -105,10 +106,9 @@ export async function withReplica<T>(
     return await operation(replicaPool);
   } catch (err) {
     if (fallback) {
-      // In a real application, you might use a proper logger instead of console.warn
-      console.warn(`[withReplica] Replica error or lag exceeded, falling back to primary`, err);
+      logger.warn(`[withReplica] Replica error or lag exceeded, falling back to primary`, err);
       return await operation(pool);
     }
     throw err;
   }
-}
+}

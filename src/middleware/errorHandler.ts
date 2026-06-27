@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express'
 import { AppError } from '../lib/errors.js'
 import { ErrorCode, getErrorCatalogEntry, getHttpStatus, isErrorCode } from '../lib/errorCatalog.js'
+import { logger } from '../utils/logger.js'
 
 const isProduction = (): boolean => process.env.NODE_ENV === 'production'
 
@@ -27,7 +28,7 @@ export const errorHandler = (
   // 1. Handle AppError (standardized domain errors)
   if (err instanceof AppError) {
     if (!isErrorCode(err.code)) {
-      console.error('Unhandled AppError with uncatalogued code:', err)
+      logger.error('Unhandled AppError with uncatalogued code:', err)
       sendInternalServerError(res)
       return
     }
@@ -44,6 +45,6 @@ export const errorHandler = (
   }
 
   // 2. Handle unexpected/third-party errors without exposing internals.
-  console.error('Unhandled server error:', err)
+  logger.error('Unhandled server error:', err)
   sendInternalServerError(res)
 }

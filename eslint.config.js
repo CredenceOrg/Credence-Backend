@@ -7,10 +7,18 @@ import {
 
 export default [
   {
-    ignores: ["dist/**", "coverage/**", "node_modules/**"],
+    ignores: [
+      "dist/**", 
+      "coverage/**", 
+      "node_modules/**", 
+      "**/*.test.ts", 
+      "**/*.spec.ts", 
+      "src/test_fuzz_currency_whitelist.ts"
+    ],
   },
   {
     files: ["src/**/*.ts"],
+    ignores: ["src/utils/logger.ts"],
     languageOptions: {
       parser: tsParser,
       sourceType: "module",
@@ -26,8 +34,16 @@ export default [
       },
     },
     rules: {
+      "no-console": "error",
       "logger-schema/require-schema-context": "warn",
       "logger-schema/unvalidated-logger-call": "warn",
+    },
+  },
+  // Allow console only in logger implementation
+  {
+    files: ["src/utils/logger.ts"],
+    rules: {
+      "no-console": "off",
     },
   },
 ];

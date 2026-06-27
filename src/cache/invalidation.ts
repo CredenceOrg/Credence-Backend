@@ -8,6 +8,7 @@
 import { cache, CacheService } from './redis.js'
 import { recordStaleCacheRead } from '../middleware/metrics.js'
 import { getInvalidationBus } from './invalidationBus.js'
+import { logger } from '../utils/logger.js'
 
 export interface InvalidationOptions {
   /**
@@ -61,7 +62,7 @@ export async function invalidateCache(
       
       if (isStale) {
         recordStaleCacheRead(namespace)
-        console.warn(`Stale cache detected for ${namespace}:${key}`)
+        logger.warn(`Stale cache detected for ${namespace}:${key}`)
       }
     }
   }

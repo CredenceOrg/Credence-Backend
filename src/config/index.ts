@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import dotenv from 'dotenv'
+import { logger } from '../utils/logger.js'
 import {
   enforceRetryPolicyCaps,
   type ProviderRetryPolicies,
@@ -744,9 +745,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     return validateConfig(env)
   } catch (err) {
     if (err instanceof ConfigValidationError) {
-      console.error(`\n❌ ${err.message}`)
-      console.error('\nPlease check your .env file or environment variables.\n')
-      process.exit(1)
+      // Don't exit in test environment
+      if (process.env.NODE_ENV !== 'test') {
+        logger.error(`\n❌ ${err.message}`)
+        logger.error('\nPlease check your .env file or environment variables.\n')
+        process.exit(1)
+      }
     }
     throw err
   }
