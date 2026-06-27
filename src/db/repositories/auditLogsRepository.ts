@@ -57,6 +57,7 @@ const mapAuditLog = (row: AuditLogRow): AuditLogEntry => ({
   ipAddress: row.ip_address ?? undefined,
   errorMessage: row.error_message ?? undefined,
   tenantId: row.tenant_id,
+  requestId: row.request_id ?? undefined,
   seq: row.seq ?? undefined,
   prevHash: row.prev_hash !== undefined ? row.prev_hash : null,
   rowHash: row.row_hash ?? undefined,
@@ -122,6 +123,7 @@ export function computeRowHash(
   detailsJson: string,
   status: string,
   tenantId: string,
+  requestId: string = '',
 ): string {
   const input = [
     prevHash ?? 'GENESIS',
@@ -134,6 +136,7 @@ export function computeRowHash(
     detailsJson,
     status,
     tenantId,
+    requestId,
   ].join('|')
 
   return createHash('sha256').update(input, 'utf8').digest('hex')
@@ -195,13 +198,14 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         ip_address,
         error_message,
         tenant_id,
+        request_id,
         prev_hash,
         row_hash
       )
       SELECT
         $1,
         ns.seq_val,
-        $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11,
+        $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
         p.row_hash,
         encode(
           sha256(
@@ -215,7 +219,8 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
               $6 || '|' ||
               $7 || '|' ||
               $8 || '|' ||
-              $11,
+              $11 || '|' ||
+              COALESCE($12, ''),
               'UTF8'
             )
           ),
@@ -236,6 +241,7 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         ip_address,
         error_message,
         tenant_id,
+        request_id,
         seq,
         prev_hash,
         row_hash
@@ -252,6 +258,7 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         input.ipAddress ?? null,
         input.errorMessage ?? null,
         input.tenantId,
+        input.requestId ?? null,
       ],
     )
 
@@ -361,6 +368,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       detailsStr,
       statusVal,
       input.tenantId,
+      input.requestId ?? '',
     )
 
     const entry: AuditLogEntry = {
@@ -383,6 +391,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       ipAddress: input.ipAddress,
       errorMessage: input.errorMessage,
       tenantId: input.tenantId,
+      requestId: input.requestId,
       seq,
       prevHash,
       rowHash,

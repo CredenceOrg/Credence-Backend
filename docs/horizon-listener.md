@@ -655,6 +655,7 @@ This module listens for bond creation events from Stellar/Horizon and syncs iden
 - Subscribes to Horizon for bond creation events
 - Parses event payload (identity, amount, duration, etc.)
 - Upserts identity and bond records in PostgreSQL
+- **Idempotent Restart & Gap-Free Resumption**: Loads the saved `bond_creation` cursor checkpoint from the `horizon_cursors` table on startup (falling back to `'now'` only on the first boot or DB error) to ensure no blockchain operations are missed across process restarts.
 - Handles reconnection and backfill
 - Comprehensive tests with mocked Horizon
 

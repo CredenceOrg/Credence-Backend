@@ -33,6 +33,7 @@ const DEFAULT_MESSAGES = {
   'invalid_stellar_address': "The request contains an invalid Stellar address",
   'batch_size_too_small': "The batch size is below the allowed minimum",
   'batch_size_exceeded': "The batch size exceeds the allowed maximum",
+  'request_too_large': "The request body exceeds the maximum allowed size",
   'unauthorized': "Authentication is required",
   'forbidden': "The authenticated caller is not allowed to perform this action",
   'not_found': "The requested resource was not found",
@@ -293,6 +294,20 @@ export class BatchSizeExceededCredenceError extends CredenceError {
   }
 }
 
+export class RequestTooLargeCredenceError extends CredenceError {
+  static readonly errorCode = 'request_too_large' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['request_too_large'],
+    status: number = 413,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'request_too_large', status, details, options)
+    this.name = 'RequestTooLargeCredenceError'
+  }
+}
+
 export class UnauthorizedCredenceError extends CredenceError {
   static readonly errorCode = 'unauthorized' as const
 
@@ -532,6 +547,7 @@ export const CREDENCE_ERROR_REGISTRY = {
   'invalid_stellar_address': InvalidStellarAddressCredenceError,
   'batch_size_too_small': BatchSizeTooSmallCredenceError,
   'batch_size_exceeded': BatchSizeExceededCredenceError,
+  'request_too_large': RequestTooLargeCredenceError,
   'unauthorized': UnauthorizedCredenceError,
   'forbidden': ForbiddenCredenceError,
   'not_found': NotFoundCredenceError,

@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 import { runHealthChecks } from '../services/health/index.js'
 import type { HealthProbe } from '../services/health/index.js'
+import { getVersionMetadata } from '../utils/version.js'
 
 export interface HealthRouterOptions {
   /** DB probe; when omitted, db is reported as not_configured. */
@@ -80,6 +81,7 @@ export function createHealthRouter(options: HealthRouterOptions = {}): Router {
     res.status(200).json({
       status: 'ok',
       service: 'credence-backend',
+      version: getVersionMetadata(),
     })
   })
 

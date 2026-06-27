@@ -14,47 +14,75 @@ The migration system includes built-in guardrails to prevent potentially dangero
 ## Enhanced Guardrails
 
 For comprehensive migration guardrails including batching strategies, lock timeout management, and rollback procedures, see:
+
 - **[Migration Guardrails Guide](./MIGRATION_GUARDRAILS.md)** - Complete guide for long-running schema changes
 - **[Batching Utilities](../src/migrations/utils/batching.ts)** - Safe batch operations
 - **[Lock Timeout Management](../src/migrations/utils/lock-timeout.ts)** - Lock safety and timeout configuration
 - **[Rollback Checklist](../src/migrations/utils/rollback-checklist.ts)** - Comprehensive rollback procedures
+
+## Previewing Migrations with Dry-Run
+
+Before executing migrations, you can preview the SQL changes using the dry-run command:
+
+```bash
+npm run migrate:dry-run
+```
+
+This command shows:
+
+- The SQL statements that would be executed
+- Which migrations would be applied
+- The order of execution
+
+The dry-run command is useful for:
+
+- **Code review**: Share the SQL changes with the team before deployment
+- **Impact analysis**: Understand what changes will be made to the database
+- **Planning**: Verify migrations work as expected without risking production data
+- **Documentation**: Keep a record of what schema changes are being deployed
+
+**Note**: The dry-run command still requires a valid DATABASE_URL but does not modify any data.
 
 ## Safe Migration Patterns
 
 ### 1. Adding Columns
 
 **❌ Unsafe:**
+
 ```sql
 ALTER TABLE users ADD COLUMN email VARCHAR(255) NOT NULL;
 ```
 
 **✅ Safe:**
+
 ```typescript
 // Step 1: Add nullable column
-pgm.addColumn('users', 'email', { 
-  type: 'varchar(255)', 
+pgm.addColumn("users", "email", {
+  type: "varchar(255)",
   null: true,
-  comment: 'Added for email feature - will be NOT NULL after backfill'
-})
+  comment: "Added for email feature - will be NOT NULL after backfill",
+});
 
 // Step 2: Backfill data in application code or separate migration
 // Step 3: Add NOT NULL constraint in follow-up migration
-pgm.alterColumn('users', 'email', { notNull: true })
+pgm.alterColumn("users", "email", { notNull: true });
 ```
 
 ### 2. Creating Indexes
 
 **❌ Unsafe (blocks writes):**
+
 ```typescript
-pgm.createIndex('large_table', 'column_name')
+pgm.createIndex("large_table", "column_name");
 ```
 
 **✅ Safe (online):**
+
 ```typescript
-pgm.createIndex('large_table', 'column_name', { 
-  method: 'CONCURRENTLY',
-  name: 'idx_large_table_column'
-})
+pgm.createIndex("large_table", "column_name", {
+  method: "CONCURRENTLY",
+  name: "idx_large_table_column",
+});
 ```
 
 ### 3. Column Replacement
@@ -64,14 +92,14 @@ When replacing a column, use a multi-step approach:
 ```typescript
 // Migration 1: Add new column
 export async function up(pgm: MigrationBuilder): Promise<void> {
-  pgm.addColumn('users', 'new_status', { 
-    type: 'varchar(50)', 
+  pgm.addColumn("users", "new_status", {
+    type: "varchar(50)",
     null: true,
-    comment: 'Replacing old_status field'
-  })
-  
+    comment: "Replacing old_status field",
+  });
+
   // Create index on new column
-  pgm.createIndex('users', 'new_status', { method: 'CONCURRENTLY' })
+  pgm.createIndex("users", "new_status", { method: "CONCURRENTLY" });
 }
 
 // Migration 2: Backfill data
@@ -81,32 +109,34 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     UPDATE users 
     SET new_status = old_status 
     WHERE new_status IS NULL
-  `)
+  `);
 }
 
 // Migration 3: Switch references and drop old column
 export async function up(pgm: MigrationBuilder): Promise<void> {
   // Add NOT NULL constraint to new column
-  pgm.alterColumn('users', 'new_status', { notNull: true })
-  
+  pgm.alterColumn("users", "new_status", { notNull: true });
+
   // Update application code to use new column
-  
+
   // Drop old column (after verifying app works with new column)
-  pgm.dropColumn('users', 'old_status')
-  
+  pgm.dropColumn("users", "old_status");
+
   // Rename new column if needed
-  pgm.renameColumn('users', 'new_status', 'status')
+  pgm.renameColumn("users", "new_status", "status");
 }
 ```
 
 ### 4. Large Data Updates
 
 **❌ Unsafe (locks table):**
+
 ```typescript
-pgm.sql('UPDATE large_table SET status = "active" WHERE condition = true')
+pgm.sql('UPDATE large_table SET status = "active" WHERE condition = true');
 ```
 
 **✅ Safe (batched):**
+
 ```typescript
 // Use application-level batching or pg-batch
 // Or create a separate backfill script that runs in batches
@@ -118,7 +148,7 @@ pgm.sql(`
     WHERE condition = true 
     LIMIT 1000
   )
-`)
+`);
 ```
 
 ## Migration Guardrails
@@ -140,21 +170,25 @@ The system automatically checks for:
 ## Using the Migration Linter
 
 ### Check all migrations:
+
 ```bash
 npm run migrate:lint
 ```
 
 ### Check specific migration:
+
 ```bash
 npm run migrate:lint -- --file migrations/001_add_email.ts
 ```
 
 ### Strict mode (warnings as errors):
+
 ```bash
 npm run migrate:lint -- --strict
 ```
 
 ### Pre-flight check:
+
 ```bash
 npm run migrate:preflight -- --file migrations/001_add_email.ts
 ```
@@ -162,20 +196,25 @@ npm run migrate:preflight -- --file migrations/001_add_email.ts
 ## Deployment Best Practices
 
 ### 1. Staging Environment
+
 Always test migrations in a staging environment with production-like data size.
 
 ### 2. Migration Timing
+
 - Run potentially long-running migrations during low-traffic periods
 - Use `CONCURRENTLY` for index creation on large tables
 - Monitor database performance during migrations
 
 ### 3. Rollback Strategy
+
 Every migration must have a working `down()` function that:
+
 - Completely reverses the `up()` changes
 - Handles edge cases (like partially completed operations)
 - Has been tested in staging
 
 ### 4. Monitoring
+
 - Monitor database locks during migration execution
 - Watch replication lag in database clusters
 - Set up alerts for long-running migrations
@@ -201,18 +240,22 @@ Before deploying:
 ## Common Pitfalls
 
 ### 1. Adding NOT NULL columns without defaults
+
 **Problem**: Blocks writes to the table
 **Solution**: Add as NULL, backfill, then add constraint
 
 ### 2. Creating unique indexes on large tables
+
 **Problem**: Blocks writes and can take hours
 **Solution**: Use CONCURRENTLY or create non-unique index first
 
 ### 3. Large UPDATE/DELETE operations
+
 **Problem**: Locks rows and causes replication lag
 **Solution**: Use batching or application-level backfill
 
 ### 4. Missing rollback functions
+
 **Problem**: Cannot easily undo changes
 **Solution**: Always implement and test `down()` functions
 
@@ -237,6 +280,9 @@ npm run migrate:lint
 
 # Run pre-flight checks
 npm run migrate:preflight -- --file migrations/001_add_email.ts
+
+# Preview migrations (dry-run) without executing
+npm run migrate:dry-run
 
 # Run migration with safety checks
 npm run migrate:up

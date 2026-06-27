@@ -28,6 +28,10 @@ import {
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
+import {
+  jsonBodyParser,
+  requestSizeLimitErrorHandler,
+} from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
 
 const app = express();
@@ -60,15 +64,28 @@ const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
 app.use(requestIdMiddleware);
 
-app.get("/metrics", async (_req, res) => {
-  res.set("Content-Type", register.contentType);
-  res.end(await register.metrics());
-});
+const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
+  ?.split(',')
+  .map(s => s.trim())
+  .filter(Boolean);
+
+if (metricsCidrs?.length) {
+  app.get("/metrics", createCidrWhitelistMiddleware(metricsCidrs), async (_req, res) => {
+    res.set("Content-Type", register.contentType);
+    res.end(await register.metrics());
+  });
+} else {
+  app.get("/metrics", async (_req, res) => {
+    res.set("Content-Type", register.contentType);
+    res.end(await register.metrics());
+  });
+}
 
 app.use(metricsMiddleware);
 app.use(compressionMetricsMiddleware);
 app.use(compressionMiddleware);
-app.use(express.json());
+app.use(jsonBodyParser);
+app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 
 app.use("/.well-known/jwks.json", createJwksRouter());

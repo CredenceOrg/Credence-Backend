@@ -183,7 +183,7 @@ export function roundToScale(
     const frac = fracStr.length > 0 ? BigInt(fracStr) : 0n
     const scaled = int * (10n ** BigInt(scale)) + frac * (10n ** BigInt(pad))
     const formatted = formatScaledInt(scaled, scale)
-    return negative && int !== 0n ? `-${formatted}` : formatted
+    return negative && scaled !== 0n ? `-${formatted}` : formatted
   }
 
   // Full-precision integer: digits left of point || digits right of point.

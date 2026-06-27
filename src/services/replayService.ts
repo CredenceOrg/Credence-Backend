@@ -1,5 +1,5 @@
 import { FailedInboundEventsRepository, FailedInboundEvent } from '../db/repositories/failedInboundEventsRepository.js'
-import { auditLogService } from './audit/index.js'
+import { auditLogService, AuditAction } from './audit/index.js'
 import { cache } from '../cache/redis.js'
 import { invalidateCache } from '../cache/invalidation.js'
 
@@ -71,7 +71,8 @@ export class ReplayService {
     adminId: string,
     adminEmail: string,
     tenantId: string,
-    ipAddress?: string
+    ipAddress?: string,
+    requestId?: string
   ): Promise<{ success: boolean; message: string }> {
     const event = await this.getFailedEvent(id)
     if (!event) {
@@ -106,13 +107,14 @@ export class ReplayService {
         tenantId,
         adminId,
         adminEmail,
-        'REPLAY_EVENT' as any,
+        AuditAction.REPLAY_EVENT,
         id,
         'system',
         { eventType: event.eventType, status: 'success' },
         'success',
         undefined,
-        ipAddress
+        ipAddress,
+        requestId
       )
 
       return { success: true, message: 'Event successfully replayed' }
@@ -125,13 +127,14 @@ export class ReplayService {
         tenantId,
         adminId,
         adminEmail,
-        'REPLAY_EVENT' as any,
+        AuditAction.REPLAY_EVENT,
         id,
         'system',
         { eventType: event.eventType, status: 'failure' },
         'failure',
         errorMessage,
-        ipAddress
+        ipAddress,
+        requestId
       )
 
       throw new Error(`Replay failed: ${errorMessage}`)

@@ -24,6 +24,42 @@ http_request_duration_seconds_sum{method="GET",route="/api/trust/:address",statu
 http_request_duration_seconds_count{method="GET",route="/api/trust/:address",status_class="2xx"} 1000
 ```
 
+### `downstream_rpc_latency_milliseconds`
+
+**Type:** Histogram  
+**Labels:** `provider`, `op`  
+**Buckets (ms):** `25, 50, 100, 250, 500, 1000`  
+**Description:** Wall-clock latency of outbound RPC calls to downstream providers
+(e.g. Soroban), including retries and any time spent gated by the circuit
+breaker. Recorded for both successful and failed calls.
+
+- **`provider`** — downstream provider, e.g. `soroban`.
+- **`op`** — RPC method / operation invoked, e.g. `getContractData`, `getEvents`.
+
+The bucket boundaries are defined once in
+[`src/observability/rpcLatencyMetrics.ts`](../src/observability/rpcLatencyMetrics.ts)
+as `DOWNSTREAM_RPC_LATENCY_BUCKETS_MS` and reused everywhere.
+
+**Example output:**
+```
+# HELP downstream_rpc_latency_milliseconds Downstream RPC call latency in milliseconds, labelled by provider and op
+# TYPE downstream_rpc_latency_milliseconds histogram
+downstream_rpc_latency_milliseconds_bucket{provider="soroban",op="getContractData",le="25"} 4
+downstream_rpc_latency_milliseconds_bucket{provider="soroban",op="getContractData",le="100"} 87
+downstream_rpc_latency_milliseconds_bucket{provider="soroban",op="getContractData",le="1000"} 100
+downstream_rpc_latency_milliseconds_bucket{provider="soroban",op="getContractData",le="+Inf"} 100
+downstream_rpc_latency_milliseconds_sum{provider="soroban",op="getContractData"} 6420
+downstream_rpc_latency_milliseconds_count{provider="soroban",op="getContractData"} 100
+```
+
+**p95 latency by provider/op:**
+```promql
+histogram_quantile(0.95, sum(rate(downstream_rpc_latency_milliseconds_bucket[5m])) by (le, provider, op))
+```
+
+**Cardinality:** bounded by `providers × ops` (a handful of each), well within
+Prometheus limits.
+
 ## Cardinality Policy
 
 ### Route Template Normalization

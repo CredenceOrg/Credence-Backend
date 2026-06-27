@@ -2,7 +2,28 @@ import { randomBytes, createHash } from 'crypto'
 import { ApiKeysRepository } from '../db/repositories/apiKeysRepository.js'
 import { pool } from '../db/pool.js'
 
-export type KeyScope = 'read' | 'full' | string   // extended to accept granular scope strings
+// ── Scope constants ──────────────────────────────────────────────────────────
+
+export const ApiKeyScope = {
+  TRUST_READ: 'trust:read',
+  ATTESTATIONS_READ: 'attestations:read',
+  ATTESTATIONS_WRITE: 'attestations:write',
+  PAYOUTS_WRITE: 'payouts:write',
+  REPORTS_GENERATE: 'reports:generate',
+  EXPORTS_READ: 'exports:read',
+  WEBHOOKS_ADMIN: 'webhooks:admin',
+  OUTBOX_REINJECT: 'outbox:reinject',
+  ADMIN_READ: 'admin:read',
+  ADMIN_WRITE: 'admin:write',
+  FLAGS_READ: 'flags:read',
+  FLAGS_WRITE: 'flags:write',
+  BOND_READ: 'bond:read',
+  BOND_WRITE: 'bond:write',
+} as const
+
+export type ApiKeyScope = (typeof ApiKeyScope)[keyof typeof ApiKeyScope]
+
+export type KeyScope = 'read' | 'full' | string
 export type SubscriptionTier = 'free' | 'pro' | 'enterprise'
 
 export interface StoredApiKey {
@@ -15,7 +36,7 @@ export interface StoredApiKey {
    * Granted scopes for this key.
    *
    * Legacy keys carry a single-element array with 'read' or 'full'.
-   * Granular keys carry one or more scope strings from ApiScope.
+   * Granular keys carry one or more scope strings from ApiKeyScope.
    *
    * The `scope` field (singular) is kept for backward compatibility and
    * reflects the primary / most-privileged scope in the array.
@@ -67,18 +88,18 @@ function extractPrefix(rawKey: string): string {
  * @param scopes   Optional explicit list of granted scopes. When provided, overrides `scope`.
  * @returns        Key metadata including the raw key (shown once only)
  */
-export async function generateApiKey(
+export function generateApiKey(
   ownerId: string,
-  scopes: KeyScope[] = [],
+  scope: KeyScope | KeyScope[] = 'read',
   tier: SubscriptionTier = 'free',
   scopes?: string[],
 ): CreateApiKeyResult {
-  const random = randomBytes(32).toString('hex') // 64 hex chars
-  const rawKey = `cr_${random}` // 67 chars total
+  const random = randomBytes(32).toString('hex')
+  const rawKey = `cr_${random}`
   const prefix = extractPrefix(rawKey)
   const id = randomBytes(8).toString('hex')
 
-  const grantedScopes = scopes ?? [scope]
+  const grantedScopes: string[] = scopes ?? (Array.isArray(scope) ? scope : [scope])
   const primaryScope = grantedScopes[0] as KeyScope
 
   const stored: StoredApiKey = {
@@ -94,7 +115,7 @@ export async function generateApiKey(
     active: true,
   }
 
-  store.set(id, stored)
+  inMemoryStore.set(id, stored)
   return {
     id,
     key: rawKey,
@@ -158,7 +179,7 @@ export async function revokeApiKey(id: string): Promise<boolean> {
  * scopes, tier, and owner. Returns null if the key doesn't exist or is already revoked.
  */
 export function rotateApiKey(id: string): CreateApiKeyResult | null {
-  const existing = store.get(id)
+  const existing = inMemoryStore.get(id)
   if (!existing || !existing.active) return null
 
   existing.active = false
@@ -171,7 +192,7 @@ export function rotateApiKey(id: string): CreateApiKeyResult | null {
  * @returns Key metadata (minus `hashedKey`), or null if not found.
  */
 export function findApiKeyById(id: string): Omit<StoredApiKey, 'hashedKey'> | null {
-  const key = store.get(id)
+  const key = inMemoryStore.get(id)
   if (!key) return null
   const { hashedKey: _h, ...rest } = key
   return rest

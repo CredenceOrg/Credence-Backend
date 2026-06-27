@@ -40,6 +40,7 @@ export class ImpersonationService {
     tenantId: string,
     request: IssueImpersonationTokenRequest,
     ipAddress?: string,
+    requestId?: string
   ): Promise<IssueImpersonationTokenResponse> {
     const { targetUserId, reason, ttlSeconds } = request
 
@@ -55,6 +56,7 @@ export class ImpersonationService {
         'failure',
         'reason is required',
         ipAddress,
+        requestId
       )
       throw new Error('reason is required and must not be empty')
     }
@@ -72,6 +74,7 @@ export class ImpersonationService {
         'failure',
         'target user not found',
         ipAddress,
+        requestId
       )
       throw new Error(`User not found: ${targetUserId}`)
     }
@@ -112,6 +115,7 @@ export class ImpersonationService {
       'success',
       undefined,
       ipAddress,
+      requestId
     )
 
     return { tokenId, targetUserId, targetUserEmail: target.email, expiresAt: expiresAt.toISOString(), ttlSeconds: ttl }
@@ -126,6 +130,7 @@ export class ImpersonationService {
     tenantId: string,
     tokenId: string,
     ipAddress?: string,
+    requestId?: string
   ): Promise<void> {
     const record = await this.repo.findById(tokenId)
 
@@ -154,6 +159,7 @@ export class ImpersonationService {
       'success',
       undefined,
       ipAddress,
+      requestId
     )
   }
 

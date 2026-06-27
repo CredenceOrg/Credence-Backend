@@ -75,14 +75,16 @@ describe('Response envelope contract — /api/health', () => {
     return app
   }
 
-  it('liveness: { status: string, service: string }', async () => {
+  it('liveness: { status: string, service: string, version: object }', async () => {
     const { status, body } = await req(makeApp(), 'GET', '/api/health/live')
     expect(status).toBe(200)
     expect(typeof body.status).toBe('string')
     expect(typeof body.service).toBe('string')
+    expect(body.version).toBeDefined()
+    expect(typeof body.version).toBe('object')
   })
 
-  it('readiness success: { status: string, dependencies: object }', async () => {
+  it('readiness success: { status: string, version: object, dependencies: object }', async () => {
     const app = makeApp({
       postgres: async () => ({ status: 'up' }),
       redis: async () => ({ status: 'up' }),
@@ -92,6 +94,8 @@ describe('Response envelope contract — /api/health', () => {
     const { status, body } = await req(app, 'GET', '/api/health')
     expect(status).toBe(200)
     expect(typeof body.status).toBe('string')
+    expect(body.version).toBeDefined()
+    expect(typeof body.version).toBe('object')
     expect(body.dependencies).toBeDefined()
     expect(typeof body.dependencies).toBe('object')
   })

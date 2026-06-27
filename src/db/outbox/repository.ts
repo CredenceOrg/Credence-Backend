@@ -385,6 +385,19 @@ export class OutboxRepository {
     }
   }
 
+  async getOldestPendingEventLagSeconds(db: Queryable): Promise<number> {
+    const result = await db.query<{ lag_seconds: string | null }>(
+      `SELECT EXTRACT(EPOCH FROM (NOW() - MIN(created_at)))::text AS lag_seconds
+       FROM event_outbox
+       WHERE status IN ('pending', 'processing')`
+    )
+
+    const lagSeconds = result.rows[0]?.lag_seconds
+    return lagSeconds !== null && lagSeconds !== undefined
+      ? Number(lagSeconds)
+      : 0
+  }
+
   /**
    * Mark an event as successfully published.
    */

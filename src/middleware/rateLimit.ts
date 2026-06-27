@@ -16,6 +16,13 @@ export const rateLimitRejectedTotal = new client.Counter({
   registers: [register],
 })
 
+export const rateLimitHitsTotal = new client.Counter({
+  name: 'rate_limit_hits_total',
+  help: 'Total number of rate limit hits grouped by tenant and subscription tier',
+  labelNames: ['tenant', 'tier'],
+  registers: [register],
+})
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 export interface RateLimitConfig {
@@ -173,6 +180,7 @@ export function createRateLimitMiddleware(
 
       if (tenantCount > tierMax) {
         rateLimitRejectedTotal.inc({ tier, key_id: keyId ?? 'none', reason: 'tenant_limit' })
+        rateLimitHitsTotal.inc({ tenant: tenantId ?? 'unknown', tier })
         setRateLimitHeaders(res, { limit: tierMax, remaining: 0, reset: now + tenantTtl, retryAfter: tenantTtl })
         next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: tenantTtl, limit: tierMax, windowSec }))
         return
@@ -184,6 +192,7 @@ export function createRateLimitMiddleware(
 
         if (keyCount > keyMax) {
           rateLimitRejectedTotal.inc({ tier, key_id: keyId!, reason: 'key_limit' })
+          rateLimitHitsTotal.inc({ tenant: tenantId ?? 'unknown', tier })
           setRateLimitHeaders(res, { limit: keyMax, remaining: 0, reset: now + keyTtl, retryAfter: keyTtl })
           next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: keyTtl, limit: keyMax, windowSec }))
           return

@@ -139,6 +139,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The batch size exceeds the allowed maximum',
     category: 'validation',
   },
+  REQUEST_TOO_LARGE: {
+    code: 'request_too_large',
+    sdkClassName: 'RequestTooLargeCredenceError',
+    kind: 'api',
+    httpStatus: 413,
+    defaultMessage: 'The request body exceeds the maximum allowed size',
+    category: 'validation',
+  },
   UNAUTHORIZED: {
     code: 'unauthorized',
     sdkClassName: 'UnauthorizedCredenceError',

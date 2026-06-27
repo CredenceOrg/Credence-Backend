@@ -2,7 +2,7 @@
 
 To facilitate debugging in our distributed environment, every request is assigned a `Request ID` and a `Correlation ID`.
 
-- **X-Request-ID**: Unique to every single HTTP call to this service.
+- **X-Request-ID**: Unique identifier for the HTTP call. If provided in the incoming request headers, we preserve it. We also propagate it to downstream RPC calls (using Connect-RPC interceptors) and emit it automatically in every log line during the request lifecycle.
 - **X-Correlation-ID**: Persists across services. If an upstream service sends one, we propagate it.
 
 ## Log Format
@@ -310,6 +310,34 @@ DEBUG=redaction npm test -- redaction
 - **#390**: Allowlist-driven log redaction with schema lint rule
 - **#329**: Outbox Publisher Observability (metrics)
 - **#390**: ESLint plugin for logger schema validation (`require-schema-context` + `unvalidated-logger-call`)
+
+## Database Transaction Spans
+
+Every database transaction managed by `TransactionManager.withTransaction` creates an OpenTelemetry span named `db.tx` with the following attributes:
+
+| Attribute      | Type   | Description                                              |
+|----------------|--------|----------------------------------------------------------|
+| `op`           | string | Operation label (e.g. `"process_payment"`). Set via the `op` option in `TransactionOptions`. Omitted when not provided. |
+| `table_count`  | number | Number of unique SQL tables referenced inside the transaction body. Extracted from `FROM`, `INTO`, `UPDATE`, `TABLE`, and `JOIN` clauses. |
+
+### Example
+
+```typescript
+import { TransactionManager } from '../db/transaction.js'
+
+const txManager = new TransactionManager(pool)
+
+const result = await txManager.withTransaction(
+  async (client) => {
+    const { rows } = await client.query('SELECT * FROM users WHERE id = $1', [id])
+    return rows[0]
+  },
+  { op: 'fetch_user' }
+)
+// Resulting span: db.tx { op: "fetch_user", table_count: 1 }
+```
+
+The span is created via the `withSpan` utility and exported by the configured `SpanProcessor` (ConsoleSpanExporter in dev; OTLP in production).
 
 ## Outbox Publisher Observability (Issue #329)
 

@@ -14,7 +14,7 @@ export const requestIdMiddleware = (
   const correlationId = req.header('x-correlation-id') || randomUUID()
 
   // 2. Handle Request ID
-  const requestId = randomUUID()
+  const requestId = (req.header('x-request-id') as string) || randomUUID()
 
   // 3. Attach IDs to the request object
   req['correlationId'] = correlationId

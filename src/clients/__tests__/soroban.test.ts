@@ -480,7 +480,7 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           network: 'testnet',
           contractId: 'CTEST',
           retry: { maxAttempts: 1 },
-          circuitBreaker: { failureThreshold: 2, cooldownPeriodMs: 5000 },
+          circuitBreaker: { failureThreshold: 2, openWindowMs: 5000, halfOpenAfterMs: 10000 },
         },
         { fetchFn: fetchMock, sleepFn }
       )
@@ -522,7 +522,7 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           network: 'testnet',
           contractId: 'CTEST',
           retry: { maxAttempts: 1 },
-          circuitBreaker: { failureThreshold: 1, cooldownPeriodMs: 5000 },
+          circuitBreaker: { failureThreshold: 1, openWindowMs: 5000, halfOpenAfterMs: 10000 },
         },
         { fetchFn: fetchMock, sleepFn }
       )
@@ -538,7 +538,7 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
       vi.useRealTimers()
     })
 
-    it('probes and closes circuit breaker after cooldown', async () => {
+    it('probes and closes circuit breaker after halfOpenAfterMs (30 s default)', async () => {
       vi.useFakeTimers()
 
       const sleepFn = vi.fn((ms: number) => {
@@ -553,7 +553,7 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           new Response(
             JSON.stringify({
               jsonrpc: '2.0',
-              id: 'getIdentityState-1',
+              id: 'getContractData-1',
               result: { state: 'recovered' },
             }),
             { status: 200 }
@@ -566,16 +566,27 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           network: 'testnet',
           contractId: 'CTEST',
           retry: { maxAttempts: 1 },
-          circuitBreaker: { failureThreshold: 1, cooldownPeriodMs: 1000 },
+          circuitBreaker: { failureThreshold: 1, openWindowMs: 10_000, halfOpenAfterMs: 30_000 },
         },
         { fetchFn: fetchMock, sleepFn }
       )
 
       await expect(client.getIdentityState('GAAddress')).rejects.toThrow()
 
-      vi.advanceTimersByTime(1000)
+      // Requests rejected during the fail-fast window (< 10 s)
+      vi.advanceTimersByTime(5_000)
+      const duringOpenWindow = await client.getIdentityState('GAAddress2').catch((e) => e)
+      expect(duringOpenWindow.message).toContain('circuit breaker is OPEN')
 
-      const result = await client.getIdentityState('GAAddress2')
+      // Still OPEN between 10 s and 30 s
+      vi.advanceTimersByTime(15_000)   // now 20 s elapsed
+      const stillOpen = await client.getIdentityState('GAAddress3').catch((e) => e)
+      expect(stillOpen.message).toContain('circuit breaker is OPEN')
+
+      // At 30 s HALF_OPEN probe window opens
+      vi.advanceTimersByTime(10_000)   // now 30 s elapsed
+
+      const result = await client.getIdentityState('GAAddress4')
       expect(result).toEqual({ state: 'recovered' })
       expect(fetchMock).toHaveBeenCalledTimes(2)
 
@@ -601,14 +612,14 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           network: 'testnet',
           contractId: 'CTEST',
           retry: { maxAttempts: 1 },
-          circuitBreaker: { failureThreshold: 1, cooldownPeriodMs: 1000 },
+          circuitBreaker: { failureThreshold: 1, openWindowMs: 10_000, halfOpenAfterMs: 30_000 },
         },
         { fetchFn: fetchMock, sleepFn }
       )
 
       await expect(client.getIdentityState('GAAddress')).rejects.toThrow()
 
-      vi.advanceTimersByTime(1000)
+      vi.advanceTimersByTime(30_000)
 
       await expect(client.getIdentityState('GAAddress2')).rejects.toThrow()
 
@@ -645,14 +656,14 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           network: 'testnet',
           contractId: 'CTEST',
           retry: { maxAttempts: 1 },
-          circuitBreaker: { failureThreshold: 1, cooldownPeriodMs: 1000 },
+          circuitBreaker: { failureThreshold: 1, openWindowMs: 10_000, halfOpenAfterMs: 30_000 },
         },
         { fetchFn: fetchMock, sleepFn }
       )
 
       await expect(client.getIdentityState('GAAddress1')).rejects.toThrow()
 
-      vi.advanceTimersByTime(1000)
+      vi.advanceTimersByTime(30_000)
 
       const probe = client.getIdentityState('GAAddress2')
 
@@ -664,7 +675,7 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           new Response(
             JSON.stringify({
               jsonrpc: '2.0',
-              id: 'getIdentityState-1',
+              id: 'getContractData-1',
               result: { state: 'active' },
             }),
             { status: 200 }
@@ -707,41 +718,43 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
           },
           circuitBreaker: {
             failureThreshold: 2,
-            cooldownPeriodMs: 10000,
+            openWindowMs: 10_000,
+            halfOpenAfterMs: 30_000,
           },
         },
         { fetchFn: fetchMock, sleepFn }
       )
 
+      // First call: 2 retry attempts → 1st circuit breaker failure
       await expect(client.getIdentityState('GAAddress1')).rejects.toThrow(
         SorobanClientError
       )
-
       expect(fetchMock).toHaveBeenCalledTimes(2)
       expect(sleepFn).toHaveBeenCalledTimes(1)
 
       fetchMock.mockClear()
 
+      // Second call: 2 retry attempts → 2nd circuit breaker failure → OPEN
       await expect(client.getIdentityState('GAAddress2')).rejects.toThrow(
         SorobanClientError
       )
-
       expect(fetchMock).toHaveBeenCalledTimes(2)
 
       fetchMock.mockClear()
 
-      const breaker = await client.getIdentityState('GAAddress3').catch((e) => e)
-      expect(breaker.message).toContain('circuit breaker is OPEN')
-
+      // Third call: breaker OPEN → fail-fast, no network
+      const breakerErr = await client.getIdentityState('GAAddress3').catch((e) => e)
+      expect(breakerErr.message).toContain('circuit breaker is OPEN')
       expect(fetchMock).not.toHaveBeenCalled()
 
-      vi.advanceTimersByTime(10000)
+      // Advance 30 s → HALF_OPEN probe window
+      vi.advanceTimersByTime(30_000)
 
       fetchMock.mockResolvedValueOnce(
         new Response(
           JSON.stringify({
             jsonrpc: '2.0',
-            id: 'getIdentityState-1',
+            id: 'getContractData-1',
             result: { state: 'recovered' },
           }),
           { status: 200 }

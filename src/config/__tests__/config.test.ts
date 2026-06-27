@@ -61,7 +61,7 @@ describe('validateConfig – valid environments', () => {
   })
 
   it('supports production NODE_ENV', () => {
-    const config = validateConfig(validEnv({ NODE_ENV: 'production' }))
+    const config = validateConfig(validEnv({ NODE_ENV: 'production', CORS_ORIGIN: 'https://app.credence.io' }))
     expect(config.nodeEnv).toBe('production')
   })
 
@@ -248,6 +248,12 @@ describe('validateConfig – invalid values', () => {
   it('rejects invalid HORIZON_URL when provided', () => {
     expect(() =>
       validateConfig(validEnv({ HORIZON_URL: 'not-a-url' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects wildcard CORS origin (*) when NODE_ENV is production', () => {
+    expect(() =>
+      validateConfig(validEnv({ NODE_ENV: 'production', CORS_ORIGIN: '*' })),
     ).toThrow(ConfigValidationError)
   })
 })

@@ -116,8 +116,26 @@ export function subscribeBondCreationEvents(
       });
   };
 
+  const initAndStart = async () => {
+    if (cursorRepo) {
+      try {
+        const savedCursor = await cursorRepo.findByStreamName(STREAM_NAME);
+        if (savedCursor) {
+          cursor = savedCursor.pagingToken;
+          console.log(`[${STREAM_NAME}] Resuming from saved cursor: ${cursor}`);
+        } else {
+          console.log(`[${STREAM_NAME}] No saved cursor found, starting from: ${cursor}`);
+        }
+      } catch (err) {
+        console.error(`[${STREAM_NAME}] Failed to load saved cursor, falling back to: ${cursor}`, err);
+      }
+    }
+    startStream();
+  };
+
   // Start exactly ONE stream
-  startStream();
+  initAndStart();
+
 
   return {
     stop: () => {
