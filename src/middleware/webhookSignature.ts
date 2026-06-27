@@ -16,6 +16,10 @@ export interface WebhookSignatureOptions {
    * If omitted: string body is used as-is, otherwise JSON.stringify(req.body).
    */
   getBody?: (req: Request) => string
+  /**
+   * Replay window tolerance in milliseconds (default: 300000).
+   */
+  tolerance?: number
 }
 
 function unauthorized(res: Response): void {
@@ -48,7 +52,9 @@ export function verifyWebhookSignature(options: WebhookSignatureOptions) {
       const rawSignature = extractHeader(req, signatureHeader)
       const body = getBody(req)
 
-      const result = verifySignature(rawSignature, body, secret)
+      const result = verifySignature(rawSignature, body, secret, undefined, {
+        tolerance: options.tolerance,
+      })
 
       if (!result.ok) {
         unauthorized(res)

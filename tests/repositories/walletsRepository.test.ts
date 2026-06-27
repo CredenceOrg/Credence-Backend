@@ -104,6 +104,23 @@ function makeMockPool(walletStore: Map<string, MockWalletRow>): Pool {
           return { rows: [updated], rowCount: 1 };
         }
 
+        // INSERT INTO wallet_transactions — upstream ledger recording added in the same tx
+        if (/INSERT INTO wallet_transactions/i.test(sql)) {
+          const [walletId, type, amount, previousBalance, newBalance] = values as string[];
+          return {
+            rows: [{
+              id: crypto.randomUUID(),
+              wallet_id: walletId,
+              type,
+              amount,
+              previous_balance: previousBalance,
+              new_balance: newBalance,
+              created_at: new Date(),
+            }],
+            rowCount: 1,
+          };
+        }
+
         return { rows: [], rowCount: 0 };
       },
     );

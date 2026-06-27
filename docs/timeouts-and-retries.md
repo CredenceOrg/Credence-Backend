@@ -171,6 +171,59 @@ OUTBOUND_RETRY_SOROBAN_MAX_DELAY_MS=5000
 
 ---
 
+## Downstream Error Classification
+
+Before the retry policy decides *how long* to wait, the **downstream error classifier** (`src/utils/retryClassifier.ts`) decides *whether* an error is retriable and *what kind* of failure it was. It surfaces a single typed value so callers branch on a stable `class` instead of inspecting raw error internals (syscall codes, undici wrappers, JSON-RPC envelopes).
+
+### Error classes
+
+| Class | Meaning | Retriable by default |
+|-------|---------|----------------------|
+| `TIMEOUT_ERROR` | Request exceeded its deadline — AbortController abort or an OS socket timeout (`ETIMEDOUT`, `ESOCKETTIMEDOUT`, `ECONNABORTED`). | Yes |
+| `NETWORK_ERROR` | Connection-level transport failure — reset (`ECONNRESET`/`EPIPE`), refused (`ECONNREFUSED`), or a generic undici `fetch failed`. The request never got a usable response. | Yes |
+| `RPC_ERROR` | Transport succeeded but the downstream returned a JSON-RPC error object. | Only for transient RPC codes (see below) |
+
+`TIMEOUT_ERROR` is kept distinct from `NETWORK_ERROR` because the operator remedy differs: a timeout usually means *raise the budget or the upstream is slow*, while a network error means *the endpoint is unreachable*. Timeout is resolved before generic network, so an abort wrapped as a reset is still surfaced as `TIMEOUT_ERROR`.
+
+### Retriable RPC codes
+
+The set of transient JSON-RPC codes lives in a single constant, `RETRYABLE_RPC_ERROR_CODES`, and is reused everywhere (e.g. `SorobanClient.isRetryable`) so the list is never duplicated as inline magic numbers:
+
+| Code | Meaning |
+|------|---------|
+| `-32004` | Resource not yet available (e.g. Soroban "transaction not found" while the ledger catches up). |
+| `-32005` | Try again later (transient backend unavailability). |
+
+Any other RPC code classifies as `RPC_ERROR` with `retryable: false`.
+
+### Usage
+
+```typescript
+import { classifyDownstreamError } from 'src/utils/retryClassifier.js'
+
+try {
+  return await callDownstream()
+} catch (err) {
+  const classified = classifyDownstreamError(err)
+  if (classified === null) throw err // not a recognised downstream failure
+
+  switch (classified.class) {
+    case 'TIMEOUT_ERROR':
+    case 'NETWORK_ERROR':
+      // always retriable transport failures
+      break
+    case 'RPC_ERROR':
+      if (!classified.retryable) throw err // permanent RPC error (e.g. invalid params)
+      break
+  }
+  // classified.retryable carries the decision; feed the attempt into the retry policy above
+}
+```
+
+`classifyDownstreamError` returns `null` for values that are not recognised downstream failures (programming errors, parse failures), leaving the caller to surface them rather than forcing them into a transport bucket.
+
+---
+
 ## Timeout Executor Wrappers
 
 The timeout executor (`src/lib/timeoutExecutor.ts`) wraps all service calls with consistent timeout handling:

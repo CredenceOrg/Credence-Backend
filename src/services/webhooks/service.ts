@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig, DlqStore } from './types.js'
+import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig, DlqStore, WebhookEmitOptions } from './types.js'
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
 import { type AuditLogService, AuditAction } from '../audit/index.js'
 import { buildDlqEntry } from './dlq.js'
@@ -22,7 +22,7 @@ export class WebhookService {
    * Rotate a webhook's signing secret.
    * Moves current secret to previousSecret and generates a new one.
    */
-  async rotateSecret(id: string, admin?: { id: string, email: string, tenantId: string }): Promise<WebhookConfig> {
+  async rotateSecret(id: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookConfig> {
     const webhook = await this.store.get(id)
     if (!webhook) {
       throw new Error('Webhook not found')
@@ -43,7 +43,11 @@ export class WebhookService {
         AuditAction.ROTATE_WEBHOOK_SECRET,
         id,
         webhook.url,
-        { rotatedAt: webhook.secretUpdatedAt }
+        { rotatedAt: webhook.secretUpdatedAt },
+        undefined,
+        undefined,
+        undefined,
+        requestId
       )
     }
 
@@ -53,7 +57,7 @@ export class WebhookService {
   /**
    * Revoke the previous secret for a webhook.
    */
-  async revokePreviousSecret(id: string, admin?: { id: string, email: string, tenantId: string }): Promise<WebhookConfig> {
+  async revokePreviousSecret(id: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookConfig> {
     const webhook = await this.store.get(id)
     if (!webhook) {
       throw new Error('Webhook not found')
@@ -69,7 +73,12 @@ export class WebhookService {
         admin.email,
         AuditAction.REVOKE_WEBHOOK_SECRET,
         id,
-        webhook.url
+        webhook.url,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        requestId
       )
     }
 
@@ -81,7 +90,7 @@ export class WebhookService {
    * Deliveries are queued and rate-limited per webhook.
    * Permanently failed deliveries are routed to the DLQ if one is configured.
    */
-  async emit(event: WebhookEventType, data: WebhookPayload['data']): Promise<(WebhookDeliveryResult | WebhookDeliveryResult[])[]> {
+  async emit(event: WebhookEventType, data: WebhookPayload['data'], options: WebhookEmitOptions = {}): Promise<(WebhookDeliveryResult | WebhookDeliveryResult[])[]> {
     const webhooks = await this.store.getByEvent(event)
     const activeWebhooks = webhooks.filter(w => w.active)
 
@@ -97,7 +106,12 @@ export class WebhookService {
 
     const rawResults = await Promise.all(
       activeWebhooks.map(webhook => this.deliverWithRateLimit(webhook.id, () =>
-        deliverWebhook(webhook, payload, { ...this.deliveryOptions, returnAllChunks: true })
+        deliverWebhook(webhook, payload, {
+          ...this.deliveryOptions,
+          returnAllChunks: true,
+          eventId: options.eventId,
+          idempotencyStore: this.store,
+        })
       ))
     )
 

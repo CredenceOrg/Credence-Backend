@@ -20,6 +20,7 @@
 // The type import below uses a conditional so that this file compiles even
 // before code generation has been executed.
 import type { Interceptor } from '@connectrpc/connect'
+import { tracingContext } from '../../utils/logger.js'
 
 /**
  * INTERNAL_TOKEN_HEADER is the metadata key used to authenticate internal
@@ -55,11 +56,13 @@ export function createSharedSecretInterceptor(secret: string): Interceptor {
  * calls, enabling end-to-end distributed tracing.
  *
  * Pass the requestId string obtained from the Express requestIdMiddleware.
+ * If not provided, it falls back to the tracingContext store.
  */
-export function createRequestIdInterceptor(requestId: string): Interceptor {
+export function createRequestIdInterceptor(requestId?: string): Interceptor {
   return (next) => (req) => {
-    if (requestId) {
-      req.header.set('x-request-id', requestId)
+    const id = requestId || tracingContext.getStore()?.get('requestId')
+    if (id) {
+      req.header.set('x-request-id', id)
     }
     return next(req)
   }

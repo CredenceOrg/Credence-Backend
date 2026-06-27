@@ -9,7 +9,9 @@ CREATE TABLE IF NOT EXISTS audit_logs (
 	details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
 	status TEXT NOT NULL CHECK (status IN ('success', 'failure')),
 	ip_address TEXT,
-	error_message TEXT
+	error_message TEXT,
+	tenant_id TEXT,
+	request_id TEXT
 );
 
 CREATE INDEX IF NOT EXISTS audit_logs_actor_time_idx

@@ -18,6 +18,7 @@ groups:
           description: "Error rate is {{ $value | humanizePercentage }} (SLO: 99.9% success)"
           runbook_url: "https://docs.credence.org/runbooks/slo-violations#success-rate"
 
+      # Burn Rate Alert (burn rate > 2)
       # Fast Burn Alert (1h budget consumed in 2m)
       # SEV1 - Critical budget burn: immediate escalation
       - alert: ErrorBudgetBurnRateHigh
@@ -25,7 +26,7 @@ groups:
           (
             sum(rate(http_requests_status_total{status_class="5xx"}[1h])) 
             / sum(rate(http_requests_status_total[1h]))
-          ) > (14.4 * 0.001)
+          ) / 0.001 > 2
         for: 2m
         labels:
           severity: SEV1
@@ -33,6 +34,7 @@ groups:
           team: platform
         annotations:
           summary: "High Error Budget Burn Rate"
+          description: "Current burn rate is {{ $value }}x the allowed error rate (threshold: 2x)"
           description: "Current burn rate is 14.4x the allowed error rate (0.1%)"
           runbook_url: "https://docs.credence.org/runbooks/budget-burn#fast-burn"
 

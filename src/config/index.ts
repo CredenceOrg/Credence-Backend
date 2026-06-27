@@ -329,11 +329,44 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
-  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+  /**
+   * How long (ms) the breaker stays OPEN and rejects all requests immediately
+   * after tripping. Default: 10 000 ms (10 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS: z
     .string()
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  /**
+   * How long (ms) after the breaker trips before a probe is allowed.
+   * Must be ≥ SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS. Default: 30 000 ms (30 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS: z
+    .string()
+    .default('30000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  /**
+   * @deprecated Use SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS instead.
+   * Kept for backwards compatibility; maps to halfOpenAfterMs when the new
+   * variable is not set.
+   */
+  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : undefined))
+    .pipe(z.number().int().min(1000).optional()),
+  /**
+   * Short-TTL read-through cache for getIdentityState() responses.
+   * Set to 0 to disable caching entirely.
+   * Default: 5000 ms (5 seconds).
+   */
+  SOROBAN_STATE_CACHE_TTL_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
 
   // Audit log export
   AUDIT_EXPORT_MAX_WINDOW_DAYS: z
@@ -348,6 +381,9 @@ export const envSchema = z.object({
     .default('10')
     .transform(Number)
     .pipe(z.number().int().min(0).max(1000)),
+
+  // Metrics endpoint CIDR whitelist (comma-separated IPv4 CIDRs)
+  METRICS_ALLOWED_CIDRS: z.string().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -456,7 +492,20 @@ export interface Config {
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
-    cooldownPeriodMs: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs: number
+  }
+  sorobanStateCache: {
+    /** TTL in milliseconds. 0 = disabled. */
+    ttlMs: number
   }
   auditLog: {
     exportMaxWindowDays: number
@@ -468,6 +517,7 @@ export interface Config {
   credits: {
     defaultMonthly: number
   }
+  metricsAllowedCidrs: string[] | undefined
 }
 
 function parseCostWeights(raw: string): Record<string, number> {
@@ -634,7 +684,15 @@ function mapEnvToConfig(env: Env): Config {
     },
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-      cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+      openWindowMs: env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+      // Prefer the explicit HALF_OPEN_AFTER_MS; fall back to deprecated COOLDOWN_MS.
+      halfOpenAfterMs:
+        env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS ??
+        env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS ??
+        30_000,
+    },
+    sorobanStateCache: {
+      ttlMs: env.SOROBAN_STATE_CACHE_TTL_MS,
     },
     auditLog: {
       exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
@@ -646,6 +704,9 @@ function mapEnvToConfig(env: Env): Config {
     credits: {
       defaultMonthly: env.DEFAULT_MONTHLY_CREDITS,
     },
+    metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
+      ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined,
   }
 
   if (env.HORIZON_URL) {

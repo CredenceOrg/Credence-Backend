@@ -35,6 +35,11 @@ export enum AuditAction {
   POLICY_RULE_DELETED = 'POLICY_RULE_DELETED',
   ROTATE_WEBHOOK_SECRET = 'ROTATE_WEBHOOK_SECRET',
   REVOKE_WEBHOOK_SECRET = 'REVOKE_WEBHOOK_SECRET',
+  LIST_FAILED_EVENTS = 'LIST_FAILED_EVENTS',
+  REPLAY_EVENT = 'REPLAY_EVENT',
+  REPLAY_REQUEST = 'REPLAY_REQUEST',
+  LIST_OUTBOX_QUARANTINE = 'LIST_OUTBOX_QUARANTINE',
+  OUTBOX_REINJECT = 'OUTBOX_REINJECT',
 }
 
 export type AuditStatus = 'success' | 'failure'
@@ -50,6 +55,7 @@ export interface AuditLogInput {
   ipAddress?: string
   errorMessage?: string
   tenantId: string
+  requestId?: string
 }
 
 export interface AuditLogFilters {
@@ -84,6 +90,7 @@ export interface AuditLogEntry {
   ipAddress?: string
   status: AuditStatus
   errorMessage?: string
+  requestId?: string
   tenantId: string
   /** Sequence number for deterministic chain ordering */
   seq?: number

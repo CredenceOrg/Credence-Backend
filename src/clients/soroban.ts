@@ -11,15 +11,21 @@ import {
 } from "../lib/timeoutExecutor.js";
 import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.js";
 import { normalizeTransportError, isAbortError } from "./httpErrors.js";
-import { classifyTransportError } from "../utils/retryClassifier.js";
+import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
 import {
   noopRetryObserver,
   type RetryObserver,
 } from "../observability/retryMetrics.js";
+import { recordDownstreamRpcLatency } from "../observability/rpcLatencyMetrics.js";
 import { resolveTimeout, createTimeoutConfig } from "../lib/timeouts.js";
 import { validateConfig } from "../config/index.js";
 import { getCircuitBreaker } from "./circuitBreaker.js";
+import {
+  SorobanStateCache,
+  createSorobanStateCache,
+  type SorobanStateCacheOptions,
+} from "./sorobanStateCache.js";
 
 export type SorobanNetwork = "testnet" | "mainnet";
 
@@ -33,9 +39,30 @@ export interface SorobanClientConfig {
   retry?: Partial<RetryOptions>;
   retryPolicies?: ProviderRetryPolicies;
   circuitBreaker?: {
-    failureThreshold?: number;
-    cooldownPeriodMs?: number;
-  };
+    failureThreshold?: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs?: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs?: number
+    /**
+     * @deprecated Use `halfOpenAfterMs` instead.
+     * Accepted for backwards compatibility; maps to `halfOpenAfterMs` when
+     * the new field is absent.
+     */
+    cooldownPeriodMs?: number
+  }
+  /**
+   * TTL in milliseconds for the getIdentityState() read-through cache.
+   * Set to 0 to disable caching. When omitted the value is read from
+   * SOROBAN_STATE_CACHE_TTL_MS in the environment (default: 5000 ms).
+   */
+  cacheTtlMs?: number;
 }
 
 export interface ContractEvent {
@@ -68,6 +95,8 @@ export interface SorobanClientDependencies {
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
   retryObserver?: RetryObserver;
+  /** Override the identity-state cache (useful in tests). */
+  stateCache?: SorobanStateCache;
 }
 
 export class SorobanClientError extends Error {
@@ -132,8 +161,10 @@ export class SorobanClient {
   );
   private readonly circuitBreakerConfig: {
     failureThreshold: number;
-    cooldownPeriodMs: number;
+    openWindowMs: number;
+    halfOpenAfterMs: number;
   };
+  private readonly stateCache: SorobanStateCache;
 
   constructor(
     config: SorobanClientConfig,
@@ -160,35 +191,66 @@ export class SorobanClient {
     this.retryObserver = deps.retryObserver ?? noopRetryObserver;
 
     let defaultFailureThreshold = 5;
-    let defaultCooldownMs = 10000;
+    let defaultOpenWindowMs = 10_000;
+    let defaultHalfOpenAfterMs = 30_000;
+    let defaultCacheTtlMs = 5000;
     try {
       const globalConfig = validateConfig(process.env);
       defaultFailureThreshold =
         globalConfig.sorobanCircuitBreaker.failureThreshold;
-      defaultCooldownMs = globalConfig.sorobanCircuitBreaker.cooldownPeriodMs;
+      defaultOpenWindowMs = globalConfig.sorobanCircuitBreaker.openWindowMs;
+      defaultHalfOpenAfterMs =
+        globalConfig.sorobanCircuitBreaker.halfOpenAfterMs;
+      defaultCacheTtlMs = globalConfig.sorobanStateCache.ttlMs;
     } catch {
       if (process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
         defaultFailureThreshold = Number(
           process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         );
       }
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
-        defaultCooldownMs = Number(
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS) {
+        defaultOpenWindowMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+        );
+      }
+      // Prefer the new var; fall back to deprecated COOLDOWN_MS.
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS) {
+        defaultHalfOpenAfterMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
+        );
+      } else if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
+        defaultHalfOpenAfterMs = Number(
           process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
         );
+      }
+      if (process.env.SOROBAN_STATE_CACHE_TTL_MS) {
+        defaultCacheTtlMs = Number(process.env.SOROBAN_STATE_CACHE_TTL_MS);
       }
     }
 
     this.circuitBreakerConfig = {
       failureThreshold:
         config.circuitBreaker?.failureThreshold ?? defaultFailureThreshold,
-      cooldownPeriodMs:
-        config.circuitBreaker?.cooldownPeriodMs ?? defaultCooldownMs,
+      openWindowMs:
+        config.circuitBreaker?.openWindowMs ?? defaultOpenWindowMs,
+      halfOpenAfterMs:
+        config.circuitBreaker?.halfOpenAfterMs ??
+        config.circuitBreaker?.cooldownPeriodMs ??
+        defaultHalfOpenAfterMs,
     };
+
+    // Allow per-instance override via config.cacheTtlMs; fall back to env default.
+    const cacheTtlMs = config.cacheTtlMs ?? defaultCacheTtlMs;
+    this.stateCache =
+      deps.stateCache ?? createSorobanStateCache(cacheTtlMs);
   }
 
   /**
    * Fetches the current identity state for an address from the configured contract.
+   *
+   * Results are cached in a short-TTL read-through cache (L1 LRU + L2 Redis).
+   * Cache hits bypass the circuit breaker entirely — the breaker only gates
+   * live RPC calls. TTL is controlled by SOROBAN_STATE_CACHE_TTL_MS (0 = off).
    */
   async getIdentityState(address: string): Promise<unknown> {
     if (!address?.trim()) {
@@ -198,11 +260,29 @@ export class SorobanClient {
       });
     }
 
-    return this.callRpc<unknown>("getContractData", {
+    // ── Cache read (never blocked by the circuit breaker) ──────────────────
+    const cached = await this.stateCache.get(
+      this.network,
+      this.contractId,
+      address,
+    );
+    if (cached !== null) {
+      return cached;
+    }
+
+    // ── Cache miss: go through the circuit breaker + retry stack ───────────
+    const result = await this.callRpc<unknown>("getContractData", {
       contractId: this.contractId,
       network: this.network,
       key: { type: "identity", address },
     });
+
+    // Only cache successful (non-null) responses.
+    if (result !== null && result !== undefined) {
+      await this.stateCache.set(this.network, this.contractId, address, result);
+    }
+
+    return result;
   }
 
   /**
@@ -265,6 +345,21 @@ export class SorobanClient {
 
     const breaker = getCircuitBreaker(host, this.circuitBreakerConfig);
 
+    // Measure the full downstream RPC latency (including retries and any time
+    // spent gated by the circuit breaker), labelled by provider and op.
+    const callStartMs = Date.now();
+    try {
+      return await this.executeWithRetries<T>(breaker, method, params);
+    } finally {
+      recordDownstreamRpcLatency("soroban", method, Date.now() - callStartMs);
+    }
+  }
+
+  private executeWithRetries<T>(
+    breaker: ReturnType<typeof getCircuitBreaker>,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> {
     return breaker.execute(async () => {
       let attempt = 0;
       let lastError: SorobanClientError | null = null;
@@ -489,7 +584,7 @@ export class SorobanClient {
     }
 
     if (error.code === "RPC_ERROR") {
-      return error.rpcCode === -32004 || error.rpcCode === -32005;
+      return isRetryableRpcCode(error.rpcCode);
     }
 
     return false;

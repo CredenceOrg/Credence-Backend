@@ -1,4 +1,5 @@
 import type { DependencyHealth, HealthProbe } from './types.js'
+import { getVersionMetadata } from '../../utils/version.js'
 
 const SERVICE_NAME = 'credence-backend'
 
@@ -20,6 +21,7 @@ export async function runHealthChecks(probes: {
 }): Promise<{
   status: 'ok' | 'degraded' | 'unhealthy'
   service: string
+  version: ReturnType<typeof getVersionMetadata>
   dependencies: {
     postgres: DependencyHealth
     redis: DependencyHealth
@@ -56,5 +58,5 @@ export async function runHealthChecks(probes: {
     status = 'ok'
   }
 
-  return { status, service: SERVICE_NAME, dependencies: deps }
+  return { status, service: SERVICE_NAME, version: getVersionMetadata(), dependencies: deps }
 }

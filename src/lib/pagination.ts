@@ -1,3 +1,6 @@
+import { createHmac } from 'crypto'
+import { loadConfig } from '../config/index.js'
+
 export const DEFAULT_PAGE = 1
 export const DEFAULT_LIMIT = 20
 export const MAX_LIMIT = 100
@@ -123,7 +126,19 @@ export function parsePaginationParams(
     typeof query.cursor === 'string' && query.cursor.trim() !== ''
       ? query.cursor
       : null
-  const decodedCursor = rawCursor ? decodeCursor(rawCursor) : undefined
+
+  let decodedCursor: DecodedCursor | undefined
+  if (rawCursor) {
+    try {
+      decodedCursor = decodeCursor(rawCursor) ?? undefined
+    } catch (error) {
+      if (error instanceof PaginationValidationError) {
+        errors.push(...error.details)
+      } else {
+        throw error
+      }
+    }
+  }
 
   // Backwards compatibility: allow client to pass offset via ?cursor=10
   // But ONLY if it parses as an integer and is NOT a valid encoded cursor
@@ -214,17 +229,35 @@ export function buildCursorPaginationMeta(
 
 export function encodeCursor(timestamp: string | Date, id: string): string {
   const t = timestamp instanceof Date ? timestamp.toISOString() : timestamp
-  return Buffer.from(JSON.stringify({ t, i: id }), 'utf8').toString('base64url')
+  const payload = JSON.stringify({ t, i: id })
+  const secret = loadConfig().jwt.secret
+  const h = createHmac('sha256', secret).update(payload).digest('hex')
+  return Buffer.from(JSON.stringify({ t, i: id, h }), 'utf8').toString('base64url')
 }
 
 export function decodeCursor(cursor: string): DecodedCursor | null {
   try {
-    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<DecodedCursor>
+    const parsed = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')) as Partial<DecodedCursor & { h: string }>
     if (typeof parsed.t !== 'string' || typeof parsed.i !== 'string') {
       return null
     }
+
+    if (typeof parsed.h !== 'string') {
+      throw new PaginationValidationError([{ path: 'cursor', message: 'Cursor signature missing' }])
+    }
+
+    const payload = JSON.stringify({ t: parsed.t, i: parsed.i })
+    const secret = loadConfig().jwt.secret
+    const expected = createHmac('sha256', secret).update(payload).digest('hex')
+    if (parsed.h !== expected) {
+      throw new PaginationValidationError([{ path: 'cursor', message: 'Cursor has been tampered with' }])
+    }
+
     return { t: parsed.t, i: parsed.i }
-  } catch {
+  } catch (error) {
+    if (error instanceof PaginationValidationError) {
+      throw error
+    }
     return null
   }
 }

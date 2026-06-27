@@ -36,7 +36,8 @@ export class AdminService {
     adminId: string,
     adminEmail: string,
     pagination: PaginationOptions = {},
-    filters?: { role?: UserRole; active?: boolean }
+    filters?: { role?: UserRole; active?: boolean },
+    requestId?: string
   ): Promise<ListUsersResponse> {
     const page = pagination.page ?? 1
     const limit = pagination.limit ?? 50
@@ -49,7 +50,7 @@ export class AdminService {
       limit,
       offset,
       filters,
-    })
+    }, undefined, undefined, undefined, requestId)
 
     // Get all users
     const users = userRepo.list().map((user) => this.formatUser(user))
@@ -89,7 +90,8 @@ export class AdminService {
   async assignRole(
     adminId: string,
     adminEmail: string,
-    request: AssignRoleRequest
+    request: AssignRoleRequest,
+    requestId?: string
   ): Promise<AssignRoleResponse> {
     const { userId, role } = request
 
@@ -107,7 +109,9 @@ export class AdminService {
         undefined,
         { requestedRole: role },
         'failure',
-        `Invalid role: ${role}`
+        `Invalid role: ${role}`,
+        undefined,
+        requestId
       )
       throw new Error(`Invalid role: ${role}`)
     }
@@ -123,7 +127,9 @@ export class AdminService {
         undefined,
         { requestedRole: role },
         'failure',
-        'User not found'
+        'User not found',
+        undefined,
+        requestId
       )
       throw new Error(`User not found: ${userId}`)
     }
@@ -141,7 +147,10 @@ export class AdminService {
       userId,
       updated.email,
       { oldRole, newRole: role, targetUserEmail: updated.email },
-      'success'
+      'success',
+      undefined,
+      undefined,
+      requestId
     )
 
     return {
@@ -163,7 +172,8 @@ export class AdminService {
   async revokeApiKey(
     adminId: string,
     adminEmail: string,
-    request: RevokeApiKeyRequest
+    request: RevokeApiKeyRequest,
+    requestId?: string
   ): Promise<RevokeApiKeyResponse> {
     const { userId, apiKey } = request
 
@@ -180,7 +190,9 @@ export class AdminService {
         undefined,
         { revokedKey: apiKey },
         'failure',
-        'User not found'
+        'User not found',
+        undefined,
+        requestId
       )
       throw new Error(`User not found: ${userId}`)
     }
@@ -198,7 +210,9 @@ export class AdminService {
         user.email,
         { revokedKey: apiKey, targetUserEmail: user.email },
         'failure',
-        'API key does not belong to this user'
+        'API key does not belong to this user',
+        undefined,
+        requestId
       )
       throw new Error('API key does not belong to this user')
     }
@@ -216,7 +230,10 @@ export class AdminService {
       userId,
       user.email,
       { revokedKey: apiKey, targetUserEmail: user.email },
-      'success'
+      'success',
+      undefined,
+      undefined,
+      requestId
     )
 
     return {
@@ -275,7 +292,8 @@ export class AdminService {
     adminEmail: string,
     startDate: Date,
     endDate: Date,
-    user: AuthenticatedRequest['user']
+    user: AuthenticatedRequest['user'],
+    requestId?: string
   ) {
     const tenantId = user?.tenantId || 'tenant-admin'
 
@@ -284,7 +302,7 @@ export class AdminService {
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
       phase: 'initiation',
-    })
+    }, undefined, undefined, undefined, requestId)
 
     const options: { allowSuperScope?: boolean } = {}
     if (user?.role === UserRole.SUPER_ADMIN) {

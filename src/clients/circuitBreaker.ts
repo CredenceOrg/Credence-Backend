@@ -1,11 +1,52 @@
 import { SorobanClientError } from './soroban.js'
 import client from 'prom-client'
+import {
+  CIRCUIT_BREAKER_DEFAULTS,
+  CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+  CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+} from '../config/sorobanConstants.js'
 
 export type BreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN'
 
+/**
+ * Configuration for the Soroban RPC circuit breaker.
+ *
+ * The breaker operates with two independent time windows:
+ *
+ * - `openWindowMs`: how long the breaker stays OPEN after tripping, during
+ *   which all requests are rejected immediately (fail-fast) without touching
+ *   the network. Default: {@link CIRCUIT_BREAKER_OPEN_WINDOW_MS} (10 000 ms).
+ *
+ * - `halfOpenAfterMs`: how long after the breaker trips before a single probe
+ *   request is allowed through. Must be ≥ `openWindowMs`. Default:
+ *   {@link CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS} (30 000 ms).
+ *
+ * Timeline after tripping:
+ *   0 s ──── OPEN (fail-fast) ──── 10 s ──── still OPEN ──── 30 s ──→ HALF_OPEN (probe)
+ *
+ * @deprecated `cooldownPeriodMs` is accepted for backwards compatibility and
+ *   maps to `halfOpenAfterMs` when the new field is absent. Prefer the
+ *   explicit fields in new code.
+ */
 export interface CircuitBreakerConfig {
   failureThreshold: number
-  cooldownPeriodMs: number
+  /**
+   * Duration in milliseconds that the breaker stays OPEN and rejects all
+   * requests immediately (fail-fast). Default: {@link CIRCUIT_BREAKER_OPEN_WINDOW_MS}.
+   */
+  openWindowMs?: number
+  /**
+   * Duration in milliseconds after tripping before the first probe request is
+   * allowed. Must be ≥ `openWindowMs`. Default: {@link CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS}.
+   */
+  halfOpenAfterMs?: number
+  /**
+   * @deprecated Use `halfOpenAfterMs` instead.
+   * Accepted for backwards compatibility; maps to `halfOpenAfterMs` when the
+   * new field is not provided.
+   */
+  cooldownPeriodMs?: number
 }
 
 // Prometheus Gauge for the circuit state per host
@@ -27,17 +68,35 @@ export class CircuitBreaker {
   private state: BreakerState = 'CLOSED'
   private failureCount = 0
   private openedAt = 0
-  private activeProbes = 0 // Count active concurrent probes in HALF_OPEN state
+  private activeProbes = 0
+
+  private readonly failureThreshold: number
+  /** Duration for which the OPEN state rejects all requests immediately. */
+  private readonly openWindowMs: number
+  /** Elapsed time after tripping before a probe is attempted. */
+  private readonly halfOpenAfterMs: number
 
   constructor(
     public readonly host: string,
-    private readonly config: CircuitBreakerConfig
+    config: CircuitBreakerConfig,
   ) {
+    this.failureThreshold = config.failureThreshold
+
+    // Backwards-compat: cooldownPeriodMs → halfOpenAfterMs
+    const resolvedHalfOpen =
+      config.halfOpenAfterMs ??
+      config.cooldownPeriodMs ??
+      CIRCUIT_BREAKER_DEFAULTS.halfOpenAfterMs
+
+    this.openWindowMs = config.openWindowMs ?? CIRCUIT_BREAKER_DEFAULTS.openWindowMs
+    // Clamp: halfOpenAfterMs must be at least as long as the open window.
+    this.halfOpenAfterMs = Math.max(resolvedHalfOpen, this.openWindowMs)
+
     this.updateMetrics()
   }
 
   public getState(): BreakerState {
-    this.checkCooldown()
+    this.checkTimers()
     return this.state
   }
 
@@ -45,13 +104,31 @@ export class CircuitBreaker {
     return this.failureCount
   }
 
-  private checkCooldown(): void {
+  /**
+   * Checks elapsed time since the breaker tripped and transitions to
+   * HALF_OPEN once `halfOpenAfterMs` has passed.
+   *
+   * Timeline:
+   *   [0, halfOpenAfterMs) → stay OPEN
+   *   [halfOpenAfterMs, ∞) → transition to HALF_OPEN
+   */
+  private checkTimers(): void {
     if (this.state === 'OPEN') {
-      const now = Date.now()
-      if (now - this.openedAt >= this.config.cooldownPeriodMs) {
+      const elapsed = Date.now() - this.openedAt
+      if (elapsed >= this.halfOpenAfterMs) {
         this.transitionTo('HALF_OPEN')
       }
     }
+  }
+
+  /**
+   * Returns true once the initial fail-fast window (`openWindowMs`) has
+   * elapsed but the breaker is still OPEN (waiting for the probe window).
+   * Useful for surfacing a more descriptive message in logs/metrics.
+   */
+  public isOpenWindowExpired(): boolean {
+    if (this.state !== 'OPEN') return false
+    return Date.now() - this.openedAt >= this.openWindowMs
   }
 
   public transitionTo(newState: BreakerState): void {
@@ -72,17 +149,23 @@ export class CircuitBreaker {
     let val = 0
     if (this.state === 'OPEN') val = 1
     else if (this.state === 'HALF_OPEN') val = 2
-    
+
     try {
       sorobanCircuitStateGauge.set({ host: this.host }, val)
-    } catch {}
+    } catch {
+      // Ignore Prometheus errors in test environments where the registry is reset
+    }
   }
 
   /**
    * Executes a Soroban RPC operation within the protection of the circuit breaker.
+   *
+   * - CLOSED → pass through; count failures toward the threshold.
+   * - OPEN   → reject immediately (fail-fast).
+   * - HALF_OPEN → allow exactly one concurrent probe; others fail fast.
    */
   public async execute<T>(fn: () => Promise<T>): Promise<T> {
-    this.checkCooldown()
+    this.checkTimers()
 
     if (this.state === 'OPEN') {
       throw new SorobanClientError({
@@ -93,7 +176,6 @@ export class CircuitBreaker {
 
     if (this.state === 'HALF_OPEN') {
       if (this.activeProbes >= 1) {
-        // Concurrency limit in HALF_OPEN: only allow a single probe request, others fail fast
         throw new SorobanClientError({
           code: 'NETWORK_ERROR',
           message: `Soroban circuit breaker is HALF_OPEN for host: ${this.host} and a probe is already in progress`,
@@ -104,7 +186,7 @@ export class CircuitBreaker {
 
     try {
       const result = await fn()
-      
+
       if (this.state === 'HALF_OPEN') {
         this.transitionTo('CLOSED')
       } else if (this.state === 'CLOSED') {
@@ -120,7 +202,7 @@ export class CircuitBreaker {
   private recordFailure(): void {
     if (this.state === 'CLOSED') {
       this.failureCount += 1
-      if (this.failureCount >= this.config.failureThreshold) {
+      if (this.failureCount >= this.failureThreshold) {
         this.transitionTo('OPEN')
       }
     } else if (this.state === 'HALF_OPEN') {
