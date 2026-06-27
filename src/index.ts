@@ -24,6 +24,7 @@ import { loadFailedInboundSweeperConfig } from './config/retention.js'
 import { getInvalidationBus } from './cache/index.js'
 import { createWsSubscriptionServer } from './routes/ws.js'
 import { impersonationService } from './services/impersonation/index.js'
+import { recordOomEvent } from './middleware/metrics.js'
 
 // Outbox imports
 import { OutboxJob } from "./jobs/outbox.js";
@@ -59,6 +60,23 @@ function installShutdownHandlers(): void {
 
 if (process.env.NODE_ENV !== "test") {
   initTracing();
+
+  // Listen for uncaught exceptions and unhandled rejections
+  process.on('uncaughtException', (err) => {
+    console.error('Uncaught Exception:', err);
+    if (err.message.includes('heap out of memory') || err.name === 'JavaScript heap out of memory') {
+      recordOomEvent();
+    }
+    // Let the process exit after logging
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+    if (reason instanceof Error && (reason.message.includes('heap out of memory') || reason.name === 'JavaScript heap out of memory')) {
+      recordOomEvent();
+    }
+  });
 
   try {
     const config = loadConfig();

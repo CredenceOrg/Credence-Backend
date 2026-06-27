@@ -179,6 +179,16 @@ export const webhookDlqSize = new client.Gauge({
 })
 
 // ============================================================================
+// Memory/OOM Metrics
+// ============================================================================
+
+export const oomEventsTotal = new client.Counter({
+  name: 'oom_events_total',
+  help: 'Total number of out-of-memory events detected',
+  registers: [register]
+})
+
+// ============================================================================
 // Middleware
 // ============================================================================
 
@@ -385,4 +395,11 @@ export function recordSettlementDrift(findingType: 'state_mismatch' | 'missing_o
  */
 export function recordWebhookDlqSize(size: number) {
   webhookDlqSize.set(size)
+}
+
+/**
+ * Record an out-of-memory event
+ */
+export function recordOomEvent(): void {
+  oomEventsTotal.inc()
 }

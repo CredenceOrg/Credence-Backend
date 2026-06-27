@@ -806,6 +806,55 @@ open http://localhost:3001
 | `bulk_verification_batch_size` | Histogram | - | Batch size distribution |
 | `identity_sync_duration_seconds` | Histogram | operation | Identity sync duration |
 
+### Memory & OOM Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `oom_events_total` | Counter | - | Total number of out-of-memory events detected |
+
+## Memory Configuration
+
+To set a maximum memory limit for Node.js (preventing OOM crashes), use the `NODE_MAX_OLD_SPACE_SIZE_MB` environment variable. This sets the `--max-old-space-size` Node.js flag automatically via the entrypoint script.
+
+### Example Usage
+
+#### Local Development
+```bash
+# Set 2GB limit
+NODE_MAX_OLD_SPACE_SIZE_MB=2048 npm start
+```
+
+#### Docker
+```bash
+docker run -e NODE_MAX_OLD_SPACE_SIZE_MB=2048 credence-backend
+```
+
+#### Docker Compose
+```yaml
+services:
+  credence-backend:
+    image: credence-backend
+    environment:
+      - NODE_MAX_OLD_SPACE_SIZE_MB=2048
+```
+
+#### Kubernetes
+```yaml
+spec:
+  containers:
+  - name: credence-backend
+    env:
+    - name: NODE_MAX_OLD_SPACE_SIZE_MB
+      value: "2048"
+    resources:
+      requests:
+        memory: "2Gi"
+      limits:
+        memory: "2Gi"
+```
+
+The `NODE_MAX_OLD_SPACE_SIZE_MB` should match your container's memory limit.
+
 ### Default Metrics (from prom-client)
 
 - `process_cpu_user_seconds_total` - User CPU time

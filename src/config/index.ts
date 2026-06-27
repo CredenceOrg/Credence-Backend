@@ -23,6 +23,12 @@ export const envSchema = z.object({
       .default('262144') // 256 KiB
       .transform(Number)
       .pipe(z.number().int().min(1024).max(10485760)), // 1KB to 10MB
+    // Node.js max old space size (MB) - sets --max-old-space-size
+    NODE_MAX_OLD_SPACE_SIZE_MB: z
+      .string()
+      .optional()
+      .transform(val => val ? Number(val) : undefined)
+      .pipe(z.union([z.undefined(), z.number().int().min(128).max(32768)])), // 128MB to 32GB
   // Server
   PORT: z
     .string()
@@ -353,6 +359,9 @@ export interface Config {
   port: number
   nodeEnv: 'development' | 'production' | 'test'
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  memory: {
+    maxOldSpaceSizeMb?: number
+  }
   db: {
     url: string
     lockTimeouts: {
@@ -534,6 +543,9 @@ function mapEnvToConfig(env: Env): Config {
     port: env.PORT,
     nodeEnv: env.NODE_ENV,
     logLevel: env.LOG_LEVEL,
+    memory: {
+      maxOldSpaceSizeMb: env.NODE_MAX_OLD_SPACE_SIZE_MB
+    },
     db: {
       url: env.DB_URL,
       lockTimeouts: {
