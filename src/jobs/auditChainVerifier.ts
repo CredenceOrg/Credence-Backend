@@ -247,6 +247,7 @@ export class AuditChainVerifier {
     const result: ChainVerificationResult = {
       valid: violations.length === 0,
       rowsChecked,
+      lastCheckedSeq: lastSeq,
       violationCount: violations.length,
       violations,
       checkedAt: new Date().toISOString(),
@@ -307,6 +308,11 @@ export class AuditChainVerifier {
   }
 }
 
+export interface AuditChainVerificationHooks {
+  saveStatus?: (result: ChainVerificationResult) => Promise<void>
+  logVerification?: (result: ChainVerificationResult) => void
+}
+
 /**
  * Factory to create and run the verifier as a scheduled job.
  * Intended to be called by the scheduler every 15 minutes.
@@ -315,7 +321,18 @@ export async function runAuditChainVerification(
   db: ReadOnlyAuditDb,
   metrics: AuditChainMetrics = new NoOpAuditChainMetrics(),
   options: AuditChainVerifierOptions = {},
+  hooks: AuditChainVerificationHooks = {},
 ): Promise<ChainVerificationResult> {
   const verifier = new AuditChainVerifier(db, metrics, options)
-  return verifier.verify()
+  const result = await verifier.verify()
+
+  if (hooks.saveStatus) {
+    await hooks.saveStatus(result)
+  }
+
+  if (hooks.logVerification) {
+    hooks.logVerification(result)
+  }
+
+  return result
 }

@@ -49,6 +49,9 @@ export enum LogEventType {
   AUTH_LOGIN = "auth:login",
   AUTH_FAILURE = "auth:failure",
 
+  // ── Audit Chain Verifier Events ──
+  AUDIT_CHAIN_VERIFICATION = "audit-chain:verification",
+
   // ── Generic Fallback Events ──
   GENERIC_INFO = "generic:info",
   GENERIC_ERROR = "generic:error",
@@ -224,6 +227,15 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     message: { type: "string" },
     method: { type: "string" },
     reason: { type: "string" },
+  },
+
+  [LogEventType.AUDIT_CHAIN_VERIFICATION]: {
+    valid: { type: "boolean" },
+    rowsChecked: { type: "number" },
+    violationCount: { type: "number" },
+    lastCheckedSeq: { type: "number" },
+    firstViolationSeq: { type: "number" },
+    checkedAt: { type: "string" },
   },
 
   // ── Generic Fallback ──

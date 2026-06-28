@@ -210,6 +210,7 @@ describe('AuditChainVerifier', () => {
 
       expect(result.valid).toBe(true)
       expect(result.rowsChecked).toBe(10)
+      expect(result.lastCheckedSeq).toBe(10)
       expect(result.violationCount).toBe(0)
       expect(metrics.lastValid).toBe(true)
       expect(metrics.rowsCheckedVal).toBe(10)

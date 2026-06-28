@@ -123,7 +123,12 @@ export {
   type DismissDisputeBody,
 } from "./disputes.js";
 export {
-  flagKeySchema,
+  auditChainStatusQuerySchema,
+  auditChainStatusResponseSchema,
+  auditChainVerificationStatusSchema,
+  type AuditChainStatusQuery,
+  type AuditChainStatusResponse,
+} from './auditChainStatus.js'
   rolloutPercentSchema,
   createFlagBodySchema,
   updateFlagBodySchema,

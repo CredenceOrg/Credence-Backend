@@ -6,6 +6,7 @@ import {
   UserRole,
 } from "../../middleware/auth.js";
 import erasureProofRouter from './erasureProof.js'
+import auditChainStatusRouter from './auditChainStatus.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
@@ -480,6 +481,9 @@ export function createAdminRouter(): Router {
 
   // Mount erasure-proof sub-routes
   router.use(erasureProofRouter)
+
+  // Mount audit chain status (read-only verifier state)
+  router.use('/audit', auditChainStatusRouter)
 
   return router
 }

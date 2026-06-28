@@ -4,7 +4,20 @@ import {
   PostgresAuditLogsRepository,
   type AuditLogRepository,
 } from '../../db/repositories/auditLogsRepository.js'
-import type { AuditLogEntry, AuditLogFilters, AuditLogInput, AuditStatus } from './types.js'
+import {
+  InMemoryAuditChainVerificationRepository,
+  PostgresAuditChainVerificationRepository,
+  type AuditChainVerificationRepository,
+} from '../../db/repositories/auditChainVerificationRepository.js'
+import { toChainVerificationState } from './chainStatus.js'
+import type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogFilters,
+  AuditLogInput,
+  AuditStatus,
+  ChainVerificationResult,
+} from './types.js'
 import { AuditAction } from './types.js'
 
 /**
@@ -16,7 +29,10 @@ import { AuditAction } from './types.js'
  * In production, this would write to a database or centralized logging system.
  */
 export class AuditLogService {
-  constructor(private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository()) {}
+  constructor(
+    private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository(),
+    private readonly chainStatusRepository: AuditChainVerificationRepository = new InMemoryAuditChainVerificationRepository(),
+  ) {}
 
   /**
    * Log an admin action.
@@ -125,6 +141,27 @@ export class AuditLogService {
   }
 
   /**
+   * Persist the audit chain verifier's last run result for operator visibility.
+   */
+  async saveChainVerificationStatus(result: ChainVerificationResult): Promise<AuditChainVerificationState> {
+    return this.chainStatusRepository.saveStatus(toChainVerificationState(result))
+  }
+
+  /**
+   * Read the durable last-run verifier state (null when the verifier has never run).
+   */
+  async getChainVerificationStatus(): Promise<AuditChainVerificationState | null> {
+    return this.chainStatusRepository.getStatus()
+  }
+
+  /**
+   * Reset persisted verifier state (for testing).
+   */
+  async clearChainVerificationStatus(): Promise<void> {
+    await this.chainStatusRepository.clear()
+  }
+
+  /**
    * Stream audit logs as an AsyncGenerator to avoid memory spikes
    * Applies date filtering and redacts sensitive information compliance policy
    * 
@@ -213,8 +250,23 @@ function createRepository(): AuditLogRepository {
   return new PostgresAuditLogsRepository(pool)
 }
 
+function createChainStatusRepository(): AuditChainVerificationRepository {
+  const shouldUsePostgres = process.env.AUDIT_LOG_BACKEND === 'postgres'
+  if (!shouldUsePostgres) {
+    return new InMemoryAuditChainVerificationRepository()
+  }
+
+  return new PostgresAuditChainVerificationRepository(pool)
+}
+
 // Create a singleton instance
-export const auditLogService = new AuditLogService(createRepository())
+export const auditLogService = new AuditLogService(createRepository(), createChainStatusRepository())
 
 export { AuditAction } from './types.js'
-export type { AuditLogEntry, AuditLogInput, AuditLogFilters } from './types.js'
+export type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogInput,
+  AuditLogFilters,
+  ChainVerificationResult,
+} from './types.js'

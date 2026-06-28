@@ -106,11 +106,27 @@ export interface AuditLogEntry {
 export interface ChainVerificationResult {
   valid: boolean
   rowsChecked: number
+  /** Highest sequence number examined during the run */
+  lastCheckedSeq?: number
   firstViolationSeq?: number
   firstViolationId?: string
   violationCount: number
   violations: ChainViolation[]
   checkedAt: string
+}
+
+export type AuditChainVerificationStatusValue = 'valid' | 'break_detected' | 'never_run'
+
+/**
+ * Durable verifier state exposed to operators via the chain-status endpoint.
+ */
+export interface AuditChainVerificationState {
+  lastVerifiedHeight: number
+  verifiedAt: string | null
+  status: AuditChainVerificationStatusValue
+  firstBreakSeq?: number | null
+  violationCount?: number
+  rowsChecked?: number
 }
 
 /**
