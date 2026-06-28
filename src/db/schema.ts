@@ -89,9 +89,44 @@ const CREATE_TABLE_STATEMENTS = [
     details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL CHECK (status IN ('success', 'failure')),
     ip_address TEXT,
-    error_message TEXT
+    error_message TEXT,
+    tenant_id TEXT NOT NULL,
+    request_id TEXT,
+    seq BIGSERIAL,
+    prev_hash TEXT,
+    row_hash TEXT
   )
   `,
+  `
+  CREATE SEQUENCE IF NOT EXISTS audit_logs_seq START WITH 1 INCREMENT BY 1;
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS org_members (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id       UUID        NOT NULL,
+    user_id      UUID        NOT NULL,
+    email        TEXT        NOT NULL,
+    role         TEXT        NOT NULL DEFAULT 'member'
+                             CHECK (role IN ('owner', 'admin', 'member')),
+    deleted_at   TIMESTAMPTZ NULL,
+    deleted_by   UUID        NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_org_members_active ON org_members (org_id, user_id) WHERE deleted_at IS NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members (org_id) WHERE deleted_at IS NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members (user_id) WHERE deleted_at IS NULL;`,
+  `
+  CREATE OR REPLACE FUNCTION set_updated_at()
+  RETURNS TRIGGER LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+  $$;
+  `,
+  `CREATE TRIGGER trg_org_members_updated_at BEFORE UPDATE ON org_members FOR EACH ROW EXECUTE FUNCTION set_updated_at();`,
   `
   CREATE TABLE IF NOT EXISTS report_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -200,7 +235,7 @@ export async function createSchema(db: Queryable): Promise<void> {
 
 export async function resetDatabase(db: Queryable): Promise<void> {
   await db.query(
-    "TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities, org_members RESTART IDENTITY CASCADE",
   );
 }
 
