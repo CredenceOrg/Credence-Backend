@@ -1,7 +1,7 @@
 /**
  * Webhook event types for bond lifecycle.
  */
-export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn' | 'attestation.added' | 'attestation.revoked' | 'score.updated'
+export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn' | 'attestation.added' | 'attestation.revoked' | 'score.updated' | 'credits.low'
 
 /**
  * Structured payload data for a webhook event.

@@ -35,6 +35,7 @@ export class WebhookEventPublisher implements EventPublisher {
       'bond.withdrawn': 'bond.withdrawn',
       'attestation.created': 'attestation.created',
       'attestation.revoked': 'attestation.revoked',
+      'credits.low': 'credits.low',
     }
 
     return mapping[eventType] ?? null

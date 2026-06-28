@@ -286,6 +286,11 @@ export const envSchema = z.object({
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(0)),
+  DEFAULT_LOW_CREDIT_THRESHOLD: z
+    .string()
+    .default('100')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
 
   // Reputation scoring model
   REPUTATION_MODEL_VERSION: z.string().default('1.0.0'),
@@ -517,6 +522,7 @@ export interface Config {
   endpointCostWeights: Record<string, number>
   credits: {
     defaultMonthly: number
+    defaultLowCreditThreshold: number
   }
   metricsAllowedCidrs: string[] | undefined
 }
@@ -704,6 +710,7 @@ function mapEnvToConfig(env: Env): Config {
     endpointCostWeights: parseCostWeights(env.ENDPOINT_COST_WEIGHTS),
     credits: {
       defaultMonthly: env.DEFAULT_MONTHLY_CREDITS,
+      defaultLowCreditThreshold: env.DEFAULT_LOW_CREDIT_THRESHOLD,
     },
     metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
       ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)

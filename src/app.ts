@@ -97,7 +97,11 @@ app.use("/api", rateLimitMiddleware);
 
 try {
   const config = validateConfig(process.env)
-  const costMeterConfig = { costWeights: config.endpointCostWeights, defaultMonthlyCredits: config.credits.defaultMonthly }
+  const costMeterConfig = {
+    costWeights: config.endpointCostWeights,
+    defaultMonthlyCredits: config.credits.defaultMonthly,
+    defaultLowCreditThreshold: config.credits.defaultLowCreditThreshold,
+  }
   const costMeterMiddleware = createCostMeterMiddleware(costMeterConfig, () => pool)
   app.use("/api", costMeterMiddleware)
 } catch {
