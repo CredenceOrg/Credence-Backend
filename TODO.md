@@ -1,7 +1,15 @@
-- [x] Explore existing decimalMath tests and patterns
-- [x] Add fast-check property tests for roundToScale invariants for all rounding modes
-- [x] Add sign correctness and no -0 output properties
-- [x] Add multiplyDecimals exactness property and focused regression cases
-- [x] Ensure TypeScript/lint compatibility and repository test conventions
-- [x] Run build/lint/tests (decimalMath) and update until green
-- [ ] Create git branch, commit, push, and open PR (if repository flow requires)
+# TODO
+
+- [x] Read authoritative outbox lifecycle states/transitions from code (types/schema/emitter/repository/publisher)
+- [x] Read webhook DLQ store implementation for cross-linking (postgresDlqStore)
+
+- [ ] Update `src/db/outbox/README.md` with:
+  - [ ] Emit-in-transaction contract
+  - [ ] Publisher leasing/claim loop
+  - [ ] Retry/backoff logic + exact formula used
+  - [ ] DLQ routing on exhaustion (outbox `dead_letter`) and cross-link webhook `webhook_dlq`
+  - [ ] Mermaid sequence diagram (emit → claim/lease → publish → ack/markPublished OR markFailed → dead_letter)
+  - [ ] State diagram with exact status names
+  - [ ] Metrics list with exact metric names/labels
+- [ ] Run `npm run lint` and `npm run build`
+
