@@ -1,57 +1,79 @@
-import { trace, context, SpanStatusCode, Span } from '@opentelemetry/api'
-import { NodeTracerProvider } from '@opentelemetry/sdk-trace-node'
-import { Resource } from '@opentelemetry/resources'
-import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions'
-import { BatchSpanProcessor, ConsoleSpanExporter } from '@opentelemetry/sdk-trace-base'
+import { trace, context, SpanStatusCode, Span } from "@opentelemetry/api";
+import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
+import { Resource } from "@opentelemetry/resources";
+import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import {
+  BatchSpanProcessor,
+  ConsoleSpanExporter,
+} from "@opentelemetry/sdk-trace-base";
 
 /**
  * Canonical span names for the payment processing pipeline.
  * Using constants prevents typos and makes refactoring easier.
  */
 export const PaymentSpans = {
-  PROCESS:    'payment.process',
-  INGEST:     'payment.ingest',
-  VALIDATE:   'payment.validate',
-  RISK_CHECK: 'payment.risk_check',
-  PROCESSOR:  'payment.processor',
-  SETTLE:     'payment.settle',
-} as const
+  PROCESS: "payment.process",
+  INGEST: "payment.ingest",
+  VALIDATE: "payment.validate",
+  RISK_CHECK: "payment.risk_check",
+  PROCESSOR: "payment.processor",
+  SETTLE: "payment.settle",
+} as const;
 
 /**
  * Canonical span names for database operations.
  */
 export const DbSpans = {
-  TX: 'db.tx',
-} as const
+  TX: "db.tx",
+} as const;
+
+/**
+ * Canonical span names for the reputation score computation pipeline.
+ */
+export const ReputationSpans = {
+  COMPUTE: "reputation.compute",
+  ATTESTATION_SCORE: "reputation.attestation_score",
+  BOND_SCORE: "reputation.bond_score",
+  TIME_WEIGHT: "reputation.time_weight",
+} as const;
 
 /**
  * Initialize OpenTelemetry tracing for the application
  */
-export function initTracing(serviceName = 'credence-backend'): NodeTracerProvider {
+export function initTracing(
+  serviceName = "credence-backend",
+): NodeTracerProvider {
   const resource = Resource.default().merge(
     new Resource({
       [ATTR_SERVICE_NAME]: serviceName,
-    })
-  )
+    }),
+  );
 
   const provider = new NodeTracerProvider({
     resource,
-  })
+  });
 
   // Use ConsoleSpanExporter for development
   // In production, replace with OTLP exporter to send to Jaeger/Tempo/etc
-  provider.addSpanProcessor(new BatchSpanProcessor(new ConsoleSpanExporter()))
+  provider.addSpanProcessor(new BatchSpanProcessor(new ConsoleSpanExporter()));
 
-  provider.register()
+  provider.register();
 
-  return provider
+  return provider;
 }
 
 /**
  * Get the tracer instance for payment operations
  */
 export function getPaymentTracer() {
-  return trace.getTracer('payment-service', '1.0.0')
+  return trace.getTracer("payment-service", "1.0.0");
+}
+
+/**
+ * Get the tracer instance for reputation operations.
+ */
+export function getReputationTracer() {
+  return trace.getTracer("reputation-service", "1.0.0");
 }
 
 /**
@@ -60,40 +82,40 @@ export function getPaymentTracer() {
 export async function withSpan<T>(
   spanName: string,
   fn: (span: Span) => Promise<T>,
-  attributes?: Record<string, string | number | boolean>
+  attributes?: Record<string, string | number | boolean>,
 ): Promise<T> {
-  const tracer = trace.getTracer('credence-backend')
+  const tracer = trace.getTracer("credence-backend");
   return tracer.startActiveSpan(spanName, async (span) => {
     try {
       if (attributes) {
-        span.setAttributes(attributes)
+        span.setAttributes(attributes);
       }
-      const result = await fn(span)
-      span.setStatus({ code: SpanStatusCode.OK })
-      return result
+      const result = await fn(span);
+      span.setStatus({ code: SpanStatusCode.OK });
+      return result;
     } catch (error) {
       span.setStatus({
         code: SpanStatusCode.ERROR,
-        message: error instanceof Error ? error.message : 'Unknown error',
-      })
-      span.recordException(error as Error)
-      throw error
+        message: error instanceof Error ? error.message : "Unknown error",
+      });
+      span.recordException(error as Error);
+      throw error;
     } finally {
-      span.end()
+      span.end();
     }
-  })
+  });
 }
 
 /**
  * Get current trace context for propagation
  */
 export function getCurrentContext() {
-  return context.active()
+  return context.active();
 }
 
 /**
  * Run function with specific trace context
  */
 export function withContext<T>(ctx: any, fn: () => T): T {
-  return context.with(ctx, fn)
+  return context.with(ctx, fn);
 }
