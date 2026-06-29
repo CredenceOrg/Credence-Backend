@@ -27,6 +27,8 @@ import { registerAllReplayHandlers } from "../../services/replayHandlers.js";
 import { IdentityRepository } from "../../db/repositories/identityRepository.js";
 import { BondsRepository } from "../../db/repositories/bondsRepository.js";
 import { pool } from "../../db/pool.js";
+import { validate } from '../../middleware/validate.js'
+import { z } from 'zod'
 
 /**
  * Create the admin router with role and user management endpoints
@@ -379,6 +381,37 @@ export function createAdminRouter(): Router {
       res.status(400).json({ error: 'ReplayFailed', message: error.message })
     }
   })
+
+  /**
+   * POST /api/admin/events/replay-range
+   * Replay raw Horizon events between `fromLedger` and `toLedger` (inclusive).
+   */
+  router.post(
+    '/events/replay-range',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: z.object({ fromLedger: z.coerce.number().int().min(0), toLedger: z.coerce.number().int().min(0) }) }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const { fromLedger, toLedger } = req.body as { fromLedger: number; toLedger: number }
+
+        const result = await replayService.replayLedgerRange(
+          fromLedger,
+          toLedger,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip
+        )
+
+        res.status(200).json({ success: true, data: result })
+      } catch (error: any) {
+        res.status(400).json({ error: 'ReplayFailed', message: error.message })
+      }
+    }
+  )
 
   /**
    * POST /api/admin/replay

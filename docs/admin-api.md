@@ -243,6 +243,50 @@ This action is logged with:
 
 ---
 
+### Replay Horizon Ledger Range
+
+**POST** `/api/admin/events/replay-range`
+
+Replay raw Horizon operations between two ledger sequence numbers (inclusive). This endpoint performs a best-effort mapping of operations to internal replay handlers (`bond_creation`, `withdrawal`, `attestation`) and invokes those handlers to re-process historical events. Use with caution; the operation is admin-gated and audit-logged.
+
+#### Request Body
+
+```json
+{
+  "fromLedger": 123456,
+  "toLedger": 123460
+}
+```
+
+#### Example Request
+
+```bash
+curl -X POST http://localhost:3000/api/admin/events/replay-range \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"fromLedger":123456,"toLedger":123460}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "data": {
+    "success": true,
+    "processed": 10,
+    "errors": 0
+  }
+}
+```
+
+#### Notes
+
+- The endpoint validates that `fromLedger <= toLedger` and that both are non-negative integers.
+- Processing is best-effort: operations that cannot be mapped to a known handler are skipped; handler failures are captured to the failed-events queue for later inspection.
+- All replay attempts are recorded in the audit log with action `REPLAY_LEDGER_RANGE`.
+
+
 ### Issue Impersonation Token
 
 **POST** `/api/admin/impersonate`
