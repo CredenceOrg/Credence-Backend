@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import fc from 'fast-check'
+import { auditLogService } from '../audit/index.js'
 
 import {
   CurrencyWhitelist,
@@ -57,6 +58,16 @@ describe('normalize_currency_code', () => {
 })
 
 describe('CurrencyWhitelist', () => {
+  let auditSpy: ReturnType<typeof vi.spyOn>
+
+  beforeEach(() => {
+    auditSpy = vi.spyOn(auditLogService, 'logAction').mockResolvedValue(undefined as any)
+  })
+
+  afterEach(() => {
+    auditSpy.mockRestore()
+  })
+
   it('starts empty by default and supports populated lookup behavior', () => {
     const empty = new CurrencyWhitelist()
     const populated = new CurrencyWhitelist([' usd ', 'eur'])
@@ -79,6 +90,17 @@ describe('CurrencyWhitelist', () => {
     expect(result.description).toBe('add_currency(USD): added')
     expect(whitelist.is_allowed_currency('USD')).toBe(true)
     expect(whitelist.is_allowed_currency('EUR')).toBe(false)
+    
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      actorId: adminCtx.userId,
+      action: 'WHITELIST_MUTATION',
+      details: expect.objectContaining({
+        operation: 'add',
+        assetCode: 'USD',
+        after: 'USD',
+        idempotent: false,
+      })
+    }))
   })
 
   it('keeps adding an existing entry idempotent', () => {
@@ -96,10 +118,27 @@ describe('CurrencyWhitelist', () => {
     expect(whitelist.remove_currency(' usd ', adminCtx).description).toBe(
       'remove_currency(USD): removed',
     )
-    expect(whitelist.remove_currency('gbp', adminCtx).description).toContain(
+    expect(whitelist.remove_currency(' gbP ', adminCtx).description).toContain(
       'not present',
     )
     expect(snapshotValues(whitelist)).toEqual(['EUR'])
+
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'WHITELIST_MUTATION',
+      details: expect.objectContaining({
+        operation: 'remove',
+        assetCode: 'USD',
+        idempotent: false,
+      })
+    }))
+    
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      details: expect.objectContaining({
+        operation: 'remove',
+        assetCode: 'GBP',
+        idempotent: true,
+      })
+    }))
   })
 
   it('clears currencies idempotently', () => {
@@ -110,6 +149,13 @@ describe('CurrencyWhitelist', () => {
     )
     expect(whitelist.size).toBe(0)
     expect(whitelist.clear_currencies(adminCtx).currencies.size).toBe(0)
+
+    expect(auditSpy).toHaveBeenCalledWith(expect.objectContaining({
+      details: expect.objectContaining({
+        operation: 'clear',
+        idempotent: false,
+      })
+    }))
   })
 
   it('rejects malformed codes for constructor, reads, and mutations', () => {

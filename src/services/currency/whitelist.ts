@@ -12,6 +12,7 @@
  */
 
 import { ForbiddenError, UnauthorizedError } from '../../lib/errors.js'
+import { auditLogService } from '../audit/index.js'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -164,7 +165,27 @@ export class CurrencyWhitelist {
     assertAdmin(ctx)
     const normalised = normalize_currency_code(currency)
     const wasPresent = this._set.has(normalised)
-    this._set.add(normalised)
+    
+    if (!wasPresent) {
+      this._set.add(normalised)
+    }
+
+    void auditLogService.logAction({
+      tenantId: 'system',
+      actorId: ctx.userId,
+      actorEmail: 'unknown',
+      action: 'WHITELIST_MUTATION',
+      resourceType: 'currency_whitelist',
+      resourceId: 'global',
+      details: {
+        operation: 'add',
+        assetCode: normalised,
+        before: wasPresent ? normalised : null,
+        after: normalised,
+        idempotent: wasPresent,
+      },
+    })
+
     return {
       currencies: this.snapshot(),
       description: wasPresent
@@ -189,7 +210,27 @@ export class CurrencyWhitelist {
     assertAdmin(ctx)
     const normalised = normalize_currency_code(currency)
     const wasPresent = this._set.has(normalised)
-    this._set.delete(normalised)
+    
+    if (wasPresent) {
+      this._set.delete(normalised)
+    }
+
+    void auditLogService.logAction({
+      tenantId: 'system',
+      actorId: ctx.userId,
+      actorEmail: 'unknown',
+      action: 'WHITELIST_MUTATION',
+      resourceType: 'currency_whitelist',
+      resourceId: 'global',
+      details: {
+        operation: 'remove',
+        assetCode: normalised,
+        before: wasPresent ? normalised : null,
+        after: null,
+        idempotent: !wasPresent,
+      },
+    })
+
     return {
       currencies: this.snapshot(),
       description: wasPresent
@@ -214,10 +255,27 @@ export class CurrencyWhitelist {
   set_currencies(currencies: string[], ctx: AdminContext): WhitelistMutationResult {
     assertAdmin(ctx)
     const normalisedCurrencies = currencies.map((c) => normalize_currency_code(c))
+    const beforeCodes = [...this._set]
     this._set.clear()
     for (const c of normalisedCurrencies) {
       this._set.add(c)
     }
+
+    void auditLogService.logAction({
+      tenantId: 'system',
+      actorId: ctx.userId,
+      actorEmail: 'unknown',
+      action: 'WHITELIST_MUTATION',
+      resourceType: 'currency_whitelist',
+      resourceId: 'global',
+      details: {
+        operation: 'set',
+        assetCode: null,
+        before: beforeCodes,
+        after: [...this._set],
+      },
+    })
+
     return {
       currencies: this.snapshot(),
       description: `set_currencies([${[...this._set].join(', ')}]): whitelist replaced`,
@@ -236,7 +294,25 @@ export class CurrencyWhitelist {
    */
   clear_currencies(ctx: AdminContext): WhitelistMutationResult {
     assertAdmin(ctx)
+    const beforeCodes = [...this._set]
     this._set.clear()
+
+    void auditLogService.logAction({
+      tenantId: 'system',
+      actorId: ctx.userId,
+      actorEmail: 'unknown',
+      action: 'WHITELIST_MUTATION',
+      resourceType: 'currency_whitelist',
+      resourceId: 'global',
+      details: {
+        operation: 'clear',
+        assetCode: null,
+        before: beforeCodes,
+        after: [],
+        idempotent: beforeCodes.length === 0,
+      },
+    })
+
     return {
       currencies: this.snapshot(),
       description: 'clear_currencies(): whitelist cleared',
