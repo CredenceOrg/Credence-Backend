@@ -1,26 +1,39 @@
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
-describe('OpenAPI Contract Drift', () => {
-  let openapiSpecPath: string;
-  let scriptPath: string;
+const ROOT = path.resolve(__dirname, '../..');
+const specPath = path.join(ROOT, 'docs/openapi.yaml');
+const driftScriptPath = path.join(ROOT, 'scripts/openapi-drift.js');
 
-  beforeAll(() => {
-    openapiSpecPath = path.resolve(__dirname, '../../src/schemas/openapi.yml');
-    scriptPath = path.resolve(__dirname, '../../scripts/openapi-drift.js');
+describe('OpenAPI Contract Drift', () => {
+  it('docs/openapi.yaml exists and is non-empty', () => {
+    expect(fs.existsSync(specPath)).toBe(true);
+    const content = fs.readFileSync(specPath, 'utf-8');
+    expect(content.length).toBeGreaterThan(0);
+    expect(content).toContain('paths:');
   });
 
-  it('should pass when routes and spec are in sync', () => {
-    expect(fs.existsSync(path.resolve(__dirname, '../../docs/openapi.yaml'))).toBe(true);
-    const result = execSync(`node ${scriptPath}`, { encoding: 'utf-8', stdio: 'pipe' });
+  it('drift check script passes against the committed spec', () => {
+    const result = execSync(`node ${driftScriptPath}`, { encoding: 'utf-8', stdio: 'pipe' });
     expect(result).toContain('No OpenAPI contract drift');
   });
 
-  it('should fail on route additions/removals or schema drift', () => {
-    // This test documents expected failure behavior.
-    // In CI we run the script directly; here we just verify the mechanism exists.
-    expect(true).toBe(true);
+  it('spec contains the snapshot endpoint', () => {
+    const content = fs.readFileSync(specPath, 'utf-8');
+    expect(content).toContain('/api/snapshot');
+  });
+
+  it('spec is in sync with the generator (re-gen produces no diff)', () => {
+    // Run the generator and check that no changes occur to the committed file.
+    execSync('npm run generate:openapi', { cwd: ROOT, stdio: 'pipe' });
+    const result = execSync('git diff --exit-code docs/openapi.yaml', {
+      cwd: ROOT,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+    // If git diff --exit-code returns 0, there is no diff; stdout will be empty.
+    expect(result).toBe('');
   });
 });

@@ -7,6 +7,152 @@ servers:
   - url: https://api.credence.org/v1
 components:
   schemas:
+    DashboardSnapshotSchema:
+      def:
+        type: object
+        shape:
+          generatedAt:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          health:
+            def:
+              type: object
+              shape:
+                status:
+                  def:
+                    type: enum
+                    entries:
+                      ok: ok
+                      degraded: degraded
+                      unhealthy: unhealthy
+                  type: enum
+                  enum:
+                    ok: ok
+                    degraded: degraded
+                    unhealthy: unhealthy
+                  options:
+                    - ok
+                    - degraded
+                    - unhealthy
+                dependencies:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: record
+                        keyType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        valueType:
+                          def:
+                            type: object
+                            shape:
+                              status:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                          type: object
+                      type: record
+                      keyType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      valueType:
+                        def:
+                          type: object
+                          shape:
+                            status:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                        type: object
+                  type: optional
+            type: object
+          analytics:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: object
+                  shape:
+                    activeIdentities:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          - {}
+                      type: number
+                      minValue: 0
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    totalIdentities:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          - {}
+                      type: number
+                      minValue: 0
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    avgTotalScore:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                    fresh:
+                      def:
+                        type: boolean
+                      type: boolean
+                type: object
+            type: nullable
+      type: object
     addressSchema:
       def:
         type: string
@@ -3855,6 +4001,58 @@ components:
           example: Insufficient evidence provided
       required:
         - reason
+    DashboardSnapshot:
+      type: object
+      properties:
+        generatedAt:
+          type: string
+          format: date-time
+          description: ISO-8601 timestamp when the snapshot was assembled
+        health:
+          type: object
+          properties:
+            status:
+              type: string
+              enum:
+                - ok
+                - degraded
+                - unhealthy
+            dependencies:
+              type: object
+              additionalProperties:
+                type: object
+                properties:
+                  status:
+                    type: string
+                required:
+                  - status
+          required:
+            - status
+          description: Service health summary
+        analytics:
+          type: object
+          nullable: true
+          properties:
+            activeIdentities:
+              type: integer
+              minimum: 0
+            totalIdentities:
+              type: integer
+              minimum: 0
+            avgTotalScore:
+              type: number
+            fresh:
+              type: boolean
+          required:
+            - activeIdentities
+            - totalIdentities
+            - avgTotalScore
+            - fresh
+          description: Latest analytics metrics, null when analytics are unavailable
+      required:
+        - generatedAt
+        - health
+        - analytics
   securitySchemes:
     bearerAuth:
       type: http
@@ -4680,3 +4878,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DisputeTransitionError"
+  /api/snapshot:
+    get:
+      summary: Dashboard snapshot
+      description: Single round-trip pre-computed payload combining health status and
+        analytics metrics. Always returns 200; individual sections may be null
+        when the underlying service is unavailable.
+      tags:
+        - Snapshot
+      responses:
+        "200":
+          description: Dashboard snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSnapshot"

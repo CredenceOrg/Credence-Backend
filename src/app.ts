@@ -12,6 +12,7 @@ import { createFeatureFlagAdminRouter } from "./routes/admin/featureFlags.js";
 import { createPolicyRouter } from "./routes/policy.js";
 import { createAnalyticsRouter } from "./routes/analytics.js";
 import { createPayoutsRouter } from "./routes/payouts.js";
+import { createSnapshotRouter } from "./routes/snapshot.js";
 import { AnalyticsService } from "./services/analytics/service.js";
 import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
@@ -130,6 +131,8 @@ const analyticsService = process.env.DATABASE_URL
 app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 
 app.use("/api/payouts", createPayoutsRouter());
+
+app.use("/api/snapshot", createSnapshotRouter({ healthProbes: healthProbes, analyticsService }));
 
 app.use(errorHandler);
 

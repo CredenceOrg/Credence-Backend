@@ -1,7 +1,9 @@
 name: OpenAPI Drift Check
 on:
+  push:
+    branches: [main, develop]
   pull_request:
-    branches: [main]
+    branches: [main, develop]
 jobs:
   check-drift:
     runs-on: ubuntu-latest
@@ -11,5 +13,9 @@ jobs:
         with:
           node-version: '20'
       - run: npm ci
-      - run: npm run generate:openapi
-      - run: git diff --exit-code docs/openapi.yaml || (echo "OpenAPI spec is out of sync. Run 'npm run generate:openapi' locally and commit." && exit 1)
+      - name: Regenerate OpenAPI spec
+        run: npm run generate:openapi
+      - name: Fail if spec is out of sync
+        run: git diff --exit-code docs/openapi.yaml || (echo "❌ OpenAPI spec is out of sync. Run 'npm run generate:openapi' locally and commit the result." && exit 1)
+      - name: Check for route drift
+        run: npm run openapi:check
