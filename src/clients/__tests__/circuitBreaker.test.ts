@@ -397,4 +397,353 @@ describe('Soroban Circuit Breaker Tests', () => {
     const recovered = await sorobanClient.getIdentityState('GAAddress')
     expect(recovered).toEqual({ state: 'recovered' })
   })
+
+  // ── Chaos and Recovery Tests for Half-Open Probe ─────────────────────────────
+
+  describe('Chaos and Recovery Tests', () => {
+    it('handles rapid state transitions: OPEN -> HALF_OPEN -> OPEN -> HALF_OPEN -> CLOSED', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-rapid-transitions', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      const failFn = async () => {
+        throw new Error('RPC error')
+      }
+      const successFn = async () => 'success'
+
+      // Initial trip to OPEN
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // First HALF_OPEN attempt - probe fails
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Second HALF_OPEN attempt - probe fails again
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Third HALF_OPEN attempt - probe succeeds
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      const result = await breaker.execute(successFn)
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('recovers after multiple consecutive probe failures with backoff', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-multiple-failures', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      const failFn = async () => {
+        throw new Error('RPC error')
+      }
+      const successFn = async () => 'success'
+
+      // Initial trip
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Simulate 5 consecutive probe failures
+      for (let i = 0; i < 5; i++) {
+        vi.advanceTimersByTime(10_000)
+        expect(breaker.getState()).toBe('HALF_OPEN')
+        await expect(breaker.execute(failFn)).rejects.toThrow()
+        expect(breaker.getState()).toBe('OPEN')
+      }
+
+      // Finally succeeds on 6th attempt
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      const result = await breaker.execute(successFn)
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+      expect(breaker.getFailureCount()).toBe(0)
+    })
+
+    it('handles probe timing edge case: exactly at half-open boundary', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-timing-edge', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      await expect(breaker.execute(async () => { throw new Error('fail') })).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Advance to exactly 10_000 ms
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Probe should succeed
+      const result = await breaker.execute(async () => 'success')
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('handles concurrent requests during HALF_OPEN transition', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-concurrent-transition', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      await expect(breaker.execute(async () => { throw new Error('fail') })).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Advance to just before HALF_OPEN
+      vi.advanceTimersByTime(9_999)
+      expect(breaker.getState()).toBe('OPEN')
+
+      // One more millisecond triggers HALF_OPEN
+      vi.advanceTimersByTime(1)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Start a slow probe
+      let resolveProbe: (val: string) => void = () => {}
+      const probePromise = breaker.execute(
+        () =>
+          new Promise<string>((resolve) => {
+            resolveProbe = resolve
+          }),
+      )
+
+      // Concurrent requests during probe should fail fast
+      const concurrentMock = vi.fn(async () => 'concurrent')
+      await expect(breaker.execute(concurrentMock)).rejects.toThrow('a probe is already in progress')
+      expect(concurrentMock).not.toHaveBeenCalled()
+
+      // Resolve probe successfully
+      resolveProbe('probe done')
+      await probePromise
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('simulates intermittent network flakiness during probe', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-flaky-network', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      let attemptCount = 0
+      const flakyFn = async () => {
+        attemptCount++
+        if (attemptCount < 3) {
+          throw new Error('intermittent failure')
+        }
+        return 'success'
+      }
+
+      // Initial trip
+      await expect(breaker.execute(async () => { throw new Error('fail') })).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // First probe fails (flaky network)
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      await expect(breaker.execute(flakyFn)).rejects.toThrow('intermittent failure')
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Second probe fails (still flaky)
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      await expect(breaker.execute(flakyFn)).rejects.toThrow('intermittent failure')
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Third probe succeeds (network recovered)
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      const result = await breaker.execute(flakyFn)
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('handles probe timeout by treating as failure and reopening', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-probe-timeout', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      await expect(breaker.execute(async () => { throw new Error('fail') })).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Simulate timeout by throwing after delay
+      const timeoutFn = async () => {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        throw new Error('timeout')
+      }
+
+      await expect(breaker.execute(timeoutFn)).rejects.toThrow('timeout')
+      expect(breaker.getState()).toBe('OPEN')
+    })
+
+    it('recovers after extended outage with delayed probe success', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-extended-outage', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      const failFn = async () => {
+        throw new Error('RPC error')
+      }
+      const successFn = async () => 'success'
+
+      // Initial trip
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Extended outage: multiple probe cycles fail
+      for (let i = 0; i < 3; i++) {
+        vi.advanceTimersByTime(10_000)
+        expect(breaker.getState()).toBe('HALF_OPEN')
+        await expect(breaker.execute(failFn)).rejects.toThrow()
+        expect(breaker.getState()).toBe('OPEN')
+      }
+
+      // Service finally recovers after extended period
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+      const result = await breaker.execute(successFn)
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('handles rapid successive trips during recovery attempt', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-rapid-trips', {
+        failureThreshold: 2,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      const failFn = async () => {
+        throw new Error('RPC error')
+      }
+
+      // Trip with 2 failures
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Enter HALF_OPEN
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Probe fails - should reopen immediately
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Immediately trip again with another failure (still in OPEN state)
+      // This should not increment failure count since we're already OPEN
+      await expect(breaker.execute(failFn)).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Wait for next probe window
+      vi.advanceTimersByTime(10_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Successful recovery
+      const result = await breaker.execute(async () => 'success')
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+
+    it('maintains probe isolation across multiple hosts during chaos', async () => {
+      vi.useFakeTimers()
+
+      const breakerA = getCircuitBreaker('chaos-host-a', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+      const breakerB = getCircuitBreaker('chaos-host-b', {
+        failureThreshold: 1,
+        openWindowMs: 5_000,
+        halfOpenAfterMs: 10_000,
+      })
+
+      // Trip both breakers
+      await expect(breakerA.execute(async () => { throw new Error('A fail') })).rejects.toThrow()
+      await expect(breakerB.execute(async () => { throw new Error('B fail') })).rejects.toThrow()
+      expect(breakerA.getState()).toBe('OPEN')
+      expect(breakerB.getState()).toBe('OPEN')
+
+      // Host A recovers
+      vi.advanceTimersByTime(10_000)
+      expect(breakerA.getState()).toBe('HALF_OPEN')
+      expect(breakerB.getState()).toBe('HALF_OPEN')
+
+      const resultA = await breakerA.execute(async () => 'A success')
+      expect(resultA).toBe('A success')
+      expect(breakerA.getState()).toBe('CLOSED')
+      expect(breakerB.getState()).toBe('HALF_OPEN') // B still in HALF_OPEN
+
+      // Host B probe fails
+      await expect(breakerB.execute(async () => { throw new Error('B fail') })).rejects.toThrow()
+      expect(breakerB.getState()).toBe('OPEN')
+      expect(breakerA.getState()).toBe('CLOSED') // A remains CLOSED
+    })
+
+    it('handles state transitions with custom timing configurations', async () => {
+      vi.useFakeTimers()
+
+      const breaker = getCircuitBreaker('chaos-custom-timing', {
+        failureThreshold: 1,
+        openWindowMs: 2_000,
+        halfOpenAfterMs: 5_000,
+      })
+
+      await expect(breaker.execute(async () => { throw new Error('fail') })).rejects.toThrow()
+      expect(breaker.getState()).toBe('OPEN')
+
+      // Still in fail-fast window
+      vi.advanceTimersByTime(1_999)
+      expect(breaker.getState()).toBe('OPEN')
+      expect(breaker.isOpenWindowExpired()).toBe(false)
+
+      // Fail-fast window expired, but not yet in HALF_OPEN
+      vi.advanceTimersByTime(1)
+      expect(breaker.getState()).toBe('OPEN')
+      expect(breaker.isOpenWindowExpired()).toBe(true)
+
+      // Enter HALF_OPEN
+      vi.advanceTimersByTime(3_000)
+      expect(breaker.getState()).toBe('HALF_OPEN')
+
+      // Successful probe
+      const result = await breaker.execute(async () => 'success')
+      expect(result).toBe('success')
+      expect(breaker.getState()).toBe('CLOSED')
+    })
+  })
 })
