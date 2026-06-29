@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import dotenv from 'dotenv'
+import { logger } from '../utils/logger.js'
 import {
   enforceRetryPolicyCaps,
   type ProviderRetryPolicies,
@@ -23,6 +24,12 @@ export const envSchema = z.object({
       .default('262144') // 256 KiB
       .transform(Number)
       .pipe(z.number().int().min(1024).max(10485760)), // 1KB to 10MB
+    // Node.js max old space size (MB) - sets --max-old-space-size
+    NODE_MAX_OLD_SPACE_SIZE_MB: z
+      .string()
+      .optional()
+      .transform(val => val ? Number(val) : undefined)
+      .pipe(z.union([z.undefined(), z.number().int().min(128).max(32768)])), // 128MB to 32GB
   // Server
   PORT: z
     .string()
@@ -323,11 +330,34 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
-  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+  /**
+   * How long (ms) the breaker stays OPEN and rejects all requests immediately
+   * after tripping. Default: 10 000 ms (10 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS: z
     .string()
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  /**
+   * How long (ms) after the breaker trips before a probe is allowed.
+   * Must be ≥ SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS. Default: 30 000 ms (30 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS: z
+    .string()
+    .default('30000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  /**
+   * @deprecated Use SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS instead.
+   * Kept for backwards compatibility; maps to halfOpenAfterMs when the new
+   * variable is not set.
+   */
+  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : undefined))
+    .pipe(z.number().int().min(1000).optional()),
   /**
    * Short-TTL read-through cache for getIdentityState() responses.
    * Set to 0 to disable caching entirely.
@@ -352,6 +382,9 @@ export const envSchema = z.object({
     .default('10')
     .transform(Number)
     .pipe(z.number().int().min(0).max(1000)),
+
+  // Metrics endpoint CIDR whitelist (comma-separated IPv4 CIDRs)
+  METRICS_ALLOWED_CIDRS: z.string().optional(),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -363,6 +396,9 @@ export interface Config {
   port: number
   nodeEnv: 'development' | 'production' | 'test'
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  memory: {
+    maxOldSpaceSizeMb?: number
+  }
   db: {
     url: string
     lockTimeouts: {
@@ -457,7 +493,16 @@ export interface Config {
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
-    cooldownPeriodMs: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs: number
   }
   sorobanStateCache: {
     /** TTL in milliseconds. 0 = disabled. */
@@ -473,6 +518,7 @@ export interface Config {
   credits: {
     defaultMonthly: number
   }
+  metricsAllowedCidrs: string[] | undefined
 }
 
 function parseCostWeights(raw: string): Record<string, number> {
@@ -548,6 +594,9 @@ function mapEnvToConfig(env: Env): Config {
     port: env.PORT,
     nodeEnv: env.NODE_ENV,
     logLevel: env.LOG_LEVEL,
+    memory: {
+      maxOldSpaceSizeMb: env.NODE_MAX_OLD_SPACE_SIZE_MB
+    },
     db: {
       url: env.DB_URL,
       lockTimeouts: {
@@ -636,7 +685,12 @@ function mapEnvToConfig(env: Env): Config {
     },
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-      cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+      openWindowMs: env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+      // Prefer the explicit HALF_OPEN_AFTER_MS; fall back to deprecated COOLDOWN_MS.
+      halfOpenAfterMs:
+        env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS ??
+        env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS ??
+        30_000,
     },
     sorobanStateCache: {
       ttlMs: env.SOROBAN_STATE_CACHE_TTL_MS,
@@ -651,6 +705,9 @@ function mapEnvToConfig(env: Env): Config {
     credits: {
       defaultMonthly: env.DEFAULT_MONTHLY_CREDITS,
     },
+    metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
+      ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined,
   }
 
   if (env.HORIZON_URL) {
@@ -688,9 +745,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     return validateConfig(env)
   } catch (err) {
     if (err instanceof ConfigValidationError) {
-      console.error(`\n❌ ${err.message}`)
-      console.error('\nPlease check your .env file or environment variables.\n')
-      process.exit(1)
+      // Don't exit in test environment
+      if (process.env.NODE_ENV !== 'test') {
+        logger.error(`\n❌ ${err.message}`)
+        logger.error('\nPlease check your .env file or environment variables.\n')
+        process.exit(1)
+      }
     }
     throw err
   }

@@ -25,6 +25,12 @@ export {
 
 export { registerPoolMetrics } from './poolMetrics.js'
 export {
+  DOWNSTREAM_RPC_LATENCY_BUCKETS_MS,
+  downstreamRpcLatencyHistogram,
+  recordDownstreamRpcLatency,
+  registerRpcLatencyMetrics,
+} from './rpcLatencyMetrics.js'
+export {
   incrementOutboxDeadLetter,
   incrementOutboxPublished,
   incrementOutboxFailed,

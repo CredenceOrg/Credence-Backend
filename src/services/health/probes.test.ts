@@ -6,6 +6,8 @@ import {
   createHorizonListenerProbe,
   createOutboxPublisherProbe,
 } from './probes.js'
+import { OUTBOX_MAX_LAG_SECONDS } from '../../config/constants.js'
+import { OutboxRepository } from '../../db/outbox/repository.js'
 import {
   resetWorkerHealthState,
   setHorizonListenerConfigured,
@@ -19,6 +21,10 @@ import {
 beforeEach(() => {
   resetWorkerHealthState()
   vi.useRealTimers()
+})
+
+afterEach(() => {
+  vi.restoreAllMocks()
 })
 
 // ─── DB probe ────────────────────────────────────────────────────────────────
@@ -214,10 +220,38 @@ describe('createOutboxPublisherProbe', () => {
     setOutboxPublisherConfigured(true)
     setOutboxPublisherRunning(true)
     recordOutboxPublisherHeartbeat()
+    vi.spyOn(OutboxRepository.prototype, 'getOldestPendingEventLagSeconds').mockResolvedValue(0)
+
     const probe = createOutboxPublisherProbe(60_000)
     const result = await probe()
     expect(result.status).toBe('up')
     expect(typeof result.latencyMs).toBe('number')
+  })
+
+  it('returns up when outbox lag is exactly at threshold', async () => {
+    setOutboxPublisherConfigured(true)
+    setOutboxPublisherRunning(true)
+    recordOutboxPublisherHeartbeat()
+    vi.spyOn(OutboxRepository.prototype, 'getOldestPendingEventLagSeconds').mockResolvedValue(OUTBOX_MAX_LAG_SECONDS)
+
+    const probe = createOutboxPublisherProbe(60_000)
+    const result = await probe()
+
+    expect(result.status).toBe('up')
+    expect(result.lagSeconds).toBe(OUTBOX_MAX_LAG_SECONDS)
+  })
+
+  it('returns down when outbox lag exceeds threshold', async () => {
+    setOutboxPublisherConfigured(true)
+    setOutboxPublisherRunning(true)
+    recordOutboxPublisherHeartbeat()
+    vi.spyOn(OutboxRepository.prototype, 'getOldestPendingEventLagSeconds').mockResolvedValue(OUTBOX_MAX_LAG_SECONDS + 1)
+
+    const probe = createOutboxPublisherProbe(60_000)
+    const result = await probe()
+
+    expect(result.status).toBe('down')
+    expect(result.lagSeconds).toBe(OUTBOX_MAX_LAG_SECONDS + 1)
   })
 })
 

@@ -271,7 +271,7 @@ The Grafana dashboard includes:
 
 ## Resilience: Timeouts & Retries
 
-The backend implements a comprehensive timeout and retry strategy for all external service dependencies. See **[docs/timeouts-and-retries.md](docs/timeouts-and-retries.md)** for:
+The backend implements a comprehensive timeout and retry strategy for all external service dependencies. Webhook deliveries are now idempotent by default: duplicate retries for the same subscriber/event pair are ignored automatically using a persistent reservation keyed by the subscriber ID and event ID. See **[docs/timeouts-and-retries.md](docs/timeouts-and-retries.md)** for:
 
 - Timeout budgets by service type (database, cache, HTTP, Soroban, webhooks)
 - Default and per-provider retry policies

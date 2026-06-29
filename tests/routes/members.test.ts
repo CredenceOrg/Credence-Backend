@@ -145,6 +145,15 @@ describe('Members Router', () => {
     expect(res.status).toBe(400)
   })
 
+  it('should return 400 for unknown fields in invite request', async () => {
+    const res = await request(setup())
+      .post('/api/admin/orgs/org-1/members')
+      .send({ userId: 'u1', email: 'a@test.com', role: 'admin', maliciousField: 'attack' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
+  })
+
   it('should return 409 if member already exists', async () => {
     mockService.inviteMember.mockRejectedValue(
       new Error('already active')
@@ -179,6 +188,15 @@ describe('Members Router', () => {
       .send({ role: 'invalid' })
 
     expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for unknown fields in update role request', async () => {
+    const res = await request(setup())
+      .patch('/api/admin/orgs/org-1/members/m1')
+      .send({ role: 'admin', maliciousField: 'attack' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
   it('should return 404 if member not found on update', async () => {

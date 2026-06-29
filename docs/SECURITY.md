@@ -204,16 +204,32 @@ The pipeline runs two complementary scanning engines:
 
 A custom-built, fully unit-tested severity gate engine (`scripts/security-gate.ts`) parses the output of both tools. If any vulnerability is found matching or exceeding the configured severity threshold (default is **HIGH**), the script prints the offending advisory details and exits with `1`, **failing the build**.
 
+### SBOM Generation & Validation (every merge)
+
+`.github/workflows/sbom.yml` runs on every push and pull request to `main` and `develop`. It generates a CycloneDX SBOM (`npm run sbom:generate`) and then validates it (`npm run sbom:check`), uploading the result as a build artifact.
+
+Validation is enforced by `scripts/sbom-validate.ts`, which checks the document against a minimal CycloneDX schema (format marker, spec version, non-empty component inventory) using Zod. It returns a typed discriminated-union result — `SCHEMA_MISMATCH`, `EMPTY_COMPONENTS`, or `INVALID_JSON` — and the CLI exits with `1`, **failing the build**, rather than panicking or emitting a generic error.
+
+**Threat mitigated:** without a generated-and-validated SBOM gate on every merge, a compromised or accidentally-introduced (transitive) dependency can enter the production dependency graph with no machine-readable inventory and no build gate that fails closed. The gate guarantees every merged commit ships a verifiable component inventory.
+
+Developers can run the same checks locally:
+
+```bash
+npm run sbom:generate
+npm run sbom:check
+```
+
 ### Pull Request SBOM Component Diff
 
 `.github/workflows/sbom-diff.yml` runs on pull requests to `main` and `develop`. The workflow checks out both the pull request head and base commit, generates CycloneDX SBOM files for each dependency graph, and runs `scripts/sbom-component-diff.js` to compare their component lists.
 
 The workflow posts or updates a single pull request comment named **SBOM component changes**. The comment shows the count and names of components added by the pull request and components removed relative to the base branch, giving operators and downstream consumers a quick supply-chain review surface without downloading SBOM artifacts.
 
-Developers can run the same local smoke check with:
+Developers can run the same local component-diff smoke check with:
 
 ```bash
-npm run sbom:check
+npm run sbom:generate
+npm run sbom:diff
 ```
 
 ### Response SLA Matrix
@@ -245,3 +261,39 @@ When an upstream dependency contains a vulnerability that cannot be immediately 
    npx tsx scripts/security-gate.ts --file audit-report.json --threshold high --ignore-cve CVE-YYYY-XXXXX --ignore-pkg package-name
    ```
 3. Document the bypass justification, the expiration date of the exception, and the signed security ticket reference in the commit message and PR description.
+
+---
+
+## CORS Origin Policy
+
+### Approved Origin Configuration
+In non-production environments (such as `development` or `test`), the wildcard origin (`*`) is allowed by default for convenience in local testing. 
+
+In the production environment, the `CORS_ORIGIN` environment variable must be explicitly configured to one or more approved, fully-qualified domain names (FQDNs). Wildcard origins (`*`) are strictly blocked at the configuration level during startup validation to enforce security.
+
+Example of an approved single-origin configuration in production:
+```ini
+CORS_ORIGIN=https://app.credence.io
+```
+
+Example of multiple allowed origins:
+```ini
+CORS_ORIGIN=https://app.credence.io,https://admin.credence.io
+```
+
+### Why Wildcard Origins are Prohibited in Production
+Allowing wildcard origins (`*`) in a production environment introduces severe security risks:
+1. **Cross-Origin Resource Sharing (CORS) Bypass**: The browser's same-origin policy is disabled for all websites. A malicious website visited by a user could send requests to the Credence API on behalf of that user.
+2. **Credential Exposure Risk**: Wildcard CORS prevents the secure usage of HTTP credentials (cookies, client certificates, or authorization headers) in cross-origin requests. Restricting origins enforces a strict trust boundary.
+3. **Compliance Requirements**: Regulatory frameworks and security standards (e.g., SOC2, ISO 27001) prohibit wildcard resource access for authenticated APIs to prevent unauthorized data exfiltration.
+
+### Deployment Guidance
+When deploying to production, operators must configure allowed origins:
+1. Identify all trusted client applications that need to communicate directly with the API.
+2. Set the `CORS_ORIGIN` environment variable to those trusted origins in the production environment (e.g., Kubernetes ConfigMaps, AWS ECS task definitions, or environment managers).
+3. If `CORS_ORIGIN` is not set, or is explicitly set to `*`, the startup validation will fail and the application will refuse to boot, preventing insecure deployment configurations.
+4. When validation fails, the application prints a typed, actionable error message to standard error before exiting:
+   ```
+   ❌ Environment validation failed:
+     - CORS_ORIGIN: Wildcard CORS origin (*) is prohibited in production environment
+   ```

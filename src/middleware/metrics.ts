@@ -12,7 +12,7 @@
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
 import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics } from '../observability/index.js'
+import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import { pool, workerPool } from '../db/pool.js'
 
@@ -24,6 +24,9 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register downstream RPC latency metrics
+registerRpcLatencyMetrics(register)
 
 // Register circuit breaker metrics
 import { registerCircuitBreakerMetrics } from '../clients/circuitBreaker.js'
@@ -175,6 +178,16 @@ export const settlementDriftTotal = new client.Counter({
 export const webhookDlqSize = new client.Gauge({
   name: 'webhook_dlq_size',
   help: 'Number of messages in the webhook dead-letter queue',
+  registers: [register]
+})
+
+// ============================================================================
+// Memory/OOM Metrics
+// ============================================================================
+
+export const oomEventsTotal = new client.Counter({
+  name: 'oom_events_total',
+  help: 'Total number of out-of-memory events detected',
   registers: [register]
 })
 
@@ -385,4 +398,11 @@ export function recordSettlementDrift(findingType: 'state_mismatch' | 'missing_o
  */
 export function recordWebhookDlqSize(size: number) {
   webhookDlqSize.set(size)
+}
+
+/**
+ * Record an out-of-memory event
+ */
+export function recordOomEvent(): void {
+  oomEventsTotal.inc()
 }

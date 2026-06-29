@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { deliverWebhook, signPayload } from './delivery.js'
 import type { WebhookConfig, WebhookPayload } from './types.js'
+import { generateWebhookIdempotencyKey } from './idempotency.js'
 import https from 'https'
 
 describe('signPayload', () => {
@@ -354,6 +355,44 @@ describe('deliverWebhook', () => {
 
     expect(result.success).toBe(true)
     expect(result.attempts).toBe(1)
+  })
+
+  it('clears an idempotency reservation after a failed delivery so retries can succeed', async () => {
+    const reserveCalls: Array<{ subscriberId: string; eventId: string }> = []
+    const idempotencyStore = {
+      reserveWebhookDelivery: vi.fn(async (subscriberId: string, eventId: string) => {
+        reserveCalls.push({ subscriberId, eventId })
+        return true
+      }),
+      clearWebhookDeliveryAttempt: vi.fn(async () => undefined),
+    }
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+
+    const first = await deliverWebhook(mockWebhook, mockPayload, {
+      maxRetries: 0,
+      eventId: 'evt-1',
+      idempotencyStore,
+    })
+    const second = await deliverWebhook(mockWebhook, mockPayload, {
+      maxRetries: 0,
+      eventId: 'evt-1',
+      idempotencyStore,
+    })
+
+    expect(first.success).toBe(false)
+    expect(second.success).toBe(true)
+    expect(idempotencyStore.clearWebhookDeliveryAttempt).toHaveBeenCalledWith(
+      mockWebhook.id,
+      'evt-1'
+    )
+    expect(reserveCalls).toEqual([
+      { subscriberId: mockWebhook.id, eventId: 'evt-1' },
+      { subscriberId: mockWebhook.id, eventId: 'evt-1' },
+    ])
+    expect(generateWebhookIdempotencyKey(mockWebhook.id, 'evt-1')).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('respects webhook-specific maxAttempts override', async () => {

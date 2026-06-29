@@ -57,6 +57,8 @@ pnpm test
 TEST_DATABASE_URL=postgresql://credence:credence@localhost:5433/credence_test pnpm test
 ```
 
+> `TEST_DATABASE_URL` must be set in `.env` (or the shell environment) when you want the integration tests to skip testcontainers and connect to an existing Postgres instance. See `.env.example` for the expected format.
+
 ---
 
 ## Bringing Up Dependencies (docker-compose)

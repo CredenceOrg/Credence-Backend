@@ -311,6 +311,34 @@ DEBUG=redaction npm test -- redaction
 - **#329**: Outbox Publisher Observability (metrics)
 - **#390**: ESLint plugin for logger schema validation (`require-schema-context` + `unvalidated-logger-call`)
 
+## Database Transaction Spans
+
+Every database transaction managed by `TransactionManager.withTransaction` creates an OpenTelemetry span named `db.tx` with the following attributes:
+
+| Attribute      | Type   | Description                                              |
+|----------------|--------|----------------------------------------------------------|
+| `op`           | string | Operation label (e.g. `"process_payment"`). Set via the `op` option in `TransactionOptions`. Omitted when not provided. |
+| `table_count`  | number | Number of unique SQL tables referenced inside the transaction body. Extracted from `FROM`, `INTO`, `UPDATE`, `TABLE`, and `JOIN` clauses. |
+
+### Example
+
+```typescript
+import { TransactionManager } from '../db/transaction.js'
+
+const txManager = new TransactionManager(pool)
+
+const result = await txManager.withTransaction(
+  async (client) => {
+    const { rows } = await client.query('SELECT * FROM users WHERE id = $1', [id])
+    return rows[0]
+  },
+  { op: 'fetch_user' }
+)
+// Resulting span: db.tx { op: "fetch_user", table_count: 1 }
+```
+
+The span is created via the `withSpan` utility and exported by the configured `SpanProcessor` (ConsoleSpanExporter in dev; OTLP in production).
+
 ## Outbox Publisher Observability (Issue #329)
 
 The outbox publisher now emits structured logs via `src/utils/logger.ts` instead of `console.*`, allowing aggregation with our centralized logging.

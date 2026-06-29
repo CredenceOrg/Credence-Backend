@@ -8,6 +8,8 @@ import {
   setHorizonListenerConfigured,
   setOutboxPublisherConfigured,
 } from "./runtimeState.js";
+import { evaluateOutboxPublisherLag } from "./outbox.js";
+import { OUTBOX_MAX_LAG_SECONDS } from "../../config/constants.js";
 
 /** Default timeout (ms) for each dependency check to avoid hanging. */
 const CHECK_TIMEOUT_MS = 5000;
@@ -178,18 +180,20 @@ export function createOutboxPublisherProbe(
       return { status: "not_configured" };
     }
     if (!state.running) {
-      return { status: "down", reason: "not_running", latencyMs: elapsed(start) };
+      return { status: "down", reason: "not_running", latencyMs: elapsed(start), lagSeconds: 0 };
     }
     if (state.lastHeartbeatAt === null) {
-      return { status: "down", reason: "no_heartbeat", latencyMs: elapsed(start) };
+      return { status: "down", reason: "no_heartbeat", latencyMs: elapsed(start), lagSeconds: 0 };
     }
 
     const ageMs = Date.now() - state.lastHeartbeatAt;
+    const lagResult = await evaluateOutboxPublisherLag(pool);
     if (ageMs > maxStaleMs) {
       return {
         status: "down",
         reason: "stale_heartbeat",
         latencyMs: elapsed(start),
+        lagSeconds: lagResult.lagSeconds,
         details: {
           heartbeatAgeMs: ageMs,
           maxHeartbeatAgeMs: maxStaleMs,
@@ -197,9 +201,21 @@ export function createOutboxPublisherProbe(
       };
     }
 
+    if (lagResult.status === "down") {
+      return {
+        status: "down",
+        latencyMs: elapsed(start),
+        lagSeconds: lagResult.lagSeconds,
+        details: {
+          maxLagSeconds: OUTBOX_MAX_LAG_SECONDS,
+        },
+      };
+    }
+
     return {
       status: "up",
       latencyMs: elapsed(start),
+      lagSeconds: lagResult.lagSeconds,
       details: {
         heartbeatAgeMs: ageMs,
         maxHeartbeatAgeMs: maxStaleMs,
@@ -235,7 +251,11 @@ export function createHorizonClientProbe(
         state = options.getState();
       } else {
         const host = new URL(horizonUrl!).host;
-        const breaker = getCircuitBreaker(host, { failureThreshold: 5, cooldownPeriodMs: 10000 });
+        const breaker = getCircuitBreaker(host, {
+          failureThreshold: 5,
+          openWindowMs: 10_000,
+          halfOpenAfterMs: 30_000,
+        });
         state = breaker.getState();
       }
 

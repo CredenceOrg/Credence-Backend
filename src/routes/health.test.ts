@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import request from 'supertest'
 import express from 'express'
 import { createHealthRouter } from './health.js'
+import { OUTBOX_MAX_LAG_SECONDS } from '../config/constants.js'
 
 function appWithHealth(probes: Parameters<typeof createHealthRouter>[0] = {}) {
   const app = express()
@@ -94,6 +95,18 @@ describe('Health routes', () => {
       expect(res.status).toBe(503)
       expect(res.body.status).toBe('unhealthy')
       expect(res.body.dependencies.outboxPublisher.reason).toBe('not_running')
+    })
+
+    it('returns 503 when outbox publisher lag exceeds threshold', async () => {
+      const app = appWithHealth({
+        ...allUp,
+        outboxPublisher: async () => ({ status: 'down', lagSeconds: OUTBOX_MAX_LAG_SECONDS + 1 }),
+      })
+      const res = await request(app).get('/api/health')
+      expect(res.status).toBe(503)
+      expect(res.body.status).toBe('unhealthy')
+      expect(res.body.dependencies.outboxPublisher.status).toBe('down')
+      expect(res.body.dependencies.outboxPublisher.lagSeconds).toBe(OUTBOX_MAX_LAG_SECONDS + 1)
     })
 
     it('returns 503 when horizon circuit breaker is OPEN', async () => {

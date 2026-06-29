@@ -22,6 +22,24 @@ import { validateApiKey, type KeyScope, type StoredApiKey, ApiKeyScope } from '.
 
 export type RateTier = 'standard' | 'premium'
 
+// ── Realms (scope-group definitions) ─────────────────────────────────────────
+
+/**
+ * A "realm" is a named set of granular scopes that a legacy scope can expand to.
+ * An ENTERPRISE / 'full' key is implicitly granted every scope (no realm needed).
+ */
+const REALMS: Record<string, ReadonlySet<string>> = {
+  public: new Set([
+    ApiKeyScope.TRUST_READ,
+    ApiKeyScope.ATTESTATIONS_READ,
+    ApiKeyScope.BOND_READ,
+  ]),
+}
+
+/** Legacy scope values that imply broader access. */
+const LEGACY_FULL = new Set(['full', 'enterprise'])
+const LEGACY_READ = new Set(['read', 'public'])
+
 // Augment Express Request to carry the validated key record (set by requireApiKey)
 declare module 'express-serve-static-core' {
   interface Request {
@@ -65,6 +83,32 @@ function extractRawKey(req: Request): string | null {
 }
 
 /**
+ * Check whether a set of granted scopes satisfies the required scope.
+ *
+ * Rules (in order):
+ * 1. Direct match → allow.
+ * 2. Granted scopes contain 'full' or 'enterprise' → allow (superset of all).
+ * 3. If granted scopes contain 'read' or 'public' and the required scope is in
+ *    the public realm → allow.
+ * 4. Otherwise → deny.
+ */
+export function scopeSatisfies(grantedScopes: string[], requiredScope: string): boolean {
+  // Exact match
+  if (grantedScopes.includes(requiredScope)) return true
+
+  // Full/enterprise superset
+  if (grantedScopes.some((s) => LEGACY_FULL.has(s))) return true
+
+  // Public/read realm expansion
+  if (grantedScopes.some((s) => LEGACY_READ.has(s))) {
+    const realm = REALMS['public']
+    if (realm?.has(requiredScope)) return true
+  }
+
+  return false
+}
+
+/**
  * Express middleware that validates an API key from the request.
  *
  * Accepts keys via:
@@ -103,13 +147,18 @@ export function requireApiKey() {
  * Express middleware that checks if the validated API key has the required scope.
  * Must be used after `requireApiKey` middleware.
  *
+ * Supports:
+ * - Granular scope matching (e.g. `trust:read`)
+ * - Legacy 'full' / 'enterprise' → superset of all scopes
+ * - Legacy 'read' / 'public' → realm-based expansion
+ *
  * @param requiredScope  The scope required to access this endpoint
  *
  * @example
  * router.get('/bonds', requireApiKey(), requireScope(ApiKeyScope.BOND_READ), handler)
  * router.post('/attestations', requireApiKey(), requireScope(ApiKeyScope.ATTESTATION_WRITE), handler)
  */
-export function requireScope(requiredScope: KeyScope) {
+export function requireScope(requiredScope: string) {
   return (req: Request, res: Response, next: NextFunction): void => {
     const apiKey = req.apiKeyRecord
 
@@ -117,8 +166,10 @@ export function requireScope(requiredScope: KeyScope) {
       throw new UnauthorizedError('API key required')
     }
 
-    if (!apiKey.scopes.includes(requiredScope)) {
-      throw new ForbiddenError('Insufficient scope')
+    if (!scopeSatisfies(apiKey.scopes, requiredScope)) {
+      throw new ForbiddenError(
+        `Insufficient scope: '${requiredScope}' is required, granted: [${apiKey.scopes.join(', ')}]`,
+      )
     }
 
     next()

@@ -4,43 +4,27 @@ import type { Queryable } from '../../db/repositories/queryable.js'
 import { OutboxRepository } from '../../db/outbox/repository.js'
 import { auditLogService, AuditAction } from '../audit/index.js'
 import type { AuditLogService } from '../audit/index.js'
+import {
+  FLAG_CACHE_PREFIX,
+  FLAG_LIST_CACHE_KEY,
+  OVERRIDE_CACHE_PREFIX,
+  FLAG_CACHE_TTL_MS,
+  ROLLOUT_PERCENT_MIN,
+  ROLLOUT_PERCENT_MAX,
+  ROLLOUT_HASH_HEX_CHARS,
+  OUTBOX_AGGREGATE_TYPE,
+  OUTBOX_EVENT_CREATED,
+  OUTBOX_EVENT_UPDATED,
+  OUTBOX_EVENT_OVERRIDE_UPDATED,
+  OUTBOX_EVENT_OVERRIDE_REMOVED,
+  OUTBOX_EVENT_TENANT_ROLLOUT_SET,
+  OUTBOX_EVENT_TENANT_ROLLOUT_REMOVED,
+} from './consts.js'
 
-export interface FeatureFlag {
-  id: string
-  key: string
-  description: string
-  defaultEnabled: boolean
-  rolloutPercent: number
-  createdAt: Date
-  updatedAt: Date
-}
+// ── Internal cache key for per-tenant rollouts ────────────────────────────────
+const TENANT_ROLLOUT_CACHE_PREFIX = 'feature_flag_tenant_rollout:'
 
-export interface FeatureFlagOverride {
-  id: string
-  flagId: string
-  tenantId: string
-  enabled: boolean
-  createdAt: Date
-  updatedAt: Date
-}
-
-export interface FeatureFlagWithOverride extends FeatureFlag {
-  override: FeatureFlagOverride | null
-  effectiveEnabled: boolean
-}
-
-export interface ActorInfo {
-  id: string
-  email: string
-  tenantId: string
-  ipAddress?: string
-}
-
-export interface UpdateFlagInput {
-  description?: string
-  defaultEnabled?: boolean
-  rolloutPercent?: number
-}
+// ── DB row types ──────────────────────────────────────────────────────────────
 
 interface RowFlag {
   id: string
@@ -61,10 +45,79 @@ interface RowOverride {
   updated_at: Date
 }
 
-const FLAG_CACHE_PREFIX = 'feature_flag:'
-const FLAG_LIST_CACHE_KEY = 'feature_flags:all'
-const OVERRIDE_CACHE_PREFIX = 'feature_flag_override:'
-const CACHE_TTL_MS = 30_000
+interface RowTenantRollout {
+  id: string
+  flag_id: string
+  tenant_id: string
+  rollout_percent: number
+  created_at: Date
+  updated_at: Date
+}
+
+// ── Public types ──────────────────────────────────────────────────────────────
+
+export interface FeatureFlag {
+  id: string
+  key: string
+  description: string
+  defaultEnabled: boolean
+  rolloutPercent: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface FeatureFlagOverride {
+  id: string
+  flagId: string
+  tenantId: string
+  enabled: boolean
+  createdAt: Date
+  updatedAt: Date
+}
+
+/**
+ * Per-tenant rollout percentage record.
+ *
+ * Allows each tenant to see a flag rolled out at a different rate from the
+ * global `rolloutPercent`.  User-level sticky bucketing (SHA-256 hash of
+ * `flagKey:userId`) still applies within the tenant's percentage window.
+ */
+export interface FeatureFlagTenantRollout {
+  id: string
+  flagId: string
+  tenantId: string
+  rolloutPercent: number
+  createdAt: Date
+  updatedAt: Date
+}
+
+export interface FeatureFlagWithOverride extends FeatureFlag {
+  override: FeatureFlagOverride | null
+  /** Per-tenant rollout percentage override (null if not set). */
+  tenantRollout: FeatureFlagTenantRollout | null
+  effectiveEnabled: boolean
+  /**
+   * Effective rollout percentage used for evaluation:
+   *   - tenantRollout.rolloutPercent if a per-tenant rollout is set, otherwise
+   *   - the global flag rolloutPercent.
+   */
+  effectiveRolloutPercent: number
+}
+
+export interface ActorInfo {
+  id: string
+  email: string
+  tenantId: string
+  ipAddress?: string
+}
+
+export interface UpdateFlagInput {
+  description?: string
+  defaultEnabled?: boolean
+  rolloutPercent?: number
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 const mapFlag = (row: RowFlag): FeatureFlag => ({
   id: row.id,
@@ -85,11 +138,40 @@ const mapOverride = (row: RowOverride): FeatureFlagOverride => ({
   updatedAt: row.updated_at,
 })
 
-function computeRolloutBucket(rolloutPercent: number, entityId: string, flagKey: string): boolean {
-  if (rolloutPercent >= 100) return true
-  if (rolloutPercent <= 0) return false
-  const hash = createHash('sha256').update(`${flagKey}:${entityId}`).digest('hex')
-  const bucket = Number.parseInt(hash.substring(0, 8), 16) % 100
+const mapTenantRollout = (row: RowTenantRollout): FeatureFlagTenantRollout => ({
+  id: row.id,
+  flagId: row.flag_id,
+  tenantId: row.tenant_id,
+  rolloutPercent: row.rollout_percent,
+  createdAt: row.created_at,
+  updatedAt: row.updated_at,
+})
+
+/**
+ * Deterministic rollout bucketing.
+ *
+ * Uses SHA-256(flagKey + ":" + entityId), takes the first
+ * ROLLOUT_HASH_HEX_CHARS hex characters as a number, then applies modulo 100.
+ * This guarantees:
+ *   – same user + same flag → same bucket forever
+ *   – roughly uniform distribution across users
+ *   – no per-user state needs to be persisted
+ *
+ * @param rolloutPercent - Effective percent threshold (0–100)
+ * @param entityId       - Sticky entity: userId when available, tenantId otherwise
+ * @param flagKey        - Flag identifier (salt to prevent correlation across flags)
+ */
+export function computeRolloutBucket(
+  rolloutPercent: number,
+  entityId: string,
+  flagKey: string,
+): boolean {
+  if (rolloutPercent >= ROLLOUT_PERCENT_MAX) return true
+  if (rolloutPercent <= ROLLOUT_PERCENT_MIN) return false
+  const hash = createHash('sha256')
+    .update(`${flagKey}:${entityId}`)
+    .digest('hex')
+  const bucket = Number.parseInt(hash.substring(0, ROLLOUT_HASH_HEX_CHARS), 16) % 100
   return bucket < rolloutPercent
 }
 
@@ -98,9 +180,11 @@ interface CacheEntry<T> {
   expiresAt: number
 }
 
+// ── Service ───────────────────────────────────────────────────────────────────
+
 export class FeatureFlagService {
-  private cache: Map<string, CacheEntry<any>>
-  private outboxRepo: OutboxRepository
+  private readonly cache: Map<string, CacheEntry<unknown>>
+  private readonly outboxRepo: OutboxRepository
 
   constructor(
     private readonly db: Queryable = pool,
@@ -109,6 +193,8 @@ export class FeatureFlagService {
     this.cache = new Map()
     this.outboxRepo = new OutboxRepository()
   }
+
+  // ── Cache helpers ───────────────────────────────────────────────────────────
 
   private cacheGet<T>(key: string): T | undefined {
     const entry = this.cache.get(key)
@@ -121,25 +207,51 @@ export class FeatureFlagService {
   }
 
   private cacheSet<T>(key: string, value: T): void {
-    this.cache.set(key, { value, expiresAt: Date.now() + CACHE_TTL_MS })
+    this.cache.set(key, { value, expiresAt: Date.now() + FLAG_CACHE_TTL_MS })
   }
 
   private cacheDelete(key: string): void {
     this.cache.delete(key)
   }
 
+  // ── Public API ──────────────────────────────────────────────────────────────
+
+  /**
+   * Evaluate whether a feature flag is enabled for a given tenant and optional
+   * user.
+   *
+   * Evaluation order (highest → lowest priority):
+   *   1. Per-tenant boolean override  → returns override.enabled
+   *   2. Per-tenant rollout percent   → sticky SHA-256 bucket check
+   *   3. Global rollout percent       → sticky SHA-256 bucket check
+   *   4. Flag.defaultEnabled          → static fallback
+   *
+   * When `userId` is provided the sticky bucket is keyed on the user; otherwise
+   * it falls back to `tenantId` so tenant-level cohesion is preserved even
+   * without a user context.
+   */
   async isEnabled(flagKey: string, tenantId: string, userId?: string): Promise<boolean> {
+    // Priority 1: boolean per-tenant override
     const override = await this.getOverride(flagKey, tenantId)
     if (override !== null) return override.enabled
 
     const flag = await this.getFlag(flagKey)
     if (!flag) return false
 
-    if (flag.rolloutPercent > 0) {
-      const entityId = userId ?? tenantId
+    const entityId = userId ?? tenantId
+
+    // Priority 2: per-tenant rollout percentage
+    const tenantRollout = await this.getTenantRollout(flagKey, tenantId)
+    if (tenantRollout !== null) {
+      return computeRolloutBucket(tenantRollout.rolloutPercent, entityId, flagKey)
+    }
+
+    // Priority 3: global rollout percentage
+    if (flag.rolloutPercent > ROLLOUT_PERCENT_MIN) {
       return computeRolloutBucket(flag.rolloutPercent, entityId, flagKey)
     }
 
+    // Priority 4: static default
     return flag.defaultEnabled
   }
 
@@ -173,26 +285,54 @@ export class FeatureFlagService {
 
   async listFlagsWithOverrides(tenantId: string): Promise<FeatureFlagWithOverride[]> {
     const flags = await this.listFlags()
-    const result = await this.db.query<RowOverride>(
+
+    // Fetch boolean overrides for this tenant
+    const overrideResult = await this.db.query<RowOverride>(
       `SELECT ffo.*
        FROM feature_flag_overrides ffo
        JOIN feature_flags ff ON ff.id = ffo.flag_id
        WHERE ffo.tenant_id = $1`,
       [tenantId],
     )
-    const overrideMap = new Map(result.rows.map((r) => [r.flag_id, mapOverride(r)]))
+    const overrideMap = new Map(
+      overrideResult.rows.map((r) => [r.flag_id, mapOverride(r)]),
+    )
+
+    // Fetch per-tenant rollout percentages for this tenant
+    const rolloutResult = await this.db.query<RowTenantRollout>(
+      `SELECT fftr.*
+       FROM feature_flag_tenant_rollouts fftr
+       JOIN feature_flags ff ON ff.id = fftr.flag_id
+       WHERE fftr.tenant_id = $1`,
+      [tenantId],
+    )
+    const tenantRolloutMap = new Map(
+      rolloutResult.rows.map((r) => [r.flag_id, mapTenantRollout(r)]),
+    )
 
     return flags.map((flag) => {
       const override = overrideMap.get(flag.id) ?? null
+      const tenantRollout = tenantRolloutMap.get(flag.id) ?? null
+
       let effectiveEnabled: boolean
+      const effectiveRolloutPercent =
+        tenantRollout !== null ? tenantRollout.rolloutPercent : flag.rolloutPercent
+
       if (override !== null) {
         effectiveEnabled = override.enabled
-      } else if (flag.rolloutPercent > 0) {
+      } else if (tenantRollout !== null) {
+        effectiveEnabled = computeRolloutBucket(
+          tenantRollout.rolloutPercent,
+          tenantId,
+          flag.key,
+        )
+      } else if (flag.rolloutPercent > ROLLOUT_PERCENT_MIN) {
         effectiveEnabled = computeRolloutBucket(flag.rolloutPercent, tenantId, flag.key)
       } else {
         effectiveEnabled = flag.defaultEnabled
       }
-      return { ...flag, override, effectiveEnabled }
+
+      return { ...flag, override, tenantRollout, effectiveEnabled, effectiveRolloutPercent }
     })
   }
 
@@ -213,6 +353,27 @@ export class FeatureFlagService {
     return override
   }
 
+  /**
+   * Returns the per-tenant rollout percentage record for a flag, or null if
+   * none has been configured.
+   */
+  async getTenantRollout(flagKey: string, tenantId: string): Promise<FeatureFlagTenantRollout | null> {
+    const cacheKey = TENANT_ROLLOUT_CACHE_PREFIX + `${flagKey}:${tenantId}`
+    const cached = this.cacheGet<FeatureFlagTenantRollout | null>(cacheKey)
+    if (cached !== undefined) return cached
+
+    const result = await this.db.query<RowTenantRollout>(
+      `SELECT fftr.*
+       FROM feature_flag_tenant_rollouts fftr
+       JOIN feature_flags ff ON ff.id = fftr.flag_id
+       WHERE ff.key = $1 AND fftr.tenant_id = $2`,
+      [flagKey, tenantId],
+    )
+    const tenantRollout = result.rows.length > 0 ? mapTenantRollout(result.rows[0]) : null
+    this.cacheSet(cacheKey, tenantRollout)
+    return tenantRollout
+  }
+
   async createFlag(
     key: string,
     description: string,
@@ -220,8 +381,8 @@ export class FeatureFlagService {
     rolloutPercent: number,
     actor: ActorInfo,
   ): Promise<FeatureFlag> {
-    if (rolloutPercent < 0 || rolloutPercent > 100) {
-      throw new Error('rolloutPercent must be between 0 and 100')
+    if (rolloutPercent < ROLLOUT_PERCENT_MIN || rolloutPercent > ROLLOUT_PERCENT_MAX) {
+      throw new Error(`rolloutPercent must be between ${ROLLOUT_PERCENT_MIN} and ${ROLLOUT_PERCENT_MAX}`)
     }
 
     const id = randomUUID()
@@ -234,7 +395,11 @@ export class FeatureFlagService {
     const flag = mapFlag(result.rows[0])
 
     this.invalidateFlagCache(flag.key)
-    await this.emitOutboxEvent('feature_flag_created', flag.key, { ...flag, createdAt: flag.createdAt.toISOString(), updatedAt: flag.updatedAt.toISOString() })
+    await this.emitOutboxEvent(OUTBOX_EVENT_CREATED, flag.key, {
+      ...flag,
+      createdAt: flag.createdAt.toISOString(),
+      updatedAt: flag.updatedAt.toISOString(),
+    })
     await this.audit.logAction({
       tenantId: actor.tenantId,
       actorId: actor.id,
@@ -254,8 +419,11 @@ export class FeatureFlagService {
     updates: UpdateFlagInput,
     actor: ActorInfo,
   ): Promise<FeatureFlag> {
-    if (updates.rolloutPercent !== undefined && (updates.rolloutPercent < 0 || updates.rolloutPercent > 100)) {
-      throw new Error('rolloutPercent must be between 0 and 100')
+    if (
+      updates.rolloutPercent !== undefined &&
+      (updates.rolloutPercent < ROLLOUT_PERCENT_MIN || updates.rolloutPercent > ROLLOUT_PERCENT_MAX)
+    ) {
+      throw new Error(`rolloutPercent must be between ${ROLLOUT_PERCENT_MIN} and ${ROLLOUT_PERCENT_MAX}`)
     }
 
     const sets: string[] = []
@@ -291,7 +459,7 @@ export class FeatureFlagService {
     const flag = mapFlag(result.rows[0])
 
     this.invalidateFlagCache(flag.key)
-    await this.emitOutboxEvent('feature_flag_updated', flag.key, { updates })
+    await this.emitOutboxEvent(OUTBOX_EVENT_UPDATED, flag.key, { updates })
     await this.audit.logAction({
       tenantId: actor.tenantId,
       actorId: actor.id,
@@ -328,7 +496,7 @@ export class FeatureFlagService {
     const override = mapOverride(result.rows[0])
 
     this.invalidateOverrideCache(flagKey, tenantId)
-    await this.emitOutboxEvent('feature_flag_override_updated', flagKey, { tenantId, enabled })
+    await this.emitOutboxEvent(OUTBOX_EVENT_OVERRIDE_UPDATED, flagKey, { tenantId, enabled })
     await this.audit.logAction({
       tenantId: actor.tenantId,
       actorId: actor.id,
@@ -356,7 +524,7 @@ export class FeatureFlagService {
     }
 
     this.invalidateOverrideCache(flagKey, tenantId)
-    await this.emitOutboxEvent('feature_flag_override_removed', flagKey, { tenantId })
+    await this.emitOutboxEvent(OUTBOX_EVENT_OVERRIDE_REMOVED, flagKey, { tenantId })
     await this.audit.logAction({
       tenantId: actor.tenantId,
       actorId: actor.id,
@@ -369,6 +537,95 @@ export class FeatureFlagService {
     })
   }
 
+  /**
+   * Set (upsert) a per-tenant rollout percentage for a flag.
+   *
+   * This is distinct from a boolean override: it allows each tenant to receive
+   * a different rollout fraction while still using the same sticky
+   * SHA-256 user-id bucketing that the global rollout uses.
+   *
+   * A boolean override (setOverride) always takes precedence over a tenant
+   * rollout.  Remove the boolean override first if you want the tenant rollout
+   * to take effect.
+   */
+  async setTenantRollout(
+    flagKey: string,
+    tenantId: string,
+    rolloutPercent: number,
+    actor: ActorInfo,
+  ): Promise<FeatureFlagTenantRollout> {
+    if (rolloutPercent < ROLLOUT_PERCENT_MIN || rolloutPercent > ROLLOUT_PERCENT_MAX) {
+      throw new Error(`rolloutPercent must be between ${ROLLOUT_PERCENT_MIN} and ${ROLLOUT_PERCENT_MAX}`)
+    }
+
+    const flag = await this.getFlag(flagKey)
+    if (!flag) {
+      throw new Error(`Feature flag '${flagKey}' not found`)
+    }
+
+    const result = await this.db.query<RowTenantRollout>(
+      `INSERT INTO feature_flag_tenant_rollouts (flag_id, tenant_id, rollout_percent)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (flag_id, tenant_id)
+       DO UPDATE SET rollout_percent = $3, updated_at = NOW()
+       RETURNING *`,
+      [flag.id, tenantId, rolloutPercent],
+    )
+    const tenantRollout = mapTenantRollout(result.rows[0])
+
+    this.invalidateTenantRolloutCache(flagKey, tenantId)
+    await this.emitOutboxEvent(OUTBOX_EVENT_TENANT_ROLLOUT_SET, flagKey, {
+      tenantId,
+      rolloutPercent,
+    })
+    await this.audit.logAction({
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: AuditAction.SET_FLAG_OVERRIDE,
+      resourceType: 'feature_flag_tenant_rollout',
+      resourceId: `${flagKey}:${tenantId}`,
+      details: { flagKey, tenantId, rolloutPercent },
+      ipAddress: actor.ipAddress,
+    })
+
+    return tenantRollout
+  }
+
+  /**
+   * Remove a per-tenant rollout percentage for a flag.
+   *
+   * After removal the tenant falls back to the global rollout percent (or
+   * default_enabled if that is also 0).
+   */
+  async removeTenantRollout(flagKey: string, tenantId: string, actor: ActorInfo): Promise<void> {
+    const result = await this.db.query(
+      `DELETE FROM feature_flag_tenant_rollouts fftr
+       USING feature_flags ff
+       WHERE ff.id = fftr.flag_id AND ff.key = $1 AND fftr.tenant_id = $2
+       RETURNING fftr.id`,
+      [flagKey, tenantId],
+    )
+    if (result.rows.length === 0) {
+      throw new Error(`Tenant rollout not found for flag '${flagKey}' and tenant '${tenantId}'`)
+    }
+
+    this.invalidateTenantRolloutCache(flagKey, tenantId)
+    await this.emitOutboxEvent(OUTBOX_EVENT_TENANT_ROLLOUT_REMOVED, flagKey, { tenantId })
+    await this.audit.logAction({
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+      actorEmail: actor.email,
+      action: AuditAction.REMOVE_FLAG_OVERRIDE,
+      resourceType: 'feature_flag_tenant_rollout',
+      resourceId: `${flagKey}:${tenantId}`,
+      details: { flagKey, tenantId },
+      ipAddress: actor.ipAddress,
+    })
+  }
+
+  // ── Cache invalidation ──────────────────────────────────────────────────────
+
   private invalidateFlagCache(key: string): void {
     this.cacheDelete(FLAG_CACHE_PREFIX + key)
     this.cacheDelete(FLAG_LIST_CACHE_KEY)
@@ -380,6 +637,14 @@ export class FeatureFlagService {
     this.cacheDelete(FLAG_CACHE_PREFIX + flagKey)
   }
 
+  private invalidateTenantRolloutCache(flagKey: string, tenantId: string): void {
+    this.cacheDelete(TENANT_ROLLOUT_CACHE_PREFIX + `${flagKey}:${tenantId}`)
+    this.cacheDelete(FLAG_LIST_CACHE_KEY)
+    this.cacheDelete(FLAG_CACHE_PREFIX + flagKey)
+  }
+
+  // ── Outbox helpers ──────────────────────────────────────────────────────────
+
   private async emitOutboxEvent(
     eventType: string,
     flagKey: string,
@@ -387,7 +652,7 @@ export class FeatureFlagService {
   ): Promise<void> {
     try {
       await this.outboxRepo.create(this.db as any, {
-        aggregateType: 'feature_flag',
+        aggregateType: OUTBOX_AGGREGATE_TYPE,
         aggregateId: flagKey,
         eventType,
         payload,

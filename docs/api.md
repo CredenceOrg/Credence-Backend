@@ -46,13 +46,17 @@ Accepted in any case (EIP-55 checksummed or all lower-case).
 
 ### `GET /api/health`
 
-Returns service liveness.
+Returns readiness status for the service and its critical dependencies.
 
 ```
 GET /api/health
 ```
 
-**Response `200`**
+**Response `200`** when all configured critical dependencies are healthy.
+
+**Response `503`** when any critical dependency is down.
+
+**Response `200`** example:
 
 ```json
 {
@@ -62,6 +66,34 @@ GET /api/health
     "gitSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
     "buildTimestamp": "2026-06-25T20:00:00.000Z",
     "nodeVersion": "v20.10.0"
+  },
+  "dependencies": {
+    "postgres": { "status": "up", "latencyMs": 3 },
+    "redis": { "status": "up", "latencyMs": 2 },
+    "horizonListener": { "status": "up", "latencyMs": 4 },
+    "outboxPublisher": { "status": "up", "latencyMs": 5, "lagSeconds": 0 },
+    "horizon": { "status": "up", "latencyMs": 3 }
+  }
+}
+```
+
+**Response `503`** example when outbox lag exceeds threshold:
+
+```json
+{
+  "status": "unhealthy",
+  "service": "credence-backend",
+  "version": {
+    "gitSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+    "buildTimestamp": "2026-06-25T20:00:00.000Z",
+    "nodeVersion": "v20.10.0"
+  },
+  "dependencies": {
+    "postgres": { "status": "up", "latencyMs": 3 },
+    "redis": { "status": "up", "latencyMs": 2 },
+    "horizonListener": { "status": "up", "latencyMs": 4 },
+    "outboxPublisher": { "status": "down", "lagSeconds": 61 },
+    "horizon": { "status": "up", "latencyMs": 3 }
   }
 }
 ```

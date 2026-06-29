@@ -529,7 +529,7 @@ describe('decimalMath', () => {
     }
 
     const assertNoNegativeZero = (s: string) => {
-      expect(s).not.toMatch(/^\-0(\.|$)/)
+      expect(s).not.toMatch(/^-0(\.0+)?$/)
     }
 
     it('roundToScale invariants: HALF modes bound error by ≤ 1 ULP and ordering DOWN ≤ value ≤ UP', () => {
@@ -553,10 +553,10 @@ describe('decimalMath', () => {
             )
 
             // DOWN and UP establish an interval that all other rounding modes must respect.
+            const min = compareDecimals(rDown, rUp) <= 0 ? rDown : rUp
+            const max = compareDecimals(rDown, rUp) <= 0 ? rUp : rDown
             const within = (x: string) => {
-              const cmpLow = compareDecimals(rDown, x)
-              const cmpHigh = compareDecimals(x, rUp)
-              return cmpLow <= 0 && cmpHigh <= 0
+              return compareDecimals(min, x) <= 0 && compareDecimals(x, max) <= 0
             }
 
             expect(within(rHalfUp)).toBe(true)
@@ -650,8 +650,9 @@ describe('decimalMath', () => {
             assertNoNegativeZero(rNegDown)
 
             // symmetry: rounding(-x) = -rounding(x) for HALF_UP/HALF_DOWN
-            expect(rNegUp).toBe(rPosUp === '0' || rPosUp === '0.0' ? '0' : `-${rPosUp}`)
-            expect(rNegDown).toBe(rPosDown === '0' || rPosDown === '0.0' ? '0' : `-${rPosDown}`)
+            const isZero = (v: string) => compareDecimals(v, '0') === 0
+            expect(rNegUp).toBe(isZero(rPosUp) ? rPosUp : `-${rPosUp}`)
+            expect(rNegDown).toBe(isZero(rPosDown) ? rPosDown : `-${rPosDown}`)
           },
         ),
         { numRuns: 2000 },
@@ -807,7 +808,10 @@ describe('decimalMath', () => {
             // The original value must sit between DOWN and UP (inclusive).
             // For positive values: down <= value <= up
             // For negative values: up <= value <= down (magnitudes reversed)
-            expect(compareDecimals(down, up)).toBeLessThanOrEqual(0)
+            const min = compareDecimals(down, up) <= 0 ? down : up
+            const max = compareDecimals(down, up) <= 0 ? up : down
+            expect(compareDecimals(min, value)).toBeLessThanOrEqual(0)
+            expect(compareDecimals(value, max)).toBeLessThanOrEqual(0)
           },
         ),
         { numRuns: 1000 },

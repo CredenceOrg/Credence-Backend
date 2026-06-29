@@ -98,9 +98,15 @@ export function createAdminRouter(): Router {
       const requestId = (req as any).requestId
       const assignRequest = req.body as AssignRoleRequest
 
-      // Validate request body
-      if (!assignRequest.userId || !assignRequest.role) {
-        throw new ValidationError('Missing required fields: userId, role')
+        const result = await adminService.assignRole(user.id, user.email, assignRequest as AssignRoleRequest)
+
+        res.status(200).json({
+          success: true,
+          message: result.message,
+          data: result.user,
+        })
+      } catch (error) {
+        next(error)
       }
 
       const result = await adminService.assignRole(
@@ -130,9 +136,14 @@ export function createAdminRouter(): Router {
       const requestId = (req as any).requestId
       const revokeRequest = req.body as RevokeApiKeyRequest
 
-      // Validate request body
-      if (!revokeRequest.userId || !revokeRequest.apiKey) {
-        throw new ValidationError('Missing required fields: userId, apiKey')
+        const result = await adminService.revokeApiKey(user.id, user.email, revokeRequest as RevokeApiKeyRequest)
+
+        res.status(200).json({
+          success: true,
+          message: result.message,
+        })
+      } catch (error) {
+        next(error)
       }
 
       const result = await adminService.revokeApiKey(
@@ -163,14 +174,12 @@ export function createAdminRouter(): Router {
       const requestId = (req as any).requestId
       const body = req.body as Partial<IssueImpersonationTokenRequest>
 
-      if (!body.targetUserId) {
-        res.status(400).json({ error: 'InvalidRequest', message: 'targetUserId is required' })
-        return
-      }
-      if (!body.reason) {
-        res.status(400).json({ error: 'InvalidRequest', message: 'reason is required' })
-        return
-      }
+        const issued = impersonationService.issueToken(
+          user.id,
+          user.email,
+          body as IssueImpersonationTokenRequest,
+          req.ip,
+        )
 
       const issued = await impersonationService.issueToken(
         user.id,
@@ -408,7 +417,7 @@ export function createAdminRouter(): Router {
 
       res.status(200).json(result)
     } catch (error: any) {
-      res.status(400).json({ error: 'ReplayFailed', message: error.message })
+      next(error)
     }
   })
 

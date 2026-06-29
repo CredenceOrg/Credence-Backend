@@ -12,6 +12,8 @@ export interface DependencyHealth {
   reason?: string
   /** Wall-clock milliseconds the check took. Always present when a probe ran. */
   latencyMs?: number
+  /** Outbox-specific lag measured in seconds. */
+  lagSeconds?: number
   /** Optional safe metadata for debugging readiness (no secrets). */
   details?: Record<string, string | number | boolean | null>
 }

@@ -14,9 +14,11 @@ The monitoring stack consists of:
 The health router separates liveness and readiness:
 
 - `GET /api/health/live`: process-level liveness only (always `200` while process is up).
-- `GET /api/health` and `GET /api/health/ready`: deep readiness checks for Postgres, Redis, Horizon listener heartbeat, and outbox publisher lease heartbeat.
+- `GET /api/health` and `GET /api/health/ready`: deep readiness checks for Postgres, Redis, Horizon listener heartbeat, and outbox publisher state.
 
-Readiness responses include per-check status (`up`, `down`, `not_configured`) and safe diagnostic fields (for example heartbeat age) without exposing secrets such as connection strings.
+The outbox readiness check now also evaluates the age of the oldest unpublished outbox event. If that lag exceeds `60` seconds, readiness fails and the dependency is reported as `down` with a `lagSeconds` value.
+
+Readiness responses include per-check status (`up`, `down`, `not_configured`) and safe diagnostic fields (for example heartbeat age or outbox lag) without exposing secrets such as connection strings.
 
 ## Architecture
 
@@ -715,6 +717,25 @@ kubectl apply -f k8s/grafana-dashboard-configmap.yaml
        cpu: "500m"
    ```
 
+### Metrics Endpoint Security
+
+The `/metrics` endpoint is unauthenticated by design (Prometheus does not send auth headers) but can be restricted to cluster-internal IPs via the `METRICS_ALLOWED_CIDRS` environment variable.
+
+```
+METRICS_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+When set, only requests originating from IPs within the listed CIDR ranges can reach `/metrics`. All other IPs receive `403 Forbidden`.
+
+When unset (default), `/metrics` is open — suitable for local development.
+
+For Kubernetes deployments, set this to the cluster pod CIDR in `k8s/configmap.yaml`:
+
+```yaml
+data:
+  METRICS_ALLOWED_CIDRS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+```
+
 
 ## Testing
 
@@ -806,6 +827,56 @@ open http://localhost:3001
 | `bulk_verification_batch_size` | Histogram | - | Batch size distribution |
 | `rate_limit_hits_total` | Counter | tenant, tier | Total rate limit hits grouped by tenant and tier |
 | `identity_sync_duration_seconds` | Histogram | operation | Identity sync duration |
+| `queue_backlog_size` | Gauge | topic | Current number of items pending in the backlog queue per topic; sampled every 15 s |
+
+### Memory & OOM Metrics
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `oom_events_total` | Counter | - | Total number of out-of-memory events detected |
+
+## Memory Configuration
+
+To set a maximum memory limit for Node.js (preventing OOM crashes), use the `NODE_MAX_OLD_SPACE_SIZE_MB` environment variable. This sets the `--max-old-space-size` Node.js flag automatically via the entrypoint script.
+
+### Example Usage
+
+#### Local Development
+```bash
+# Set 2GB limit
+NODE_MAX_OLD_SPACE_SIZE_MB=2048 npm start
+```
+
+#### Docker
+```bash
+docker run -e NODE_MAX_OLD_SPACE_SIZE_MB=2048 credence-backend
+```
+
+#### Docker Compose
+```yaml
+services:
+  credence-backend:
+    image: credence-backend
+    environment:
+      - NODE_MAX_OLD_SPACE_SIZE_MB=2048
+```
+
+#### Kubernetes
+```yaml
+spec:
+  containers:
+  - name: credence-backend
+    env:
+    - name: NODE_MAX_OLD_SPACE_SIZE_MB
+      value: "2048"
+    resources:
+      requests:
+        memory: "2Gi"
+      limits:
+        memory: "2Gi"
+```
+
+The `NODE_MAX_OLD_SPACE_SIZE_MB` should match your container's memory limit.
 
 ### Default Metrics (from prom-client)
 

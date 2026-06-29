@@ -24,6 +24,17 @@ const CREATE_TABLE_STATEMENTS = [
   )
   `,
   `
+  CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('credit', 'debit')),
+    amount TEXT NOT NULL,
+    previous_balance TEXT NOT NULL,
+    new_balance TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+  `,
+  `
   CREATE TABLE IF NOT EXISTS bonds (
     id BIGSERIAL PRIMARY KEY,
     identity_address TEXT NOT NULL REFERENCES identities(address) ON DELETE CASCADE,
