@@ -23,6 +23,7 @@ import {
 } from "../repositories/apiKeyRepository.js";
 import type { Pool } from "pg";
 import { URL } from "url";
+import { wsEvictedSlowConsumersTotal } from "../observability/customMetrics.js";
 
 export interface WsSubscriptionConfig {
   /**
@@ -42,6 +43,12 @@ export interface WsSubscriptionConfig {
    * @default 5000
    */
   shutdownGracePeriodMs?: number;
+
+  /**
+   * High water mark for buffer size. If exceeded, connection will be closed.
+   * @default 0 (disabled)
+   */
+  highWaterMark?: number;
 }
 
 export interface WsMessage {
@@ -73,6 +80,7 @@ export function createWsSubscriptionServer(
   const rateLimitPerSec = config.rateLimitPerSec ?? 100;
   const backpressureThreshold = config.backpressureThreshold ?? 1024 * 1024;
   const shutdownGracePeriodMs = config.shutdownGracePeriodMs ?? 5000;
+  const highWaterMark = config.highWaterMark ?? 0;
 
   // Use injected repo for testing, otherwise fall back to the default
   // (in-memory) implementation. A PostgreSQL-backed adapter can be injected
@@ -118,7 +126,7 @@ export function createWsSubscriptionServer(
       let tenantId: string;
       let apiKeyId: string;
       try {
-        const keyRecord = repo.validate(apiKey);
+        const keyRecord = await repo.validate(apiKey);
         if (!keyRecord || !keyRecord.active) {
           socket.destroy();
           return;
@@ -251,6 +259,14 @@ export function createWsSubscriptionServer(
    */
   function sendMessage(ws: WebSocket, message: WsMessage): void {
     try {
+      if (highWaterMark > 0 && ws.bufferedAmount > highWaterMark) {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.close(1013, "slow_consumer");
+          wsEvictedSlowConsumersTotal.inc();
+        }
+        return;
+      }
+
       ws.send(JSON.stringify(message));
     } catch (error) {
       // Ignore send errors - connection may be closing

@@ -139,21 +139,6 @@ export function createMembersRouter(): Router {
         const { orgId } = req.params
         const { userId, email, role } = req.validated!.body as InviteMemberBody
 
-        const result = await memberService.inviteMember(
-          authReq.user!.id,
-          authReq.user!.email,
-          { orgId, userId, email, role: role ?? 'member' },
-        )
-
-        res.status(201).json({ success: true, data: result.member, message: result.message })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        const isConflict = message.includes('already active')
-        res.status(isConflict ? 409 : 400).json({
-          error: isConflict ? 'Conflict' : 'BadRequest',
-          message,
-        })
-      }
 
       if (role && !VALID_MEMBER_ROLES.includes(role as MemberRole)) {
         res.status(400).json({
@@ -198,21 +183,6 @@ export function createMembersRouter(): Router {
         const { memberId } = req.params
         const { role } = req.validated!.body as UpdateMemberRoleBody
 
-        const result = await memberService.updateMemberRole(
-          authReq.user!.id,
-          authReq.user!.email,
-          { memberId, role },
-        )
-
-        res.status(200).json({ success: true, data: result.member, message: result.message })
-      } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        const isNotFound = message.includes('not found')
-        res.status(isNotFound ? 404 : 400).json({
-          error: isNotFound ? 'NotFound' : 'BadRequest',
-          message,
-        })
-      }
 
       const result = await memberService.updateMemberRole(
         authReq.user!.tenantId,

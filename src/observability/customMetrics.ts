@@ -45,6 +45,15 @@ export const dbTxnSavepoints = new client.Histogram({
 });
 
 /**
+ * Counter for WebSocket slow consumers that were evicted.
+ */
+export const wsEvictedSlowConsumersTotal = new client.Counter({
+  name: 'ws_evicted_slow_consumers_total',
+  help: 'Total number of WebSocket connections evicted due to slow consumption (exceeding backpressure high-water mark)',
+  registers: [client.register],
+});
+
+/**
  * Register the custom metrics with an external registry if needed.
  * The caller can pass its own Registry; otherwise the default global one is used.
  */
@@ -55,5 +64,6 @@ export function registerSyntheticMetrics(registry?: client.Registry): void {
   reg.registerMetric(webhookPayloadBytes);
   reg.registerMetric(dbTxnDurationSeconds);
   reg.registerMetric(dbTxnSavepoints);
+  reg.registerMetric(wsEvictedSlowConsumersTotal);
 }
 
