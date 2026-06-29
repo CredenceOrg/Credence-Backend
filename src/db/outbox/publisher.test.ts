@@ -3,9 +3,76 @@ import { Pool } from 'pg'
 import { OutboxPublisher } from './publisher'
 import { OutboxRepository } from './repository'
 import type { OutboxEvent } from './types'
+import crypto from 'crypto'
 
 async function buildTestPool(): Promise<Pool> {
   const db = newDb()
+
+  // Register % operator
+  db.public.registerOperator({
+    operator: '%',
+    left: db.public.getType('integer'),
+    right: db.public.getType('integer'),
+    returns: db.public.getType('integer'),
+    implementation: (a: number, b: number) => a % b
+  })
+
+  // Register md5 function
+  db.public.registerFunction({
+    name: 'md5',
+    args: [db.public.getType('text')],
+    returns: db.public.getType('text'),
+    implementation: (str: string) => {
+      if (str === null || str === undefined) return null
+      return crypto.createHash('md5').update(str).digest('hex')
+    }
+  })
+
+  // Register substr function
+  db.public.registerFunction({
+    name: 'substr',
+    args: [db.public.getType('text'), db.public.getType('integer'), db.public.getType('integer')],
+    returns: db.public.getType('text'),
+    implementation: (str: string, start: number, length: number) => {
+      if (str === null || str === undefined) return null
+      return str.substring(start - 1, start - 1 + length)
+    }
+  })
+
+  // Register hash_md5_id_to_int function
+  db.public.registerFunction({
+    name: 'hash_md5_id_to_int',
+    args: [db.public.getType('integer')],
+    returns: db.public.getType('integer'),
+    implementation: (id: number) => {
+      const hash = crypto.createHash('md5').update(String(id)).digest('hex')
+      const sub = hash.substring(0, 8)
+      return parseInt(sub, 16)
+    }
+  })
+
+  // Intercept query and rewrite cast syntax to use the registered function
+  let interceptor: any
+  const subscribe = () => {
+    interceptor = db.public.interceptQueries(query => {
+      if (query.includes("('x'||substr(md5(id::text),1,8))::bit(32)::int")) {
+        const rewritten = query.replace(
+          "('x'||substr(md5(id::text),1,8))::bit(32)::int",
+          "hash_md5_id_to_int(id)"
+        )
+        interceptor.unsubscribe()
+        try {
+          const res = db.public.query(rewritten)
+          return res.rows
+        } finally {
+          subscribe()
+        }
+      }
+      return null
+    })
+  }
+  subscribe()
+
   const adapter = db.adapters.createPg()
   const pool = new adapter.Pool() as unknown as Pool
 
@@ -27,7 +94,9 @@ async function buildTestPool(): Promise<Pool> {
       error_message TEXT,
       trace_id TEXT,
       span_id TEXT,
-      tracestate TEXT
+      tracestate TEXT,
+      shard_count INTEGER,
+      shard_id INTEGER
     )
   `)
 
@@ -190,5 +259,155 @@ describe('OutboxRepository quarantine handling', () => {
     expect(Number(outbox.rows[0].retry_count)).toBe(0)
     expect(marked.rows[0].reinjected_by).toBe('operator')
     expect(marked.rows[0].reinjected_at).not.toBeNull()
+  })
+})
+
+describe('OutboxPublisher lease-aware sharding', () => {
+  let pool: Pool
+  let repo: OutboxRepository
+
+  beforeEach(async () => {
+    pool = await buildTestPool()
+    repo = new OutboxRepository()
+  })
+
+  afterEach(async () => {
+    await pool.end()
+  })
+
+  it('validates config parameters in constructor', () => {
+    const mockPub = { publish: async () => undefined }
+
+    expect(() => new OutboxPublisher(mockPub, { shardCount: 2 })).toThrow('Both shardCount and shardId must be provided if either is set')
+    expect(() => new OutboxPublisher(mockPub, { shardId: 1 })).toThrow('Both shardCount and shardId must be provided if either is set')
+    expect(() => new OutboxPublisher(mockPub, { shardCount: -1, shardId: 0 })).toThrow('shardCount must be a positive integer')
+    expect(() => new OutboxPublisher(mockPub, { shardCount: 2, shardId: -1 })).toThrow('shardId must be a non-negative integer less than shardCount')
+    expect(() => new OutboxPublisher(mockPub, { shardCount: 2, shardId: 2 })).toThrow('shardId must be a non-negative integer less than shardCount')
+
+    const valid = new OutboxPublisher(mockPub, { shardCount: 2, shardId: 1 })
+    expect(valid).toBeDefined()
+  })
+
+  it('claims only events matching its shard using hash-modulo', async () => {
+    // Insert 10 events
+    for (let i = 1; i <= 10; i++) {
+      await pool.query(
+        `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+         VALUES ($1, 'aggregate', 'agg-1', 'bond.created', '{"val": 1}', 'pending')`,
+        [i]
+      )
+    }
+
+    const mockPub = { publish: async () => undefined }
+
+    // Start publisher on shard 0 of 2
+    const pub0 = new OutboxPublisher(mockPub, {
+      shardCount: 2,
+      shardId: 0,
+      batchSize: 10,
+    })
+
+    // Start publisher on shard 1 of 2
+    const pub1 = new OutboxPublisher(mockPub, {
+      shardCount: 2,
+      shardId: 1,
+      batchSize: 10,
+    })
+
+    const events0 = await (repo as any).claimEvents(pool, 'consumer-0', 10, 60, 2, 0)
+    const events1 = await (repo as any).claimEvents(pool, 'consumer-1', 10, 60, 2, 1)
+
+    expect(events0.length + events1.length).toBe(10)
+    expect(events0.length).toBeGreaterThan(0)
+    expect(events1.length).toBeGreaterThan(0)
+
+    // Ensure all claimed events have the correct assigned shard fields in db
+    const rows = await pool.query('SELECT id, shard_count, shard_id, consumer_id FROM event_outbox')
+    for (const r of rows.rows) {
+      if (r.consumer_id === 'consumer-0') {
+        expect(r.shard_count).toBe(2)
+        expect(r.shard_id).toBe(0)
+      } else {
+        expect(r.shard_count).toBe(2)
+        expect(r.shard_id).toBe(1)
+      }
+    }
+  })
+
+  it('supports dynamic shard count changes', async () => {
+    // Insert 10 events
+    for (let i = 1; i <= 10; i++) {
+      await pool.query(
+        `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+         VALUES ($1, 'aggregate', 'agg-1', 'bond.created', '{"val": 1}', 'pending')`,
+         [i]
+      )
+    }
+
+    // Claim on a 2-shard config first
+    const eventsShard0Of2 = await repo.claimEvents(pool, 'c-0-2', 10, 60, 2, 0)
+    const eventsShard1Of2 = await repo.claimEvents(pool, 'c-1-2', 10, 60, 2, 1)
+
+    expect(eventsShard0Of2.length + eventsShard1Of2.length).toBe(10)
+
+    // Reset claims back to pending
+    await pool.query("UPDATE event_outbox SET status = 'pending', consumer_id = NULL, lease_expires_at = NULL")
+
+    // Now claim using a 3-shard config
+    const eventsShard0Of3 = await repo.claimEvents(pool, 'c-0-3', 10, 60, 3, 0)
+    const eventsShard1Of3 = await repo.claimEvents(pool, 'c-1-3', 10, 60, 3, 1)
+    const eventsShard2Of3 = await repo.claimEvents(pool, 'c-2-3', 10, 60, 3, 2)
+
+    expect(eventsShard0Of3.length + eventsShard1Of3.length + eventsShard2Of3.length).toBe(10)
+
+    // Ensure different membership
+    const ids2_0 = eventsShard0Of2.map(e => e.id)
+    const ids3_0 = eventsShard0Of3.map(e => e.id)
+    expect(ids2_0.sort()).not.toEqual(ids3_0.sort())
+  })
+
+  it('handles publisher death by reclaiming expired leases', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'aggregate', 'agg-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+
+    // Claim by consumer A (active lease)
+    const [eventA] = await repo.claimEvents(pool, 'consumer-a', 10, 60, 2, 0)
+    expect(eventA).toBeDefined()
+
+    // Try to claim by consumer B (same shard, active lease) - should get 0 events
+    const eventsBActive = await repo.claimEvents(pool, 'consumer-b', 10, 60, 2, 0)
+    expect(eventsBActive.length).toBe(0)
+
+    // Expire the lease manually
+    await pool.query("UPDATE event_outbox SET lease_expires_at = NOW() - INTERVAL '1 second'")
+
+    // Try to claim by consumer B again (same shard, expired lease) - should reclaim
+    const [eventBReclaimed] = await repo.claimEvents(pool, 'consumer-b', 10, 60, 2, 0)
+    expect(eventBReclaimed).toBeDefined()
+    expect(eventBReclaimed.id).toBe(eventA.id)
+    expect(eventBReclaimed.consumerId).toBe('consumer-b')
+  })
+
+  it('prevents hot shards by adequately distributing sequential IDs via md5 hashing', () => {
+    const N = 4
+    const shardCounts = new Array(N).fill(0)
+    const totalEvents = 1000
+
+    for (let id = 1; id <= totalEvents; id++) {
+      const hash = crypto.createHash('md5').update(String(id)).digest('hex')
+      const val = parseInt(hash.substring(0, 8), 16)
+      const shard = val % N
+      shardCounts[shard]++
+    }
+
+    const expectedMean = totalEvents / N
+    const maxAllowedDeviation = expectedMean * 0.15 // 15% tolerance
+
+    for (let s = 0; s < N; s++) {
+      const deviation = Math.abs(shardCounts[s] - expectedMean)
+      expect(deviation).toBeLessThan(maxAllowedDeviation)
+    }
   })
 })

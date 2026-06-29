@@ -50,6 +50,10 @@ export interface OutboxPublisherConfig {
   metricsIntervalMs?: number
   /** Maximum serialized payload size accepted by the publisher. Default: 262144 (256 KiB) */
   maxPayloadBytes?: number
+  /** Number of shards for horizontal scaling */
+  shardCount?: number
+  /** Shard ID assigned to this publisher instance */
+  shardId?: number
 }
 
 const DEFAULT_CONFIG: OutboxPublisherConfig = {
@@ -107,6 +111,20 @@ export class OutboxPublisher {
   private heartbeatIntervalMs: number
 
   constructor(publisher: EventPublisher, config?: Partial<OutboxPublisherConfig>) {
+    if (config?.shardCount !== undefined || config?.shardId !== undefined) {
+      const count = config?.shardCount
+      const id = config?.shardId
+      if (count === undefined || id === undefined) {
+        throw new Error('Both shardCount and shardId must be provided if either is set')
+      }
+      if (!Number.isInteger(count) || count <= 0) {
+        throw new Error('shardCount must be a positive integer')
+      }
+      if (!Number.isInteger(id) || id < 0 || id >= count) {
+        throw new Error('shardId must be a non-negative integer less than shardCount')
+      }
+    }
+
     this.repository = new OutboxRepository()
     this.publisher = publisher
     this.consumerId = config?.consumerId ?? randomUUID()
@@ -234,7 +252,9 @@ export class OutboxPublisher {
       pool,
       this.consumerId,
       this.config.batchSize,
-      this.leaseSeconds
+      this.leaseSeconds,
+      this.config.shardCount,
+      this.config.shardId
     )
 
     if (events.length === 0) {

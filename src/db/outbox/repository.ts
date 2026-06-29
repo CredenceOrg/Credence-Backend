@@ -25,6 +25,8 @@ type OutboxEventRow = {
   trace_id?: string | null
   span_id?: string | null
   tracestate?: string | null
+  shard_count?: number | null
+  shard_id?: number | null
 }
 
 type OutboxQuarantineRow = {
@@ -86,6 +88,8 @@ function mapOutboxEvent(row: OutboxEventRow): OutboxEvent {
     traceId: row.trace_id,
     spanId: row.span_id,
     tracestate: row.tracestate,
+    shardCount: row.shard_count,
+    shardId: row.shard_id,
   }
 }
 
@@ -150,7 +154,9 @@ export class OutboxRepository {
     db: Queryable,
     consumerId: string,
     limit: number = 100,
-    leaseSeconds: number = 300
+    leaseSeconds: number = 300,
+    shardCount?: number,
+    shardId?: number
   ): Promise<OutboxEvent[]> {
     // Try with SKIP LOCKED first (real PostgreSQL)
     try {
@@ -171,23 +177,28 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        shard_count: number | null
+        shard_id: number | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing',
              consumer_id = $2,
-             lease_expires_at = NOW() + ($3 || ' seconds')::interval
+             lease_expires_at = NOW() + ($3 || ' seconds')::interval,
+             shard_count = $4,
+             shard_id = $5
          WHERE id IN (
            SELECT id FROM event_outbox
            WHERE (status = 'pending' OR (status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at < NOW())))
              AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+             AND ($4::int IS NULL OR $5::int IS NULL OR ('x'||substr(md5(id::text),1,8))::bit(32)::int % $4 = $5)
            ORDER BY created_at ASC
            LIMIT $1
            FOR UPDATE SKIP LOCKED
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   consumer_id, lease_expires_at, trace_id, span_id, tracestate`,
-        [limit, consumerId, leaseSeconds.toString()]
+                   consumer_id, lease_expires_at, trace_id, span_id, tracestate, shard_count, shard_id`,
+        [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
       return result.rows.map(mapOutboxEvent)
@@ -210,22 +221,27 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        shard_count: number | null
+        shard_id: number | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing',
              consumer_id = $2,
-             lease_expires_at = NOW() + ($3 || ' seconds')::interval
+             lease_expires_at = NOW() + ($3 || ' seconds')::interval,
+             shard_count = $4,
+             shard_id = $5
          WHERE id IN (
            SELECT id FROM event_outbox
            WHERE (status = 'pending' OR (status = 'processing' AND (lease_expires_at IS NULL OR lease_expires_at < NOW())))
              AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+             AND ($4::int IS NULL OR $5::int IS NULL OR ('x'||substr(md5(id::text),1,8))::bit(32)::int % $4 = $5)
            ORDER BY created_at ASC
            LIMIT $1
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   consumer_id, lease_expires_at, trace_id, span_id, tracestate`,
-        [limit, consumerId, leaseSeconds.toString()]
+                   consumer_id, lease_expires_at, trace_id, span_id, tracestate, shard_count, shard_id`,
+        [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
       return result.rows.map(mapOutboxEvent)

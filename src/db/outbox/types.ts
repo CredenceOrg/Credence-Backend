@@ -20,6 +20,8 @@ export interface OutboxEvent {
   traceId?: string | null
   spanId?: string | null
   tracestate?: string | null
+  shardCount?: number | null
+  shardId?: number | null
 }
 
 export type OutboxEventStatus = 'pending' | 'processing' | 'published' | 'failed' | 'dead_letter'

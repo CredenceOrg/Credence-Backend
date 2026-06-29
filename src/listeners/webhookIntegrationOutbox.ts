@@ -1,7 +1,6 @@
 import type { Queryable } from '../db/repositories/queryable.js'
 import type { IdentityState } from './types.js'
 import type { WebhookEventType } from '../services/webhooks/index.js'
-import { detectEventType } from './webhookDetection.js'
 import { outboxEmitter } from '../db/outbox/emitter.js'
 import { detectEventType } from './webhookEventDetection.js'
 
