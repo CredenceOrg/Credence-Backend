@@ -123,6 +123,10 @@ The test suite covers:
 - Double-signal triggers immediate force-exit
 - SIGTERM arriving before HTTP server is ready
 
+## Signal Handling in Production
+
+In the production entrypoint (`src/index.ts`), the process listens for `SIGTERM` and `SIGINT` signals, routing them directly to the `GracefulShutdownManager.shutdown()` method. This ensures that the application executes the full, ordered cleanup process (draining in-flight requests, stopping schedulers, closing database pools, disconnecting Redis, etc.) before exiting.
+
 ## Operational runbook
 
 ### Rolling deploy (Kubernetes)

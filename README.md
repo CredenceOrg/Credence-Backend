@@ -523,6 +523,17 @@ Extend with additional Horizon event ingestion when implementing the full archit
 - Integration notes: `docs/stellar-integration.md`
 - Tests: `src/clients/soroban.test.ts`
 
+## Graceful Shutdown
+
+On `SIGTERM` or `SIGINT`, the Credence Backend API executes an ordered graceful shutdown sequence:
+1. Stops accepting new HTTP connections and allows in-flight requests to drain (`server.close()`).
+2. Closes WebSocket subscription server connections gracefully.
+3. Stops event consumers and background schedulers.
+4. Closes database connection pools (primary, worker, replica) cleanly (`pool.end()`).
+5. Disconnects from Redis connection.
+
+The grace period is configurable via `SHUTDOWN_GRACE_PERIOD_MS` (default: 30,000 ms). For more details, see **[docs/graceful-shutdown.md](docs/graceful-shutdown.md)**.
+
 ## Security
 
 For security policies, reporting, and architecture documentation:
