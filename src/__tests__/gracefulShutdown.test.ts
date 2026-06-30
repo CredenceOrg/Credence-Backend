@@ -80,6 +80,59 @@ describe('GracefulShutdownManager', () => {
     expect(forceExit).toHaveBeenCalledWith(1)
     vi.useRealTimers()
   })
+
+  it('drains in-flight requests on SIGTERM, then closes the DB pool and Redis, then exits', async () => {
+    const sequence: string[] = []
+    const close = vi.fn((callback: (err?: Error | null) => void) => {
+      sequence.push('server_close_start')
+      callback()
+      sequence.push('server_close_end')
+    })
+    const fakeServer = { close } as unknown as import('http').Server
+    
+    const dbPoolEnd = vi.fn(async () => {
+      sequence.push('db_pool_close')
+    })
+    const dbPool = { end: dbPoolEnd }
+    
+    const redisDisconnect = vi.fn(async () => {
+      sequence.push('redis_close')
+    })
+    const redis = { disconnect: redisDisconnect }
+    
+    const forceExit = vi.fn((code: number) => {
+      sequence.push(`exit_${code}`)
+    })
+
+    const manager = new GracefulShutdownManager({
+      server: fakeServer,
+      dbPools: [dbPool],
+      redis,
+      gracePeriodMs: 1000,
+      forceExit,
+      logger: vi.fn(),
+    })
+
+    await manager.shutdown('SIGTERM')
+
+    expect(close).toHaveBeenCalledOnce()
+    expect(dbPoolEnd).toHaveBeenCalledOnce()
+    expect(redisDisconnect).toHaveBeenCalledOnce()
+    expect(forceExit).toHaveBeenCalledWith(0)
+    
+    // Assert the exact sequence: server closes first, then DB/Redis close, then exit
+    expect(sequence[0]).toBe('server_close_start')
+    expect(sequence[1]).toBe('server_close_end')
+    
+    const dbIndex = sequence.indexOf('db_pool_close')
+    const redisIndex = sequence.indexOf('redis_close')
+    const exitIndex = sequence.indexOf('exit_0')
+    
+    expect(dbIndex).toBeGreaterThan(1)
+    expect(redisIndex).toBeGreaterThan(1)
+    expect(exitIndex).toBeGreaterThan(dbIndex)
+    expect(exitIndex).toBeGreaterThan(redisIndex)
+  })
 })
 
 describe('Health router readiness during shutdown', () => {
