@@ -17,7 +17,7 @@
  *   Middleware error handler       → AppError → { error, code } shape
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import request from 'supertest'
 import express, { type Express, type Request, type Response, type NextFunction } from 'express'
 
@@ -25,7 +25,6 @@ import { createHealthRouter } from '../routes/health.js'
 import { createBondRouter } from '../routes/bond.js'
 import { BondStore, BondService } from '../services/bond/index.js'
 import { createAttestationRouter } from '../routes/attestations.js'
-import { AttestationRepository } from '../repositories/attestationRepository.js'
 import { errorHandler } from '../middleware/errorHandler.js'
 import { AppError, ErrorCode, NotFoundError, ValidationError } from '../lib/errors.js'
 
@@ -188,7 +187,28 @@ describe('Response envelope contract — /api/attestations', () => {
   const BASE = '/api/attestations'
 
   beforeEach(() => {
-    const repo = new AttestationRepository()
+    const repo = {
+      countBySubject: vi.fn().mockReturnValue(0),
+      findBySubject: vi.fn().mockReturnValue({ attestations: [], hasNextPage: false }),
+      create: vi.fn((input) => {
+        if (!input.subject?.trim()) throw new Error('subject is required');
+        if (!input.verifier?.trim()) throw new Error('verifier is required');
+        if (!input.claim?.trim()) throw new Error('claim is required');
+        if (typeof input.weight !== 'number' || Number.isNaN(input.weight) || input.weight < 0 || input.weight > 100) {
+          throw new Error('weight must be a number between 0 and 100');
+        }
+        return {
+          id: 'generated-id',
+          subject: input.subject,
+          verifier: input.verifier,
+          weight: input.weight,
+          claim: input.claim,
+          createdAt: new Date().toISOString(),
+          revokedAt: null,
+        };
+      }),
+      revoke: vi.fn().mockReturnValue(undefined),
+    }
     app = express()
     app.use(express.json())
     app.use(BASE, createAttestationRouter(repo))
