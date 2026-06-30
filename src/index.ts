@@ -116,25 +116,6 @@ if (process.env.NODE_ENV !== "test") {
 
     installShutdownHandlers();
 
-    // Graceful shutdown
-    const shutdown = async (signal: string): Promise<void> => {
-      logger.info(`Received ${signal}, shutting down gracefully...`)
-      
-      // Close HTTP server
-      server.close(() => {
-        logger.info('HTTP server closed')
-        process.exit(0)
-      })
-      
-      // Force shutdown after 10 seconds
-      setTimeout(() => {
-        logger.error('Forced shutdown after timeout')
-        process.exit(1)
-      }, 10000)
-    }
-
-    process.on('SIGTERM', () => void shutdown('SIGTERM'))
-    process.on('SIGINT', () => void shutdown('SIGINT'))
 
     if (process.env.DATABASE_URL) {
       const thresholdSeconds = Number(
