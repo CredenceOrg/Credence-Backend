@@ -9,6 +9,7 @@ import {
   FLAG_LIST_CACHE_KEY,
   OVERRIDE_CACHE_PREFIX,
   FLAG_CACHE_TTL_MS,
+  FLAG_CACHE_SWEEP_INTERVAL_MS,
   ROLLOUT_PERCENT_MIN,
   ROLLOUT_PERCENT_MAX,
   ROLLOUT_HASH_HEX_CHARS,
@@ -185,13 +186,26 @@ interface CacheEntry<T> {
 export class FeatureFlagService {
   private readonly cache: Map<string, CacheEntry<unknown>>
   private readonly outboxRepo: OutboxRepository
+  private sweepTimer: ReturnType<typeof setInterval> | null = null
 
   constructor(
     private readonly db: Queryable = pool,
     private readonly audit: AuditLogService = auditLogService,
+    sweepIntervalMs: number = FLAG_CACHE_SWEEP_INTERVAL_MS,
   ) {
     this.cache = new Map()
     this.outboxRepo = new OutboxRepository()
+    // setInterval uses a 32-bit signed integer internally; clamp to its max so
+    // callers passing very large values (e.g. in tests) don't get a 1 ms timer.
+    const safeIntervalMs = Math.min(sweepIntervalMs, 2_147_483_647)
+    // Start the background sweep so entries that are never re-read do not
+    // accumulate in the Map indefinitely.
+    this.sweepTimer = setInterval(
+      () => this.sweepExpiredCacheEntries(),
+      safeIntervalMs,
+    )
+    // Allow Node.js to exit even if this timer is still active.
+    if (this.sweepTimer.unref) this.sweepTimer.unref()
   }
 
   // ── Cache helpers ───────────────────────────────────────────────────────────
@@ -212,6 +226,40 @@ export class FeatureFlagService {
 
   private cacheDelete(key: string): void {
     this.cache.delete(key)
+  }
+
+  /**
+   * Iterate the in-process cache and delete every entry whose TTL has elapsed.
+   *
+   * Called automatically by the background sweep timer (every
+   * `FLAG_CACHE_SWEEP_INTERVAL_MS`).  Can also be called manually in tests or
+   * for one-off maintenance.
+   *
+   * @returns Number of stale entries removed.
+   */
+  sweepExpiredCacheEntries(): number {
+    const now = Date.now()
+    let swept = 0
+    for (const [key, entry] of this.cache) {
+      if (now > entry.expiresAt) {
+        this.cache.delete(key)
+        swept++
+      }
+    }
+    return swept
+  }
+
+  /**
+   * Stop the background sweep timer.
+   *
+   * Call this during graceful shutdown to allow the process to exit cleanly
+   * when the service instance is no longer needed.
+   */
+  stopSweep(): void {
+    if (this.sweepTimer !== null) {
+      clearInterval(this.sweepTimer)
+      this.sweepTimer = null
+    }
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────

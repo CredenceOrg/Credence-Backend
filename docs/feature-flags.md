@@ -73,7 +73,7 @@ Unique constraint on `(flag_id, tenant_id)`.
 
 ```typescript
 class FeatureFlagService {
-  constructor(db?: Queryable, audit?: AuditLogService)
+  constructor(db?: Queryable, audit?: AuditLogService, sweepIntervalMs?: number)
 
   // Evaluation
   isEnabled(flagKey: string, tenantId: string, userId?: string): Promise<boolean>
@@ -92,6 +92,10 @@ class FeatureFlagService {
   removeOverride(flagKey, tenantId, actor): Promise<void>
   setTenantRollout(flagKey, tenantId, rolloutPercent, actor): Promise<FeatureFlagTenantRollout>
   removeTenantRollout(flagKey, tenantId, actor): Promise<void>
+
+  // Cache sweep
+  sweepExpiredCacheEntries(): number  // returns count of evicted entries
+  stopSweep(): void                   // cancel the background timer
 }
 ```
 
@@ -233,6 +237,23 @@ Cache key prefixes:
 - Boolean overrides: `feature_flag_override:<flagKey>:<tenantId>`
 - Per-tenant rollouts: `feature_flag_tenant_rollout:<flagKey>:<tenantId>`
 - Full list: `feature_flags:all`
+
+### Background TTL sweep
+
+Lazy eviction (on read) is not enough to keep the cache Map small: entries for flags or overrides that are written once but never re-read will stay in memory until the process restarts.
+
+To prevent unbounded growth, `FeatureFlagService` runs a background sweep timer that iterates the Map every **60 seconds** (`FLAG_CACHE_SWEEP_INTERVAL_MS`) and deletes any entry whose `expiresAt` timestamp has passed.
+
+Both constants live in `src/services/featureFlags/consts.ts` and can be overridden:
+
+| Constant | Default | Purpose |
+|---|---|---|
+| `FLAG_CACHE_TTL_MS` | `30 000` ms | How long a cached entry is considered fresh |
+| `FLAG_CACHE_SWEEP_INTERVAL_MS` | `60 000` ms | How often the background sweep runs |
+
+The sweep interval is intentionally set to twice the TTL — sweeping more often than the TTL buys nothing because no entries can have expired yet.
+
+The timer is created with `.unref()` so it does not prevent the Node.js process from exiting cleanly. For an orderly shutdown call `service.stopSweep()` before tearing down the instance (see [Graceful Shutdown](./graceful-shutdown.md)).
 
 ## Audit Logging
 
