@@ -269,6 +269,16 @@ The Grafana dashboard includes:
 - Infrastructure health (DB, Redis status and check duration)
 - Business metrics (reputation calculations, identity verifications, bulk operations)
 
+## Backup Strategy (WAL + PITR)
+
+We use PostgreSQL WAL archiving with Point-In-Time Recovery (PITR) for disaster recovery. See **[docs/BACKUP_STRATEGY.md](docs/BACKUP_STRATEGY.md)** for:
+
+- WAL archiving configuration (wal-g / pgBackRest)
+- Retention policy (7 daily basebackups + 30 days WAL)
+- Restore procedures: full restore, PITR to timestamp, replica promotion
+- Verification cadence: weekly automated restore-verify drill (see `npm run drill:restore`)
+- Prometheus alerts: `wal_archive_failed_total`, `backup_restore_failed_total`, `replica_lag_seconds`
+
 ## Resilience: Timeouts & Retries
 
 The backend implements a comprehensive timeout and retry strategy for all external service dependencies. Webhook deliveries are now idempotent by default: duplicate retries for the same subscriber/event pair are ignored automatically using a persistent reservation keyed by the subscriber ID and event ID. See **[docs/timeouts-and-retries.md](docs/timeouts-and-retries.md)** for:
