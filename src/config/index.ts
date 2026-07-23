@@ -245,6 +245,11 @@ export const envSchema = z.object({
   OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY: z.enum(['none', 'full', 'equal']).optional(),
 
   // Timeout budgets
+  TIMEOUT_GLOBAL_MS: z
+    .string()
+    .default('30000') // 30s default global budget
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(300000)),
   TIMEOUT_DB_MS: z
     .string()
     .default('2000')
@@ -518,6 +523,7 @@ export interface Config {
     origin: string
   }
   timeouts: {
+    global: number
     db: number
     cache: number
     queue: number
@@ -720,6 +726,7 @@ function mapEnvToConfig(env: Env): Config {
       origin: env.CORS_ORIGIN,
     },
     timeouts: {
+      global: env.TIMEOUT_GLOBAL_MS,
       db: env.TIMEOUT_DB_MS,
       cache: env.TIMEOUT_CACHE_MS,
       queue: env.TIMEOUT_QUEUE_MS,

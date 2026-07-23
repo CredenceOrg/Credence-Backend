@@ -10,6 +10,16 @@ The Credence Backend implements a layered timeout and retry strategy:
 2. **Retry Policies** (`src/lib/retryPolicy.ts`): Exponential backoff, jitter strategies, and per-provider overrides
 3. **Environment Variables** (`src/config/index.ts`): Runtime tuning without code changes
 4. **Timeout Executor** (`src/lib/timeoutExecutor.ts`): Unified wrapper for all service calls with observability
+5. **Global Request Budgets** (`src/middleware/timeoutBudget.ts` & `src/utils/timeoutContext.ts`): Enforces an absolute upper bound per-request.
+
+## Global Request Budgets
+
+Every incoming request is wrapped in an `AsyncLocalStorage` context that tracks a global deadline. The global budget limits the *total* time a request can spend executing, ensuring long-running requests fail fast.
+
+- **Environment Variable**: `TIMEOUT_GLOBAL_MS` (default: 30000)
+- **Header Override**: `x-timeout-ms` (clients can optionally request a stricter timeout, up to `TIMEOUT_GLOBAL_MS`)
+
+When a downstream call (e.g., DB query, HTTP request) is made, its specific service budget is evaluated against the *remaining* global budget. If the remaining budget is smaller than the requested service timeout, the timeout is clamped to the remaining global budget.
 
 ## Service Type Timeout Budgets
 
@@ -350,6 +360,7 @@ All timeout and retry env vars with defaults:
 
 ```bash
 # Timeout budgets (milliseconds)
+TIMEOUT_GLOBAL_MS=30000
 TIMEOUT_DB_MS=2000
 TIMEOUT_CACHE_MS=500
 TIMEOUT_QUEUE_MS=1000

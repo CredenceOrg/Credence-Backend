@@ -165,8 +165,7 @@ const analyticsThresholdSeconds = Number(process.env.ANALYTICS_STALENESS_SECONDS
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
-import { idempotencyMiddleware } from "./middleware/idempotency.js";
-import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
+import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
 
 const app = express();
 
@@ -196,8 +195,16 @@ try {
 
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
+let globalTimeoutMs: number;
+try {
+  globalTimeoutMs = validateConfig(process.env).timeouts.global;
+} catch {
+  globalTimeoutMs = 30000; // 30s default
+}
+const timeoutBudgetMiddleware = createTimeoutBudgetMiddleware(globalTimeoutMs);
+
 app.use(requestIdMiddleware);
-app.use(cacheControlMiddleware);
+app.use(timeoutBudgetMiddleware);
 
 const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
   ?.split(',')
