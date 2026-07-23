@@ -167,6 +167,8 @@ Invalid input returns **400** with `{ "error": "Validation failed", "details": [
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
+**API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**
+
 ### OpenAPI spec
 
 ```

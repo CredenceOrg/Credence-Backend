@@ -2,6 +2,7 @@
 
 - OpenAPI spec: [`docs/openapi.yaml`](openapi.yaml)
 - Postman collection: [`docs/credence.postman_collection.json`](credence.postman_collection.json)
+- **API versioning & stability policy:** [`docs/API_STABILITY.md`](API_STABILITY.md)
 
 ---
 
