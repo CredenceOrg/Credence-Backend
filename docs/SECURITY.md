@@ -118,6 +118,8 @@ Each event includes actor metadata, action name, timestamp, and evidence resourc
 
 ## Rate Limiting
 
+For a detailed support and operations guide on rate limiting (including default tier numbers, environment configuration, troubleshooting FAQ, and Prometheus metrics), see the **[Rate Limiting Operations & Support Guide](rate-limiting.md)**.
+
 ### Architecture
 
 Rate limiting is enforced in `src/middleware/rateLimit.ts` using Redis fixed-window counters. Two independent counters are maintained per request:

@@ -576,6 +576,7 @@ For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](doc
 For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
+- **Rate Limiting Support & Operations**: See [docs/rate-limiting.md](docs/rate-limiting.md) for details on default tier rate limits, environment configuration, troubleshooting, and support FAQs.
 - **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
 - **Secret-Rotation Posture**: See [docs/SECRETS.md](docs/SECRETS.md) for where secrets live, rotation cadence, and blast radius of each credential type.
 
