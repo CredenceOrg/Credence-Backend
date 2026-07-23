@@ -5,6 +5,7 @@ declare global {
     interface Request {
       requestId: string
       correlationId: string
+      traceId: string
     }
   }
 }

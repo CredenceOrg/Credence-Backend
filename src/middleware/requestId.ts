@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { tracingContext } from '../utils/logger.js'
 
 /**
- * Middleware to handle Request ID, Correlation ID, and context for distributed tracing.
+ * Middleware to handle Request ID, Correlation ID, Trace ID, and context for distributed tracing.
  */
 export const requestIdMiddleware = (
   req: Request,
@@ -16,18 +16,24 @@ export const requestIdMiddleware = (
   // 2. Handle Request ID
   const requestId = (req.header('x-request-id') as string) || randomUUID()
 
-  // 3. Attach IDs to the request object
+  // 3. Handle Trace ID - reuse from incoming header or generate a new one
+  const traceId = (req.header('x-trace-id') as string) || randomUUID()
+
+  // 4. Attach IDs to the request object
   req['correlationId'] = correlationId
   req['requestId'] = requestId
+  req['traceId'] = traceId
 
-  // 4. Return IDs in response headers
+  // 5. Return IDs in response headers
   res.setHeader('x-correlation-id', correlationId)
   res.setHeader('x-request-id', requestId)
+  res.setHeader('x-trace-id', traceId)
 
-  // 5. Wrap the rest of the request in a tracing context
+  // 6. Wrap the rest of the request in a tracing context
   const context = new Map<string, string>()
   context.set('correlationId', correlationId)
   context.set('requestId', requestId)
+  context.set('traceId', traceId)
 
   // Set standardized observability fields
   context.set('route', req.originalUrl || req.path || 'N/A')
