@@ -1,6 +1,28 @@
 # Feature Flags
 
-## Overview
+## Static Environment Flags
+
+For simple boolean toggles that apply globally at build/startup time, we use a static feature flags module instead of stringly-typed `process.env` reads.
+
+### Usage
+
+```typescript
+import { getFlag } from '../config/featureFlags'
+
+if (getFlag('newPipeline')) {
+  // Execute new logic
+}
+```
+
+### Adding a new static flag
+
+1. Add the flag key and corresponding environment variable name to `FEATURE_FLAGS` in `src/config/featureFlags.ts`.
+2. Update `.env.example` with the new environment variable.
+3. Use `getFlag('yourFlagName')` anywhere in the codebase.
+
+## Dynamic Feature Flag Service
+
+### Overview
 
 The feature flag service provides per-tenant toggles for code paths that should be rolled out gradually across organizations. It supports four evaluation layers (in priority order):
 
