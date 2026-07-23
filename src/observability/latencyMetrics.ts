@@ -32,19 +32,44 @@ export function normalizeRoute(path: string, routePath?: string): string {
 }
 
 /**
+ * Histogram bucket boundaries (in seconds) for HTTP request latency.
+ *
+ * The three SLO fence-posts are kept as explicit values so that
+ * histogram_quantile() and range queries can produce exact counts at each
+ * documented threshold without interpolation:
+ *
+ *   0.2  s  →  200 ms  cache-operation SLO target
+ *   0.5  s  →  500 ms  queue-operation SLO target
+ *   1.0  s  → 1000 ms  database-operation SLO target / p99 alert threshold
+ *
+ * Defined once here and reused by the histogram definition, tests, and docs
+ * so the boundaries never drift out of sync.
+ *
+ * @see src/lib/timeouts.ts   DEFAULT_TIMEOUT_BUDGETS for the source SLO values
+ * @see docs/SLO.md           Latency SLO definitions
+ * @see docs/sla-metrics.md   Metric documentation and PromQL examples
+ */
+export const HTTP_LATENCY_BUCKETS_S = [
+  0.005, 0.01, 0.025, 0.05, 0.1,
+  0.2,  // ← 200 ms — cache SLO target
+  0.5,  // ← 500 ms — queue SLO target
+  1,    // ← 1000 ms — database SLO target & p99 alert threshold
+  2.5, 5, 10,
+]
+
+/**
  * HTTP request latency histogram for SLA tracking (p50, p95, p99).
  * Histograms allow for aggregation across multiple instances.
  *
- * Buckets are tuned for API latency: 5ms to 10s with high resolution
- * around the 250ms SLO target.
+ * Buckets are defined by HTTP_LATENCY_BUCKETS_S, with explicit fence-posts
+ * at the 200 ms, 500 ms, and 1000 ms SLO boundaries so that compliance
+ * queries and alerts land on exact bucket edges.
  */
 export const httpRequestDurationHistogram = new client.Histogram({
   name: 'http_request_duration_seconds',
   help: 'HTTP request latency in seconds',
   labelNames: ['method', 'route', 'status_class'],
-  buckets: [
-    0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 7.5, 10
-  ],
+  buckets: HTTP_LATENCY_BUCKETS_S,
 })
 
 /**

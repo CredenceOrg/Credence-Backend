@@ -35,7 +35,6 @@ groups:
         annotations:
           summary: "High Error Budget Burn Rate"
           description: "Current burn rate is {{ $value }}x the allowed error rate (threshold: 2x)"
-          description: "Current burn rate is 14.4x the allowed error rate (0.1%)"
           runbook_url: "https://docs.credence.org/runbooks/budget-burn#fast-burn"
 
       # Per-endpoint Latency SLO (95% of requests < 250ms)
