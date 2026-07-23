@@ -13,6 +13,7 @@ export default defineConfig({
       "tests/repositories/**/*.test.ts",
       "tests/routes/**/*.test.ts",
       "monitoring/**/*.test.ts",
+      "scripts/**/*.test.ts",
     ],
     coverage: {
       provider: "istanbul",

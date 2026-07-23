@@ -16,6 +16,7 @@
     "coverage:audit": "vitest run --config vitest.audit.config.ts --coverage",
     "coverage:services": "vitest run --config vitest.services.config.ts --coverage",
     "security:scan": "npm audit --omit=dev",
+    "deps:audit": "tsx scripts/deps-audit.ts",
     "sbom:generate": "npx @cyclonedx/cyclonedx-npm --output-file sbom.json --ignore-npm-errors",
     "sbom:check": "tsx scripts/sbom-validate.ts sbom.json",
     "sbom:diff": "node scripts/sbom-component-diff.js --base sbom.json --head sbom.json --summary",
