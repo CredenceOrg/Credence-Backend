@@ -117,7 +117,7 @@ docker compose exec postgres psql -U credence
 
 ### Environment variables
 
-All configuration is driven by environment variables. Copy `.env.example` to `.env` and adjust as needed. Key variables:
+All configuration is driven by environment variables. Copy `.env.example` to `.env` and adjust as needed. The full reference — every required and optional variable with defaults, validation bounds, and common pitfalls — is in **[docs/CONFIG_TEMPLATE.md](docs/CONFIG_TEMPLATE.md)**. Key variables:
 
 | Variable            | Default    | Description               |
 | ------------------- | ---------- | ------------------------- |
