@@ -16,3 +16,4 @@ monitoring/data/
 prometheus-data/
 grafana-data/
 node_modules
+.kimchi/

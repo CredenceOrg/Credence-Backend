@@ -243,6 +243,44 @@ This action is logged with:
 
 ---
 
+### POST /api/admin/replay-event
+
+Replay a single failed inbound event by id (passed in request body). Audit-logged.
+
+**Scope**: `admin:write`
+
+**Request body**:
+
+```json
+{
+  "id": "evt-uuid"
+}
+```
+
+**Example Request**:
+
+```bash
+curl -X POST http://localhost:3000/api/admin/replay-event \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"evt-uuid"}'
+```
+
+**Example Response (200 OK)**
+
+```json
+{
+  "success": true,
+  "message": "Event successfully replayed"
+}
+```
+
+**Permissions**: Requires `admin` role.
+
+**Errors**: Returns 400 for validation errors (missing id, invalid fields), 404 if the event does not exist, 500 if replay fails.
+
+---
+
 ### Replay Horizon Ledger Range
 
 **POST** `/api/admin/events/replay-range`

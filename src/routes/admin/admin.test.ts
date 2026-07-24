@@ -290,3 +290,49 @@ describe('Admin Anti-Crawling Defenses', () => {
     expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
   });
 });
+
+describe('POST /api/admin/replay-event', () => {
+  it('should replay event with valid id', async () => {
+    const { ReplayService } = await import('../../services/replayService.js')
+    const mockReplayService = vi.mocked(ReplayService)
+    mockReplayService.prototype.replayEvent = vi.fn().mockResolvedValue({
+      success: true,
+      message: 'Event successfully replayed',
+    })
+
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123' })
+
+    expect(res.status).toBe(200)
+    expect(res.body.success).toBe(true)
+  })
+
+  it('should return 400 when id is missing', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({})
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
+  })
+
+  it('should return 400 for empty string id', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: '' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
+  })
+
+  it('should return 400 for extra unknown fields (strict schema)', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123', maliciousField: 'attack' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
+  })
+
+})

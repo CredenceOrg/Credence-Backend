@@ -3238,6 +3238,177 @@ components:
             type: never
           type: never
       type: object
+    listRateLimitOverridesResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                      type: optional
+                    tenantId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    rateLimit:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                    windowSize:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                    reason:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                    createdAt:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                    updatedAt:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  id:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                    type: optional
+                  tenantId:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  rateLimit:
+                    def:
+                      type: number
+                      checks: []
+                    type: number
+                    minValue: null
+                    maxValue: null
+                    isInt: false
+                    isFinite: true
+                    format: null
+                  windowSize:
+                    def:
+                      type: number
+                      checks: []
+                    type: number
+                    minValue: null
+                    maxValue: null
+                    isInt: false
+                    isFinite: true
+                    format: null
+                  reason:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+                  createdAt:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+                  updatedAt:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+              type: object
+      type: object
     migrationsDryRunBodySchema:
       def:
         type: object
@@ -3720,6 +3891,85 @@ components:
             minLength: 1
             maxLength: null
       type: object
+    rateLimitOverrideSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks: []
+                type: number
+                minValue: null
+                maxValue: null
+                isInt: false
+                isFinite: true
+                format: null
+            type: optional
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          rateLimit:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          windowSize:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          reason:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          createdAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          updatedAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     reconciliationFindingSchema:
       def:
         type: object
@@ -3905,6 +4155,51 @@ components:
             minLength: null
             maxLength: null
       type: object
+    redirectTargetSchema:
+      def:
+        type: string
+        checks:
+          - {}
+          - def:
+              type: custom
+              check: custom
+            type: custom
+      type: string
+      format: null
+      minLength: 1
+      maxLength: null
+    removeRateLimitOverrideBodySchema:
+      def:
+        type: object
+        shape:
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 3
+            maxLength: null
+      type: object
+    replayEventBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     reportJobParamsSchema:
       def:
         type: object
@@ -4020,6 +4315,161 @@ components:
             def:
               type: boolean
             type: boolean
+      type: object
+    setRateLimitOverrideBodySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          rateLimit:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 1
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          windowSize:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 1
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 3
+            maxLength: null
+      type: object
+    setRateLimitOverrideResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                  type: optional
+                tenantId:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                rateLimit:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                windowSize:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                reason:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+                createdAt:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+                updatedAt:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+            type: object
       type: object
     setTenantRolloutBodySchema:
       def:
@@ -5531,6 +5981,248 @@ components:
                   format: datetime
                   minLength: null
                   maxLength: null
+            type: object
+      type: object
+    topTalkerEntrySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          requestCount:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          percentage:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          lastRequestAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    topTalkersQuerySchema:
+      def:
+        type: object
+        shape:
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          windowMinutes:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 1440
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    topTalkersResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                windowStart:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowEnd:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowMinutes:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                totalRequests:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                topTalkers:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: object
+                        shape:
+                          tenantId:
+                            def:
+                              type: string
+                            type: string
+                            format: null
+                            minLength: null
+                            maxLength: null
+                          requestCount:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          percentage:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          lastRequestAt:
+                            def:
+                              type: optional
+                              innerType:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                            type: optional
+                      type: object
+                  type: array
+                  element:
+                    def:
+                      type: object
+                      shape:
+                        tenantId:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        requestCount:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        percentage:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        lastRequestAt:
+                          def:
+                            type: optional
+                            innerType:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                          type: optional
+                    type: object
             type: object
       type: object
     transactionsHistoryQuerySchema:
@@ -8740,6 +9432,74 @@ paths:
                   - message
         "403":
           description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+  /api/admin/replay-event:
+    post:
+      summary: Replay a failed inbound event
+      description: Replays a specific failed inbound event by id (passed in body) to
+        its registered handler pipeline. Audit-logged via
+        ReplayService.replayEvent.
+      tags:
+        - Admin
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+              required:
+                - id
+              additionalProperties: false
+      responses:
+        "200":
+          description: Event replayed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Event successfully replayed
+                required:
+                  - success
+                  - message
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "404":
+          description: Event not found
           content:
             application/json:
               schema:

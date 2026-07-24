@@ -112,3 +112,15 @@ export type MigrationsDryRunQuery = z.infer<typeof migrationsDryRunQuerySchema>
 export type MigrationsDryRunBody = z.infer<typeof migrationsDryRunBodySchema>
 export type MigrationsDryRunResponse = z.infer<typeof migrationsDryRunResponseSchema>
 
+/**
+ * Request body schema for replaying a failed inbound event
+ * POST /api/admin/replay-event
+ */
+export const replayEventBodySchema = z
+  .object({
+    id: z.string().min(1, 'id is required'),
+  })
+  .strict()
+
+export type ReplayEventBody = z.infer<typeof replayEventBodySchema>
+
