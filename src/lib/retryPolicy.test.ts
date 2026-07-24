@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
+import fc from 'fast-check'
 import {
   RETRY_POLICY_HARD_CAPS,
   getBackoffDelayMs,
   resolveProviderRetryPolicy,
+  type RetryJitterStrategy,
   type RetryPolicy,
 } from './retryPolicy.js'
 
@@ -86,6 +88,27 @@ describe('getBackoffDelayMs', () => {
     expect(delay).toBe(150)
   })
 
+  it('applies decorrelated jitter', () => {
+    const delay = getBackoffDelayMs(
+      { ...defaultPolicy, jitterStrategy: 'decorrelated' },
+      2,
+      () => 0.5,
+      200,
+    )
+
+    expect(delay).toBe(200)
+  })
+
+  it('decorrelated jitter defaults previousDelayMs to baseDelayMs', () => {
+    const delay = getBackoffDelayMs(
+      { ...defaultPolicy, jitterStrategy: 'decorrelated' },
+      1,
+      () => 0,
+    )
+
+    expect(delay).toBe(100)
+  })
+
   it('caps exponential growth at maxDelayMs', () => {
     const delay = getBackoffDelayMs(
       { ...defaultPolicy, maxDelayMs: 250 },
@@ -93,6 +116,140 @@ describe('getBackoffDelayMs', () => {
     )
 
     expect(delay).toBe(250)
+  })
+
+  describe('fast-check property tests', () => {
+    const strategies: RetryJitterStrategy[] = ['none', 'full', 'equal', 'decorrelated']
+
+    it('all strategies produce delays <= maxDelayMs', () => {
+      fc.assert(
+        fc.property(
+          fc.constantFrom(...strategies),
+          fc.integer({ min: 1, max: 4 }),
+          fc.integer({ min: 50, max: 200 }),
+          fc.integer({ min: 200, max: 1000 }),
+          fc.double({ min: 0, max: 1, noDefaultInfinity: true, noNaN: true }),
+          (strategy, attempt, baseDelayMs, maxDelayMs, rngValue) => {
+            const policy: RetryPolicy = {
+              maxAttempts: 10,
+              baseDelayMs,
+              maxDelayMs,
+              backoffMultiplier: 2,
+              jitterStrategy: strategy,
+            }
+            const delay = getBackoffDelayMs(policy, attempt, () => rngValue, baseDelayMs)
+            expect(delay).toBeGreaterThanOrEqual(0)
+            expect(delay).toBeLessThanOrEqual(maxDelayMs)
+          },
+        ),
+      )
+    })
+
+    it('full jitter delay ∈ [0, cappedDelay]', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 1, max: 5 }),
+          fc.integer({ min: 50, max: 500 }),
+          fc.integer({ min: 500, max: 2000 }),
+          fc.double({ min: 0, max: 1, noDefaultInfinity: true, noNaN: true }),
+          (attempt, baseDelayMs, maxDelayMs, rngValue) => {
+            const policy: RetryPolicy = {
+              maxAttempts: 10,
+              baseDelayMs,
+              maxDelayMs,
+              backoffMultiplier: 2,
+              jitterStrategy: 'full',
+            }
+            const cappedDelay = Math.min(
+              maxDelayMs,
+              baseDelayMs * Math.pow(2, Math.max(0, attempt - 1)),
+            )
+            const delay = getBackoffDelayMs(policy, attempt, () => rngValue)
+            expect(delay).toBeGreaterThanOrEqual(0)
+            expect(delay).toBeLessThanOrEqual(cappedDelay)
+          },
+        ),
+      )
+    })
+
+    it('equal jitter delay ∈ [cappedDelay/2, cappedDelay]', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 1, max: 5 }),
+          fc.integer({ min: 50, max: 500 }),
+          fc.integer({ min: 500, max: 2000 }),
+          fc.double({ min: 0, max: 1, noDefaultInfinity: true, noNaN: true }),
+          (attempt, baseDelayMs, maxDelayMs, rngValue) => {
+            const policy: RetryPolicy = {
+              maxAttempts: 10,
+              baseDelayMs,
+              maxDelayMs,
+              backoffMultiplier: 2,
+              jitterStrategy: 'equal',
+            }
+            const cappedDelay = Math.min(
+              maxDelayMs,
+              baseDelayMs * Math.pow(2, Math.max(0, attempt - 1)),
+            )
+            const delay = getBackoffDelayMs(policy, attempt, () => rngValue)
+            expect(delay).toBeGreaterThanOrEqual(Math.floor(cappedDelay / 2))
+            expect(delay).toBeLessThanOrEqual(cappedDelay)
+          },
+        ),
+      )
+    })
+
+    it('decorrelated jitter delay ∈ [baseDelayMs, cappedDelay]', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 1, max: 5 }),
+          fc.integer({ min: 50, max: 200 }),
+          fc.integer({ min: 500, max: 2000 }),
+          fc.double({ min: 0, max: 1, noDefaultInfinity: true, noNaN: true }),
+          (attempt, baseDelayMs, maxDelayMs, rngValue) => {
+            const policy: RetryPolicy = {
+              maxAttempts: 10,
+              baseDelayMs,
+              maxDelayMs,
+              backoffMultiplier: 2,
+              jitterStrategy: 'decorrelated',
+            }
+            const cappedDelay = Math.min(
+              maxDelayMs,
+              baseDelayMs * Math.pow(2, Math.max(0, attempt - 1)),
+            )
+            const delay = getBackoffDelayMs(policy, attempt, () => rngValue, baseDelayMs)
+            expect(delay).toBeGreaterThanOrEqual(baseDelayMs)
+            expect(delay).toBeLessThanOrEqual(cappedDelay)
+          },
+        ),
+      )
+    })
+
+    it('all strategies respect jitterStrategy: none as deterministic cap', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 1, max: 10 }),
+          fc.integer({ min: 50, max: 500 }),
+          fc.integer({ min: 500, max: 2000 }),
+          (attempt, baseDelayMs, maxDelayMs) => {
+            const policy: RetryPolicy = {
+              maxAttempts: 10,
+              baseDelayMs,
+              maxDelayMs,
+              backoffMultiplier: 2,
+              jitterStrategy: 'none',
+            }
+            const cappedDelay = Math.min(
+              maxDelayMs,
+              baseDelayMs * Math.pow(2, Math.max(0, attempt - 1)),
+            )
+            const delay = getBackoffDelayMs(policy, attempt)
+            expect(delay).toBe(Math.floor(cappedDelay))
+          },
+        ),
+      )
+    })
   })
 })
 

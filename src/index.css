@@ -1,0 +1,177 @@
+/*
+ * Credence Design Tokens
+ *
+ * Single source of truth for all UI primitives: colors, spacing, border radius,
+ * and typography. Consume by importing this file once at the application root.
+ *
+ * Usage:
+ *   @import url('./index.css');
+ *   color: var(--credence-color-accent);
+ *
+ * Convention: --credence-{category}-{variant}-{scale}
+ * Hex values appear ONLY as primitive definitions below; all semantic tokens
+ * reference primitives via var() — no one-off hex usage elsewhere.
+ */
+
+:root {
+
+  /* ================================================================
+     COLOR — PRIMITIVES
+     Primary: professional blue (trust, finance, authority)
+  ================================================================ */
+
+  --credence-color-primary-50:  #eff6ff;
+  --credence-color-primary-100: #dbeafe;
+  --credence-color-primary-200: #bfdbfe;
+  --credence-color-primary-300: #93c5fd;
+  --credence-color-primary-400: #60a5fa;
+  --credence-color-primary-500: #3b82f6;
+  --credence-color-primary-600: #2563eb;
+  --credence-color-primary-700: #1d4ed8;
+  --credence-color-primary-800: #1e40af;
+  --credence-color-primary-900: #1e3a8a;
+
+  /* Neutral: cool slate gray */
+  --credence-color-neutral-50:  #f8fafc;
+  --credence-color-neutral-100: #f1f5f9;
+  --credence-color-neutral-200: #e2e8f0;
+  --credence-color-neutral-300: #cbd5e1;
+  --credence-color-neutral-400: #94a3b8;
+  --credence-color-neutral-500: #64748b;
+  --credence-color-neutral-600: #475569;
+  --credence-color-neutral-700: #334155;
+  --credence-color-neutral-800: #1e293b;
+  --credence-color-neutral-900: #0f172a;
+
+  /* Semantic: success */
+  --credence-color-success-light: #f0fdf4;
+  --credence-color-success-base:  #16a34a;
+  --credence-color-success-dark:  #15803d;
+
+  /* Semantic: error */
+  --credence-color-error-light: #fef2f2;
+  --credence-color-error-base:  #dc2626;
+  --credence-color-error-dark:  #b91c1c;
+
+  /* Semantic: warning */
+  --credence-color-warning-light: #fffbeb;
+  --credence-color-warning-base:  #d97706;
+  --credence-color-warning-dark:  #b45309;
+
+  /* Semantic: info */
+  --credence-color-info-light: #eff6ff;
+  --credence-color-info-base:  #2563eb;
+  --credence-color-info-dark:  #1d4ed8;
+
+  /* ================================================================
+     COLOR — SEMANTIC ALIASES
+     All values reference primitives above; zero hard-coded hex here.
+  ================================================================ */
+
+  --credence-color-bg-page:        var(--credence-color-neutral-50);
+  --credence-color-bg-surface:     #ffffff;
+  --credence-color-bg-elevated:    var(--credence-color-neutral-100);
+
+  --credence-color-text-primary:   var(--credence-color-neutral-900);
+  --credence-color-text-secondary: var(--credence-color-neutral-600);
+  --credence-color-text-disabled:  var(--credence-color-neutral-400);
+  --credence-color-text-inverse:   #ffffff;
+
+  --credence-color-border:         var(--credence-color-neutral-200);
+  --credence-color-border-strong:  var(--credence-color-neutral-400);
+
+  --credence-color-accent:         var(--credence-color-primary-600);
+  --credence-color-accent-hover:   var(--credence-color-primary-700);
+  --credence-color-accent-subtle:  var(--credence-color-primary-50);
+
+  /* ================================================================
+     SPACING — 4px base grid, rem values
+  ================================================================ */
+
+  --credence-space-px:  1px;
+  --credence-space-0:   0;
+  --credence-space-0-5: 0.125rem;  /*  2px */
+  --credence-space-1:   0.25rem;   /*  4px */
+  --credence-space-1-5: 0.375rem;  /*  6px */
+  --credence-space-2:   0.5rem;    /*  8px */
+  --credence-space-2-5: 0.625rem;  /* 10px */
+  --credence-space-3:   0.75rem;   /* 12px */
+  --credence-space-4:   1rem;      /* 16px */
+  --credence-space-5:   1.25rem;   /* 20px */
+  --credence-space-6:   1.5rem;    /* 24px */
+  --credence-space-8:   2rem;      /* 32px */
+  --credence-space-10:  2.5rem;    /* 40px */
+  --credence-space-12:  3rem;      /* 48px */
+  --credence-space-16:  4rem;      /* 64px */
+  --credence-space-20:  5rem;      /* 80px */
+  --credence-space-24:  6rem;      /* 96px */
+
+  /* ================================================================
+     BORDER RADIUS
+  ================================================================ */
+
+  --credence-radius-none: 0;
+  --credence-radius-sm:   0.125rem;  /*  2px */
+  --credence-radius-base: 0.25rem;   /*  4px */
+  --credence-radius-md:   0.375rem;  /*  6px */
+  --credence-radius-lg:   0.5rem;    /*  8px */
+  --credence-radius-xl:   0.75rem;   /* 12px */
+  --credence-radius-2xl:  1rem;      /* 16px */
+  --credence-radius-3xl:  1.5rem;    /* 24px */
+  --credence-radius-full: 9999px;
+
+  /* ================================================================
+     TYPOGRAPHY — FONT FAMILIES
+  ================================================================ */
+
+  --credence-font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --credence-font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo,
+    Monaco, Consolas, 'Courier New', monospace;
+
+  /* ================================================================
+     TYPOGRAPHY — FONT SIZES
+  ================================================================ */
+
+  --credence-text-xs:   0.75rem;   /* 12px — labels, captions, legal */
+  --credence-text-sm:   0.875rem;  /* 14px — secondary body, table cells */
+  --credence-text-base: 1rem;      /* 16px — body copy default */
+  --credence-text-lg:   1.125rem;  /* 18px — lead paragraphs */
+  --credence-text-xl:   1.25rem;   /* 20px — card titles, sub-headings */
+  --credence-text-2xl:  1.5rem;    /* 24px — section headings */
+  --credence-text-3xl:  1.875rem;  /* 30px — page headings */
+  --credence-text-4xl:  2.25rem;   /* 36px — hero headings */
+  --credence-text-5xl:  3rem;      /* 48px — display text */
+
+  /* ================================================================
+     TYPOGRAPHY — FONT WEIGHTS
+  ================================================================ */
+
+  --credence-font-weight-regular:  400;
+  --credence-font-weight-medium:   500;
+  --credence-font-weight-semibold: 600;
+  --credence-font-weight-bold:     700;
+
+  /* ================================================================
+     TYPOGRAPHY — LINE HEIGHTS
+  ================================================================ */
+
+  --credence-leading-none:    1;
+  --credence-leading-tight:   1.25;
+  --credence-leading-snug:    1.375;
+  --credence-leading-normal:  1.5;
+  --credence-leading-relaxed: 1.625;
+  --credence-leading-loose:   2;
+
+  /* ================================================================
+     TYPOGRAPHY — LETTER SPACING
+  ================================================================ */
+
+  --credence-tracking-tighter: -0.05em;
+  --credence-tracking-tight:   -0.025em;
+  --credence-tracking-normal:   0em;
+  --credence-tracking-wide:     0.025em;
+  --credence-tracking-wider:    0.05em;
+  --credence-tracking-widest:   0.1em;
+
+}

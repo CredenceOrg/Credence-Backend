@@ -17,3 +17,26 @@ services:
     tmpfs:
       - /var/lib/postgresql/data:rw,noexec,nosuid,size=100m
       - /tmp:rw,noexec,nosuid,size=50m
+
+  test-redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  test-horizon:
+    image: node:20-alpine
+    command: ["node", "/app/horizon-stub.js"]
+    volumes:
+      - ./tests/chaos/horizon-stub.js:/app/horizon-stub.js:ro
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"const http = require('http'); const req = http.get('http://127.0.0.1:8000/health', res => process.exit(res.statusCode === 200 ? 0 : 1)); req.on('error', () => process.exit(1));\""]
+      interval: 5s
+      timeout: 3s
+      retries: 5

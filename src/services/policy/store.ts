@@ -66,18 +66,36 @@ export class PolicyStore {
   }
 
   /**
-   * Return all rules for an org (and platform-wide rules where orgId === '*').
-   * Results are served from cache when fresh.
+   * Internal: return all cached rules for an org (bypasses pagination).
+   * Used by PolicyEvaluator for authorization decisions.
    */
-  findByOrg(orgId: string): PolicyRule[] {
+  findAllByOrg(orgId: string): PolicyRule[] {
     const cached = this.cache.get(orgId)
     if (cached && Date.now() < cached.expiresAt) return cached.rules
 
-    const rules = [...this.rules.values()].filter(
-      (r) => r.orgId === orgId || r.orgId === '*',
-    )
-    this.cache.set(orgId, { rules, expiresAt: Date.now() + CACHE_TTL_MS })
-    return rules
+    const all = [...this.rules.values()].filter((r) => r.orgId === orgId || r.orgId === '*')
+    this.cache.set(orgId, { rules: all, expiresAt: Date.now() + CACHE_TTL_MS })
+    return all
+  }
+
+  /**
+   * Return rules for an org with pagination.
+   *
+   * @param orgId   Org to look up rules for
+   * @param limit   Max rules to return (default 20, max 100)
+   * @param offset  Number of rules to skip (default 0)
+   * @returns       Paginated rules and total count
+   */
+  findByOrg(
+    orgId: string,
+    limit = 20,
+    offset = 0,
+  ): { rules: PolicyRule[]; total: number } {
+    const all = this.findAllByOrg(orgId)
+    return {
+      rules: all.slice(offset, offset + limit),
+      total: all.length,
+    }
   }
 
   // ---------------------------------------------------------------------------

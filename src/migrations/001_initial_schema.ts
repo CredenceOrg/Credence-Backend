@@ -63,6 +63,10 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       type: 'serial',
       primaryKey: true,
     },
+    bond_id: {
+      type: 'integer',
+      notNull: true,
+    },
     attester_address: {
       type: 'varchar(64)',
       notNull: true,
@@ -71,21 +75,12 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       type: 'varchar(64)',
       notNull: true,
     },
-    weight: {
+    score: {
       type: 'integer',
       notNull: true,
     },
-    timestamp: {
-      type: 'timestamp',
-      notNull: true,
-    },
-    is_valid: {
-      type: 'boolean',
-      notNull: true,
-      default: true,
-    },
-    transaction_hash: {
-      type: 'varchar(128)',
+    note: {
+      type: 'text',
     },
     created_at: {
       type: 'timestamp',
@@ -97,10 +92,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
   // Add indexes for attestation queries
   pgm.createIndex('attestations', 'attester_address')
   pgm.createIndex('attestations', 'subject_address')
-  pgm.createIndex('attestations', 'is_valid')
-  pgm.createIndex('attestations', 'timestamp')
-  // Composite index for common query pattern
-  pgm.createIndex('attestations', ['subject_address', 'is_valid'])
+  pgm.createIndex('attestations', 'bond_id')
 
   // Reputation scores table - caches calculated scores
   pgm.createTable('reputation_scores', {

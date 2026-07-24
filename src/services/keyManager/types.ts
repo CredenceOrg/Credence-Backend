@@ -1,4 +1,6 @@
-import type { KeyLike } from 'jose'
+import type { KeyObject } from 'node:crypto'
+
+export type KeyLike = CryptoKey | KeyObject
 
 export type KeyState = 'active' | 'retired'
 
@@ -51,4 +53,47 @@ export interface KeyAuditEvent {
   kid: string
   /** The kid of the key that was active before a rotation. Present on KEY_ROTATED. */
   previousActiveKid?: string
+}
+
+// ── KEK (Key Encryption Key) types ──────────────────────────────────────────
+
+/** State of a KEK version. */
+export type KekState = 'active' | 'retired'
+
+/**
+ * A versioned Key Encryption Key used for envelope-encrypting evidence at rest.
+ * The raw key material is a 32-byte AES-256 key.
+ */
+export interface KekVersion {
+  /** Monotonically increasing integer version number (1, 2, 3, …). */
+  version: number
+  /** AES-256 key material (32 bytes). Zeroized after re-encryption completes. */
+  keyMaterial: Buffer
+  state: KekState
+  createdAt: Date
+  /** Set when this version is superseded by a newer one. */
+  retiredAt: Date | null
+}
+
+/** Audit event for KEK lifecycle transitions. */
+export interface KekAuditEvent {
+  timestamp: string
+  event: 'KEK_REGISTERED' | 'KEK_ACTIVATED' | 'KEK_RETIRED' | 'KEK_ZEROIZED'
+  version: number
+  /** Version that was previously active (present on KEK_ACTIVATED). */
+  previousVersion?: number
+}
+
+/** Result of registering a new KEK version (dual-control approval). */
+export interface KekRegistrationResult {
+  version: number
+  /** True when the new version is immediately active (no prior active version). */
+  autoActivated: boolean
+}
+
+/** Dual-control approval record required before activating a new KEK. */
+export interface KekApproval {
+  version: number
+  approvedBy: string
+  approvedAt: Date
 }

@@ -69,6 +69,11 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     ifNotExists: true,
   })
 
+  pgm.createIndex('settlements', 'transaction_hash', {
+    name: 'idx_settlements_transaction_hash',
+    ifNotExists: true,
+  })
+
   pgm.sql(`
     CREATE TRIGGER settlements_updated_at
       BEFORE UPDATE ON settlements

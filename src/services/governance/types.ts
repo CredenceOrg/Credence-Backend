@@ -7,6 +7,7 @@ export type DisputeStatus =
 
 export interface Dispute {
   id: string
+  tenantId: string
   filedBy: string
   respondent: string
   reason: string

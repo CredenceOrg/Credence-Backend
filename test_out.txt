@@ -1,0 +1,454 @@
+
+> credence-backend@0.1.0 test
+> vitest run src/lib/decimalMath.test.ts
+
+
+ RUN  v4.1.9 /home/gamp/Credence-Backend
+
+ ❯ src/lib/decimalMath.test.ts (163 tests | 7 failed) 585ms
+       ✓ should be HALF_UP 2ms
+         ✓ roundToScale(10.00, 2) → 10.00 1ms
+         ✓ roundToScale(0.00, 2) → 0.00 0ms
+         ✓ roundToScale(1, 0) → 1 0ms
+         ✓ roundToScale(1.5, 0) → 2 0ms
+         ✓ roundToScale(2.5, 0) → 3 0ms
+         ✓ roundToScale(3.5, 0) → 4 0ms
+         ✓ roundToScale(10.554, 2) → 10.55 0ms
+         ✓ roundToScale(10.444, 2) → 10.44 0ms
+         ✓ roundToScale(0.004, 2) → 0.00 0ms
+         ✓ roundToScale(10.555, 2) → 10.56 0ms
+         ✓ roundToScale(0.005, 2) → 0.01 0ms
+         ✓ roundToScale(0.015, 2) → 0.02 0ms
+         ✓ roundToScale(0.025, 2) → 0.03 0ms
+         ✓ roundToScale(0.995, 2) → 1.00 0ms
+         ✓ roundToScale(10.556, 2) → 10.56 0ms
+         ✓ roundToScale(99.4, 0) → 99 0ms
+         ✓ roundToScale(99.5, 0) → 100 0ms
+         ✓ roundToScale(99.9, 0) → 100 0ms
+         ✓ roundToScale(1.2345, 3) → 1.235 0ms
+         ✓ roundToScale(1.2344, 3) → 1.234 0ms
+         ✓ roundToScale(10.555, 2) → 10.56 0ms
+         ✓ roundToScale(0.30000000000000004, 2) → 0.30 0ms
+         ✓ roundToScale(999999.995, 2) → 1000000.00 0ms
+         ✓ roundToScale(42, 2) → 42.00 0ms
+         ✓ roundToScale(42, 0) → 42 0ms
+         ✓ roundToScale(10.555, 2, HALF_DOWN) → 10.55 0ms
+         ✓ roundToScale(10.556, 2, HALF_DOWN) → 10.56 0ms
+         ✓ roundToScale(10.554, 2, HALF_DOWN) → 10.55 0ms
+         ✓ roundToScale(0.005, 2, HALF_DOWN) → 0.00 0ms
+         ✓ roundToScale(0.006, 2, HALF_DOWN) → 0.01 0ms
+         ✓ roundToScale(2.5, 0, HALF_DOWN) → 2 0ms
+         ✓ roundToScale(3.5, 0, HALF_DOWN) → 3 0ms
+         ✓ roundToScale(0.5, 0, HALF_EVEN) → 0 0ms
+         ✓ roundToScale(1.5, 0, HALF_EVEN) → 2 0ms
+         ✓ roundToScale(2.5, 0, HALF_EVEN) → 2 0ms
+         ✓ roundToScale(3.5, 0, HALF_EVEN) → 4 0ms
+         ✓ roundToScale(4.5, 0, HALF_EVEN) → 4 0ms
+         ✓ roundToScale(5.5, 0, HALF_EVEN) → 6 0ms
+         ✓ roundToScale(10.545, 2, HALF_EVEN) → 10.54 0ms
+         ✓ roundToScale(10.555, 2, HALF_EVEN) → 10.56 0ms
+         ✓ roundToScale(10.565, 2, HALF_EVEN) → 10.56 0ms
+         ✓ roundToScale(10.575, 2, HALF_EVEN) → 10.58 0ms
+         ✓ roundToScale(10.554, 2, HALF_EVEN) → 10.55 0ms
+         ✓ roundToScale(10.556, 2, HALF_EVEN) → 10.56 0ms
+         ✓ roundToScale(10.999, 2, DOWN) → 10.99 0ms
+         ✓ roundToScale(10.001, 2, DOWN) → 10.00 0ms
+         ✓ roundToScale(0.009, 2, DOWN) → 0.00 0ms
+         ✓ roundToScale(1.999, 0, DOWN) → 1 0ms
+         ✓ roundToScale(99.9, 0, DOWN) → 99 0ms
+         ✓ roundToScale(10.001, 2, UP) → 10.01 0ms
+         ✓ roundToScale(10.000, 2, UP) → 10.00 0ms
+         ✓ roundToScale(0.001, 2, UP) → 0.01 0ms
+         ✓ roundToScale(1.001, 0, UP) → 2 0ms
+         ✓ roundToScale(1.000, 0, UP) → 1 0ms
+         ✓ roundToScale(-10.555, 2, HALF_UP) → -10.56 0ms
+         ✓ roundToScale(-10.555, 2, HALF_DOWN) → -10.55 0ms
+         ✓ roundToScale(-10.555, 2, HALF_EVEN) → -10.56 0ms
+         ✓ roundToScale(-10.545, 2, HALF_EVEN) → -10.54 0ms
+         ✓ roundToScale(-10.999, 2, DOWN) → -10.99 0ms
+         ✓ roundToScale(-10.001, 2, UP) → -10.01 0ms
+         ✓ roundToScale(-0.005, 2, HALF_UP) → -0.01 0ms
+         ✓ roundToScale(-0.004, 2, HALF_UP) → 0.00 0ms
+         ✓ returns integer string with no decimal point 0ms
+         ✓ handles more input digits than scale 0ms
+         ✓ pads when input has fewer digits than scale 0ms
+         ✓ throws for negative scale 1ms
+         ✓ throws for non-integer scale 0ms
+         ✓ throws for invalid decimal string 0ms
+         ✓ multiplyDecimals(10.55, 2.5) → 26.375 0ms
+         ✓ multiplyDecimals(1, 1) → 1 0ms
+         ✓ multiplyDecimals(3, 0.1) → 0.3 0ms
+         ✓ multiplyDecimals(0.1, 0.1) → 0.01 0ms
+         ✓ multiplyDecimals(100, 0.01) → 1.00 0ms
+         ✓ multiplyDecimals(1.5, 2) → 3.0 0ms
+         ✓ multiplyDecimals(0, 999) → 0 0ms
+         ✓ multiplyDecimals(0.5, 0.5) → 0.25 0ms
+         ✓ multiplyDecimals(1000, 1000) → 1000000 0ms
+       ✓ sign: positive × positive 0ms
+       ✓ preserves trailing zeros in fractional scale 0ms
+         ✓ addDecimals(10.50, 2.25) → 12.75 0ms
+         ✓ addDecimals(0.1, 0.2) → 0.3 0ms
+         ✓ addDecimals(1, 1) → 2 0ms
+         ✓ addDecimals(0, 0) → 0 0ms
+         ✓ addDecimals(100, 0.01) → 100.01 0ms
+         ✓ addDecimals(1.1, 2.22) → 3.32 0ms
+         ✓ addDecimals(1, 0.001) → 1.001 0ms
+         ✓ addDecimals(-5, 3) → -2 0ms
+         ✓ addDecimals(5, -3) → 2 0ms
+         ✓ addDecimals(-5, -3) → -8 0ms
+         ✓ addDecimals(-3, 3) → 0 0ms
+         ✓ addDecimals(3, -3) → 0 0ms
+         ✓ addDecimals(-0.5, 0.5) → 0.0 0ms
+         ✓ subtractDecimals(10.50, 2.25) → 8.25 0ms
+         ✓ subtractDecimals(1, 1) → 0 0ms
+         ✓ subtractDecimals(2, 5) → -3 0ms
+         ✓ subtractDecimals(0, 0) → 0 0ms
+         ✓ subtractDecimals(100.01, 0.01) → 100.00 0ms
+         ✓ subtractDecimals(3.32, 1.1) → 2.22 0ms
+         ✓ subtractDecimals(1.001, 1) → 0.001 0ms
+         ✓ subtractDecimals(-5, 3) → -8 0ms
+         ✓ subtractDecimals(5, -3) → 8 0ms
+         ✓ subtractDecimals(-5, -3) → -2 0ms
+         ✓ subtractDecimals(5, 5) → 0 0ms
+         ✓ subtractDecimals(-2.5, -2.5) → 0.0 0ms
+       ✓ compareDecimals(1, 1) → 0 0ms
+       ✓ compareDecimals(1.50, 1.5) → 0 0ms
+       ✓ compareDecimals(0, -0.0) → 0 0ms
+       ✓ compareDecimals(1, 2) → -1 0ms
+       ✓ compareDecimals(-1, 1) → -1 0ms
+       ✓ compareDecimals(0.30, 0.1) → 1 0ms
+       ✓ compareDecimals(2, 1) → 1 0ms
+       ✓ compareDecimals(-1, -2) → 1 0ms
+       ✓ compareDecimals(-2, -1) → -1 0ms
+         ✓ divideDecimals(10, 4, 2) → 2.50 0ms
+         ✓ divideDecimals(10, 3, 2) → 3.33 0ms
+         ✓ divideDecimals(1, 3, 6) → 0.333333 0ms
+         ✓ divideDecimals(2, 3, 6) → 0.666667 0ms
+         ✓ divideDecimals(1, 4, 0) → 0 0ms
+         ✓ divideDecimals(3, 4, 0) → 1 0ms
+         ✓ divideDecimals(100, 10, 2) → 10.00 0ms
+         ✓ divideDecimals(0, 5, 2) → 0.00 0ms
+         ✓ divideDecimals(7, 2, 0) → 4 0ms
+         ✓ divideDecimals(10, 3, 2, DOWN) → 3.33 0ms
+         ✓ divideDecimals(10, 3, 2, UP) → 3.34 0ms
+         ✓ divideDecimals(7, 2, 0, HALF_DOWN) → 3 0ms
+         ✓ divideDecimals(7, 2, 0, HALF_EVEN) → 4 0ms
+         ✓ divideDecimals(9, 2, 0, HALF_EVEN) → 4 3ms
+         ✓ divideDecimals(1, 3, 0, DOWN) → 0 0ms
+         ✓ divideDecimals(-10, 4, 2) → -2.50 0ms
+         ✓ divideDecimals(10, -4, 2) → -2.50 0ms
+         ✓ divideDecimals(-10, -4, 2) → 2.50 0ms
+         ✓ divideDecimals(-1, 4, 2) → -0.25 0ms
+         ✓ divideDecimals(-1, 1000000, 2) → 0.00 0ms
+         ✓ handles a divisor with more fractional digits than the dividend 0ms
+         ✓ handles a dividend with more fractional digits than the divisor 0ms
+         ✓ throws DivisionByZeroError when dividing by "0" 0ms
+         ✓ throws DivisionByZeroError when dividing by "0.00" 0ms
+         ✓ throws DivisionByZeroError when dividing by "-0" 0ms
+         ✓ names the error "DivisionByZeroError" 0ms
+         ✓ throws for negative scale 0ms
+         ✓ throws for non-integer scale 0ms
+       ✓ (a + b) - b === a for arbitrary decimal strings 21ms
+       ✓ addDecimals is commutative 6ms
+       ✓ divide (DOWN) then multiply back stays within one unit of the divisor 8ms
+       ✓ compareDecimals matches the sign of subtractDecimals(a, b) 5ms
+       × roundToScale invariants: HALF modes bound error by ≤ 1 ULP and ordering DOWN ≤ value ≤ UP 35ms
+       ✓ HALF_EVEN produces even last digit at exact midpoints 14ms
+       × sign correctness: no -0 output; negative rounding is symmetric for HALF_UP/HALF_DOWN 52ms
+       × multiplyDecimals exactness: equals BigInt product reference and scale is sum of input scales 94ms
+       ✓ focused regressions: 0.005, 10.545, 2.5 (HALF_EVEN), and large many-digit inputs 0ms
+       × roundToScale_is_idempotent_for_all_rounding_modes 9ms
+       × roundToScale_preserves_value_when_input_already_has_fewer_or_equal_fractional_digits 9ms
+       × normalize_then_widen_scale_preserves_numeric_value 16ms
+       × normalize_DOWN_then_normalize_UP_bounds_original_value 26ms
+       ✓ multiplyDecimals_by_one_preserves_numeric_value 35ms
+       ✓ multiplyDecimals_by_zero_returns_zero 18ms
+       ✓ multiplyDecimals_is_commutative 35ms
+       ✓ multiplyDecimals_result_scale_equals_sum_of_input_scales 21ms
+       ✓ multiplyDecimals_then_divideDecimals_round_trips_within_one_ulp 33ms
+       ✓ roundToScale_rejects_non_numeric_strings 40ms
+       ✓ multiplyDecimals_rejects_non_numeric_strings 65ms
+       ✓ divideDecimals_throws_DivisionByZeroError_for_any_zero_divisor 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 7 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > property-based rounding & multiply invariants > roundToScale invariants: HALF modes bound error by ≤ 1 ULP and ordering DOWN ≤ value ≤ UP
+Error: Property failed after 4 tests
+{ seed: 1127222195, path: "3:1:2:1:1:3:2:2:2:2:2:3:1", endOnFailure: true }
+Counterexample: ["-0.1",0]
+Shrunk 12 time(s)
+Got AssertionError: expected false to be true // Object.is equality
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:562:37
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:536:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:562:37
+    560|             }
+    561|
+    562|             expect(within(rHalfUp)).toBe(true)
+       |                                     ^
+    563|             expect(within(rHalfDown)).toBe(true)
+    564|             expect(within(rHalfEven)).toBe(true)
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:536:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:536:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > property-based rounding & multiply invariants > sign correctness: no -0 output; negative rounding is symmetric for HALF_UP/HALF_DOWN
+Error: Property failed after 247 tests
+{ seed: 192804126, path: "246:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:0:1:0:0:0", endOnFailure: true }
+Counterexample: ["0.1",1]
+Shrunk 38 time(s)
+Got AssertionError: expected '0.1' to be '-0.1' // Object.is equality
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:653:28
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:632:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:653:28
+    651|
+    652|             // symmetry: rounding(-x) = -rounding(x) for HALF_UP/HALF_…
+    653|             expect(rNegUp).toBe(rPosUp === '0' || rPosUp === '0.0' ? '…
+       |                            ^
+    654|             expect(rNegDown).toBe(rPosDown === '0' || rPosDown === '0.…
+    655|           },
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:632:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:632:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > property-based rounding & multiply invariants > multiplyDecimals exactness: equals BigInt product reference and scale is sum of input scales
+Error: Property failed after 1107 tests
+{ seed: 1390336947, path: "1106:2:4:4:1:1:1:4:3:3:5:4:4:4:4", endOnFailure: true }
+Counterexample: ["-0.1","0.1"]
+Shrunk 14 time(s)
+Got AssertionError: expected '-0.01' not to match /^\-0(\.|$)/
+    at assertNoNegativeZero (/home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:532:21)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:673:13
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:662:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ assertNoNegativeZero src/lib/decimalMath.test.ts:532:21
+    530|
+    531|     const assertNoNegativeZero = (s: string) => {
+    532|       expect(s).not.toMatch(/^\-0(\.|$)/)
+       |                     ^
+    533|     }
+    534|
+ ❯ src/lib/decimalMath.test.ts:673:13
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:662:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:662:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > round-trip invariants for normalize, denormalize, and multiply > roundToScale_is_idempotent_for_all_rounding_modes
+Error: Property failed after 177 tests
+{ seed: 1809455141, path: "176:5:5:4", endOnFailure: true }
+Counterexample: ["-0.000005",5,"HALF_UP"]
+Shrunk 3 time(s)
+Got AssertionError: expected '0.00001' to be '-0.00001' // Object.is equality
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:754:27
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:746:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:754:27
+    752|             const once = roundToScale(value, scale, mode)
+    753|             const twice = roundToScale(once, scale, mode)
+    754|             expect(twice).toBe(once)
+       |                           ^
+    755|           },
+    756|         ),
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:746:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:746:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > round-trip invariants for normalize, denormalize, and multiply > roundToScale_preserves_value_when_input_already_has_fewer_or_equal_fractional_digits
+Error: Property failed after 27 tests
+{ seed: -503986909, path: "26:2:1:1:3:2:2", endOnFailure: true }
+Counterexample: ["-0.1",0]
+Shrunk 6 time(s)
+Got AssertionError: expected 1 to be +0 // Object.is equality
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:771:53
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:762:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:771:53
+    769|             // Rounding to a wider scale should not change the numeric…
+    770|             const rounded = roundToScale(value, targetScale, RoundingM…
+    771|             expect(compareDecimals(rounded, value)).toBe(0)
+       |                                                     ^
+    772|           },
+    773|         ),
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:762:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:762:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > round-trip invariants for normalize, denormalize, and multiply > normalize_then_widen_scale_preserves_numeric_value
+Error: Property failed after 74 tests
+{ seed: 1656744564, path: "73:2:2:3:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:4:2:5", endOnFailure: true }
+Counterexample: ["-0.010",2,0]
+Shrunk 26 time(s)
+Got AssertionError: expected 1 to be +0 // Object.is equality
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:792:58
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:781:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:792:58
+    790|             const widened = roundToScale(normalized, widerScale, Round…
+    791|             // The widened result must be numerically equal to the nor…
+    792|             expect(compareDecimals(widened, normalized)).toBe(0)
+       |                                                          ^
+    793|           },
+    794|         ),
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:781:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:781:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/7]⎯
+
+ FAIL  src/lib/decimalMath.test.ts > decimalMath > round-trip invariants for normalize, denormalize, and multiply > normalize_DOWN_then_normalize_UP_bounds_original_value
+Error: Property failed after 4 tests
+{ seed: 110957757, path: "3:1:4:3:2:5:2:2:2:2:2:2:2:3:2:2:2:2:2:2:2:2:2:2:2:3:1:2:1:1:2:3:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2:2", endOnFailure: true }
+Counterexample: ["-0.1",0]
+Shrunk 54 time(s)
+Got AssertionError: expected 1 to be less than or equal to 0
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:810:47
+    at Property.predicate (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.js:14:54)
+    at Property.run (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33)
+    at runIt (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30)
+    at check (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11)
+    at Module.assert (file:///home/gamp/Credence-Backend/node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17)
+    at /home/gamp/Credence-Backend/src/lib/decimalMath.test.ts:800:10
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:302:11
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:26
+    at file:///home/gamp/Credence-Backend/node_modules/@vitest/runner/dist/chunk-artifact.js:2326:20
+
+Hint: Enable verbose mode in order to have the list of all failing values encountered during the run
+ ❯ src/lib/decimalMath.test.ts:810:47
+    808|             // For positive values: down <= value <= up
+    809|             // For negative values: up <= value <= down (magnitudes re…
+    810|             expect(compareDecimals(down, up)).toBeLessThanOrEqual(0)
+       |                                               ^
+    811|           },
+    812|         ),
+ ❯ Property.predicate node_modules/fast-check/lib/esm/check/property/Property.js:14:54
+ ❯ Property.run node_modules/fast-check/lib/esm/check/property/Property.generic.js:46:33
+ ❯ runIt node_modules/fast-check/lib/esm/check/runner/Runner.js:18:30
+ ❯ check node_modules/fast-check/lib/esm/check/runner/Runner.js:62:11
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:65:17
+ ❯ src/lib/decimalMath.test.ts:800:10
+ ❯ buildError node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:126:15
+ ❯ throwIfFailed node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:138:11
+ ❯ reportRunDetails node_modules/fast-check/lib/esm/check/runner/utils/RunDetailsFormatter.js:151:16
+ ❯ Module.assert node_modules/fast-check/lib/esm/check/runner/Runner.js:69:9
+ ❯ src/lib/decimalMath.test.ts:800:10
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/7]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  7 failed | 156 passed (163)
+   Start at  13:34:37
+   Duration  1.05s (transform 127ms, setup 28ms, import 256ms, tests 585ms, environment 0ms)
+

@@ -1,4 +1,8 @@
 import { createClient, RedisClientType } from 'redis'
+import { LRUCache } from 'lru-cache'
+import { executeCacheOperation, createMetricsAdapter } from '../lib/timeoutExecutor.js'
+import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.js'
+import { logger } from '../utils/logger.js'
 
 export type RedisClient = RedisClientType
 
@@ -23,15 +27,15 @@ export class RedisConnection {
     })
 
     this.client.on('error', (err: Error) => {
-      console.error('Redis client error:', err)
+      logger.error('Redis client error:', err)
     })
 
     this.client.on('connect', () => {
-      console.log('Redis client connected')
+      logger.info('Redis client connected')
     })
 
     this.client.on('disconnect', () => {
-      console.warn('Redis client disconnected')
+      logger.warn('Redis client disconnected')
     })
   }
 
@@ -87,7 +91,7 @@ export class RedisConnection {
       await this.client.ping()
       return true
     } catch (error) {
-      console.error('Redis health check failed:', error)
+      logger.error('Redis health check failed:', error)
       return false
     }
   }
@@ -112,17 +116,24 @@ export class RedisConnection {
 }
 
 /**
- * Generic caching layer with TTL and namespacing support
+ * Generic caching layer with L1 (in-memory LRU) and L2 (Redis) support
  */
 export class CacheService {
   private redis: RedisConnection
+  private metrics = createMetricsAdapter(createDefaultMetricsCollector())
+  private l1Cache: LRUCache<string, any>
 
   constructor(redis?: RedisConnection) {
     this.redis = redis || RedisConnection.getInstance()
+    this.l1Cache = new LRUCache({
+      max: 1000,
+      ttl: 60000, // 1 minute default TTL for L1
+      ttlAutopurge: true
+    })
   }
 
   /**
-   * Get a value from cache by key
+   * Get a value from cache by key (checks L1 first, then L2)
    * 
    * @param namespace - Cache namespace (e.g., 'trust', 'bond')
    * @param key - Cache key within namespace
@@ -131,24 +142,39 @@ export class CacheService {
   public async get<T = string>(namespace: string, key: string): Promise<T | null> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
     
-    try {
-      await this.redis.connect()
-      const value = await this.redis.getClient().get(namespacedKey)
-      
-      if (value === null) {
-        return null
-      }
-
-      // Try to parse as JSON, fallback to string if it fails
-      try {
-        return JSON.parse(value) as T
-      } catch {
-        return value as T
-      }
-    } catch (error) {
-      console.error(`Cache get failed for key ${namespacedKey}:`, error)
-      return null
+    // Check L1 cache first
+    const l1Value = this.l1Cache.get(namespacedKey)
+    if (l1Value !== undefined) {
+      return l1Value as T
     }
+    
+    return executeCacheOperation(
+      `cache.get.${namespace}.${key}`,
+      async () => {
+        await this.redis.connect()
+        const value = await this.redis.getClient().get(namespacedKey)
+        
+        if (value === null) {
+          return null
+        }
+
+        // Try to parse as JSON, fallback to string if it fails
+        let parsedValue: T
+        try {
+          parsedValue = JSON.parse(value) as T
+        } catch {
+          parsedValue = value as T
+        }
+
+        // Store in L1
+        this.l1Cache.set(namespacedKey, parsedValue)
+        return parsedValue
+      },
+      { metrics: this.metrics }
+    ).catch(error => {
+      logger.error(`Cache get failed for key ${namespacedKey}:`, error)
+      return null
+    })
   }
 
   /**
@@ -179,9 +205,16 @@ export class CacheService {
         await client.set(namespacedKey, serializedValue)
       }
 
+      // Store in L1 with same TTL if provided (convert to ms)
+      if (ttl) {
+        this.l1Cache.set(namespacedKey, value, { ttl: ttl * 1000 })
+      } else {
+        this.l1Cache.set(namespacedKey, value)
+      }
+
       return true
     } catch (error) {
-      console.error(`Cache set failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache set failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -196,13 +229,33 @@ export class CacheService {
   public async delete(namespace: string, key: string): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
+    // Delete from L1
+    this.l1Cache.delete(namespacedKey)
+
     try {
       await this.redis.connect()
       const result = await this.redis.getClient().del(namespacedKey)
       return result > 0
     } catch (error) {
-      console.error(`Cache delete failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache delete failed for key ${namespacedKey}:`, error)
       return false
+    }
+  }
+
+  /**
+   * Clear all keys matching a pattern in L1 cache
+   * 
+   * @param pattern - Pattern to match (e.g., 'identity:*')
+   */
+  public clearL1Pattern(pattern: string): void {
+    const keysToDelete: string[] = []
+    for (const key of this.l1Cache.keys()) {
+      if (key.startsWith(pattern.replace('*', ''))) {
+        keysToDelete.push(key)
+      }
+    }
+    for (const key of keysToDelete) {
+      this.l1Cache.delete(key)
     }
   }
 
@@ -215,6 +268,9 @@ export class CacheService {
   public async clearNamespace(namespace: string): Promise<number> {
     const pattern = this.getNamespacedKey(namespace, '*')
 
+    // Clear from L1
+    this.clearL1Pattern(pattern)
+
     try {
       await this.redis.connect()
       const keys = await this.redis.getClient().keys(pattern)
@@ -226,7 +282,7 @@ export class CacheService {
       const result = await this.redis.getClient().del(keys)
       return result
     } catch (error) {
-      console.error(`Cache clear namespace failed for ${namespace}:`, error)
+      logger.error(`Cache clear namespace failed for ${namespace}:`, error)
       return 0
     }
   }
@@ -241,12 +297,17 @@ export class CacheService {
   public async exists(namespace: string, key: string): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
+    // Check L1
+    if (this.l1Cache.has(namespacedKey)) {
+      return true
+    }
+
     try {
       await this.redis.connect()
       const result = await this.redis.getClient().exists(namespacedKey)
       return result === 1
     } catch (error) {
-      console.error(`Cache exists check failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache exists check failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -262,12 +323,18 @@ export class CacheService {
   public async expire(namespace: string, key: string, ttl: number): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
+    // Update L1 TTL
+    if (this.l1Cache.has(namespacedKey)) {
+      const value = this.l1Cache.get(namespacedKey)
+      this.l1Cache.set(namespacedKey, value, { ttl: ttl * 1000 })
+    }
+
     try {
       await this.redis.connect()
       const result = await this.redis.getClient().expire(namespacedKey, ttl)
       return result === 1
     } catch (error) {
-      console.error(`Cache expire failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache expire failed for key ${namespacedKey}:`, error)
       return false
     }
   }
@@ -282,11 +349,17 @@ export class CacheService {
   public async ttl(namespace: string, key: string): Promise<number> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
+    // Check L1 TTL
+    const l1Remaining = this.l1Cache.getRemainingTTL(namespacedKey)
+    if (l1Remaining > 0) {
+      return Math.floor(l1Remaining / 1000)
+    }
+
     try {
       await this.redis.connect()
       return await this.redis.getClient().ttl(namespacedKey)
     } catch (error) {
-      console.error(`Cache TTL check failed for key ${namespacedKey}:`, error)
+      logger.error(`Cache TTL check failed for key ${namespacedKey}:`, error)
       return -2
     }
   }

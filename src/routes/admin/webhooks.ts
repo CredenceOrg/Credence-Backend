@@ -2,30 +2,37 @@ import { Router, Request, Response } from 'express'
 import { WebhookService } from '../../services/webhooks/service.js'
 import { PostgresWebhookRepository } from '../../db/repositories/webhookRepository.js'
 import { pool } from '../../db/pool.js'
-import { AuthenticatedRequest, requireUserAuth, requireAdminRole } from '../../middleware/auth.js'
+import { AuthenticatedRequest, requireUserAuth, requireAdminRole, requireApiKey, ApiScope } from '../../middleware/auth.js'
 import { auditLogService } from '../../services/audit/index.js'
 
 /**
  * Create the webhook admin router.
  * Provides endpoints for rotating and revoking signing secrets with auditing.
+ *
+ * All routes require EITHER:
+ *   - A user session with admin role (requireUserAuth + requireAdminRole), OR
+ *   - An API key with the webhooks:admin scope (requireApiKey(ApiScope.WEBHOOKS_ADMIN))
  */
 export function createWebhookAdminRouter(): Router {
   const router = Router()
   const store = new PostgresWebhookRepository(pool)
-  const webhookService = new WebhookService(store, auditLogService)
+  const webhookService = new WebhookService(store, undefined, undefined, auditLogService)
 
   /**
    * POST /api/admin/webhooks/:id/rotate
    * 
    * Rotates the signing secret for a webhook.
    * Moves current secret to previousSecret and generates a new one.
+   *
+   * @requires webhooks:admin scope OR admin role
    */
   router.post('/:id/rotate', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
     try {
       const { id } = req.params
       const admin = (req as AuthenticatedRequest).user!
+      const requestId = (req as any).requestId
       
-      const webhook = await webhookService.rotateSecret(id, { id: admin.id, email: admin.email })
+      const webhook = await webhookService.rotateSecret(id, { id: admin.id, email: admin.email, tenantId: admin.tenantId }, requestId)
       
       res.json({
         success: true,
@@ -46,13 +53,16 @@ export function createWebhookAdminRouter(): Router {
    * 
    * Revokes the previous signing secret for a webhook.
    * Stops sending dual signatures.
+   *
+   * @requires webhooks:admin scope OR admin role
    */
   router.post('/:id/revoke-previous', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
     try {
       const { id } = req.params
       const admin = (req as AuthenticatedRequest).user!
+      const requestId = (req as any).requestId
 
-      await webhookService.revokePreviousSecret(id, { id: admin.id, email: admin.email })
+      await webhookService.revokePreviousSecret(id, { id: admin.id, email: admin.email, tenantId: admin.tenantId }, requestId)
       
       res.json({
         success: true,

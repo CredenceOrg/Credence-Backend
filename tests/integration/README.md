@@ -1,33 +1,35 @@
-# Repository Integration Tests
+# Repository & E2E Integration Tests
 
-This suite validates database repositories against real PostgreSQL.
+This suite validates database repositories and end-to-end flows against real PostgreSQL and Redis.
 
 ## Covered scenarios
 
-- Identities repository CRUD and list methods
-- Bonds repository CRUD and list-by-identity query methods
-- Attestations repository CRUD and list-by-subject / list-by-bond query methods
-- Slash events repository CRUD, list-by-bond, and aggregate query methods
-- Score history repository create, list-by-identity, latest-entry, and delete methods
-- Database constraints (check constraints, unique constraints, and FK constraints)
-- Foreign key cascade behavior across related tables
-- Test isolation via table truncation between test cases
+- **Identities & Bonds**: CRUD and business logic for identity and bond state.
+- **Attestations & Slashing**: Validation of attestation records and slashing events.
+- **E2E State Sync**: Full flow from Horizon event ingestion -> DB persistence -> Trust Score recomputation -> Redis Cache invalidation.
+- **Caching**: Validation of Redis cache population and invalidation.
+- **Database Constraints**: Check constraints, unique constraints, and FK cascade behavior.
 
 ## Running tests
 
-Use an external PostgreSQL instance:
+The tests require PostgreSQL and Redis. They can be provided via environment variables or automatically started using Testcontainers (requires a working Docker runtime).
+
+### With External Instances
 
 ```bash
-TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/credence_test npm run test:integration
+TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/credence_test \
+REDIS_URL=redis://localhost:6379 \
+npm test tests/integration/
 ```
 
-Or let the suite create a temporary PostgreSQL container via Docker/Testcontainers:
+### With Testcontainers (Automatic)
 
 ```bash
-npm run test:integration
+# Requires Docker
+npm test tests/integration/
 ```
 
-Coverage report:
+## Coverage Report
 
 ```bash
 npm run coverage

@@ -1,0 +1,91 @@
+// proto/credence/v1/verification.proto
+//
+// VerificationService — internal gRPC contract for generating and verifying
+// cryptographic identity proofs.
+//
+// PII policy:
+//   - `address` is a public blockchain address — classified PUBLIC.
+//   - `proof` is a hash-anchored package; no raw PII is embedded.
+
+syntax = "proto3";
+
+package credence.v1;
+
+import "credence/v1/common.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "github.com/innovative-drips/credence/gen/go/credence/v1;credencepb";
+
+// ---------------------------------------------------------------------------
+// Messages
+// ---------------------------------------------------------------------------
+
+// VerificationProof is the cryptographic proof package for an identity.
+message VerificationProof {
+  // Blockchain address the proof was generated for.
+  string address = 1;
+
+  // Base64-encoded proof payload.  Null when the address is not verified.
+  string proof = 2;
+
+  // Whether the proof is currently valid (not expired, hash consistent).
+  bool verified = 3;
+
+  // Timestamp when the proof was generated.  Absent when not verified.
+  google.protobuf.Timestamp timestamp = 4;
+
+  // Optional RSA signature over the canonical proof payload.
+  string signature = 5;
+}
+
+// GetVerificationProofRequest is the input to
+// VerificationService.GetVerificationProof.
+message GetVerificationProofRequest {
+  // Address to generate or retrieve a proof for.
+  string address = 1;
+
+  // When true, the server signs the proof with the configured RSA private key.
+  bool sign = 2;
+
+  // Proof validity window in minutes.  Defaults to the server-configured
+  // value when omitted or zero.
+  uint32 expiry_minutes = 3;
+}
+
+// GetVerificationProofResponse wraps the proof result.
+message GetVerificationProofResponse {
+  VerificationProof proof = 1;
+}
+
+// VerifyProofRequest is the input to VerificationService.VerifyProof.
+message VerifyProofRequest {
+  // The proof payload to verify.
+  VerificationProof proof = 1;
+
+  // Optional RSA public key (PEM) used to verify the signature when present.
+  string public_key = 2;
+}
+
+// VerifyProofResponse carries the verification result.
+message VerifyProofResponse {
+  // True when all checks pass (hash, expiry, optional signature).
+  bool valid = 1;
+
+  // Human-readable descriptions of any failures.
+  repeated string errors = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Service
+// ---------------------------------------------------------------------------
+
+// VerificationService exposes proof generation and verification for internal
+// service-to-service communication.  Callers must present a valid
+// shared-secret in the `x-credence-internal-token` metadata header.
+service VerificationService {
+  // GetVerificationProof generates or retrieves the proof for an address.
+  rpc GetVerificationProof(GetVerificationProofRequest) returns (GetVerificationProofResponse);
+
+  // VerifyProof validates a previously issued proof.
+  rpc VerifyProof(VerifyProofRequest) returns (VerifyProofResponse);
+}

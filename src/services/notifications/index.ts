@@ -20,6 +20,9 @@ export type {
   DeliveryOptions,
   EmailProvider,
   NotificationStore,
+  NotificationDlqEntry,
+  NotificationDlqStore,
+  NotificationProviderHealth,
 } from './types.js'
 
 export type { DeliveryMetricsEvent, MetricsCallback } from './metrics.js'
@@ -32,9 +35,17 @@ export {
   createEmailProvider,
 } from './providers.js'
 
+export { buildNotificationDlqEntry, MemoryNotificationDlqStore } from './dlq.js'
+
+export { NotificationProviderHealthTracker } from './health.js'
+
 export { NotificationRepository } from './repository.js'
 
-export { IdempotentEmailDeliveryService, deliverNotification } from './delivery.js'
+export {
+  IdempotentEmailDeliveryService,
+  deliverNotification,
+  type IdempotentEmailDeliveryDependencies,
+} from './delivery.js'
 
 export {
   NotificationService,
@@ -43,3 +54,10 @@ export {
 } from './service.js'
 
 export { NotificationMetricsCollector, metricsToPrometheus, metricsToString } from './metrics.js'
+
+export {
+  recordNotificationDlq,
+  recordNotificationFailover,
+  recordNotificationProviderAttempt,
+  recordNotificationProviderSuccess,
+} from './promMetrics.js'

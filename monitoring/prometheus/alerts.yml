@@ -2,86 +2,232 @@ groups:
   - name: credence_backend_alerts
     interval: 30s
     rules:
-      # High error rate
-      - alert: HighErrorRate
+      # High error rate (Success Rate SLO: 99.9%)
+      # SEV1 - Trust score critical: page on-call immediately
+      - alert: SuccessRateSLOViolation
         expr: |
-          rate(http_requests_total{job="credence-backend", status=~"5.."}[5m]) 
-          / rate(http_requests_total{job="credence-backend"}[5m]) > 0.05
+          sum(rate(http_requests_status_total{status_class="5xx"}[5m])) 
+          / sum(rate(http_requests_status_total[5m])) > 0.001
+        for: 2m
+        labels:
+          severity: SEV1
+          service: trust-score
+          team: platform
+        annotations:
+          summary: "Success Rate SLO Violation"
+          description: "Error rate is {{ $value | humanizePercentage }} (SLO: 99.9% success)"
+          runbook_url: "https://docs.credence.org/runbooks/slo-violations#success-rate"
+
+      # Burn Rate Alert (burn rate > 2)
+      # Fast Burn Alert (1h budget consumed in 2m)
+      # SEV1 - Critical budget burn: immediate escalation
+      - alert: ErrorBudgetBurnRateHigh
+        expr: |
+          (
+            sum(rate(http_requests_status_total{status_class="5xx"}[1h])) 
+            / sum(rate(http_requests_status_total[1h]))
+          ) / 0.001 > 2
+        for: 2m
+        labels:
+          severity: SEV1
+          service: trust-score
+          team: platform
+        annotations:
+          summary: "High Error Budget Burn Rate"
+          description: "Current burn rate is {{ $value }}x the allowed error rate (threshold: 2x)"
+          description: "Current burn rate is 14.4x the allowed error rate (0.1%)"
+          runbook_url: "https://docs.credence.org/runbooks/budget-burn#fast-burn"
+
+      # Per-endpoint Latency SLO (95% of requests < 250ms)
+      # SEV2 - Performance degradation: ticket required
+      - alert: EndpointLatencySLOViolation
+        expr: |
+          (
+            sum(rate(http_request_duration_seconds_bucket{le="0.25", status_class="2xx"}[5m])) by (route)
+            / 
+            sum(rate(http_request_duration_seconds_count{status_class="2xx"}[5m])) by (route)
+          ) < 0.95
         for: 5m
         labels:
-          severity: critical
-          service: credence-backend
+          severity: SEV2
+          service: api-platform
+          team: platform
         annotations:
-          summary: "High HTTP error rate detected"
-          description: "Error rate is {{ $value | humanizePercentage }} (threshold: 5%)"
+          summary: "Latency SLO violation on {{ $labels.route }}"
+          description: "Less than 95% of successful requests on {{ $labels.route }} are under 250ms"
+          runbook_url: "https://docs.credence.org/runbooks/latency#slo-violation"
 
-      # High latency
+      # Extreme Latency (p99 > 1s)
+      # SEV2 - High latency: investigate and ticket
+      - alert: HighP99Latency
+        expr: |
+          histogram_quantile(0.99, 
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
+          ) > 1
+        for: 5m
+        labels:
+          severity: SEV2
+          service: api-platform
+          team: platform
+        annotations:
+          summary: "High p99 latency on {{ $labels.route }}"
+          description: "P99 latency is {{ $value }}s (Threshold: 1s)"
+          runbook_url: "https://docs.credence.org/runbooks/latency#p99-high"
+
+      # High latency (General performance)
+      # SEV3 - Performance concern: low priority
       - alert: HighLatency
         expr: |
           histogram_quantile(0.95, 
-            rate(http_request_duration_seconds_bucket{job="credence-backend"}[5m])
-          ) > 2
+            sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
+          ) > 1
         for: 5m
         labels:
-          severity: warning
-          service: credence-backend
+          severity: SEV3
+          service: api-platform
+          team: platform
         annotations:
-          summary: "High request latency detected"
-          description: "P95 latency is {{ $value }}s (threshold: 2s)"
+          summary: "High request latency detected on {{ $labels.route }}"
+          description: "P95 latency is {{ $value }}s"
+          runbook_url: "https://docs.credence.org/runbooks/latency#p95-elevated"
 
       # Database down
+      # SEV1 - Critical infrastructure: immediate page
       - alert: DatabaseDown
-        expr: health_check_status{job="credence-backend", dependency="db"} == 0
+        expr: health_check_status{dependency="db"} == 0
         for: 1m
         labels:
-          severity: critical
-          service: credence-backend
+          severity: SEV1
+          service: database
+          team: infrastructure
         annotations:
           summary: "Database is down"
           description: "PostgreSQL health check failing"
+          runbook_url: "https://docs.credence.org/runbooks/infrastructure#database-down"
 
       # Redis down
+      # SEV1 - Critical cache layer: immediate page
       - alert: RedisDown
-        expr: health_check_status{job="credence-backend", dependency="redis"} == 0
+        expr: health_check_status{dependency="redis"} == 0
         for: 1m
         labels:
-          severity: critical
-          service: credence-backend
+          severity: SEV1
+          service: cache
+          team: infrastructure
         annotations:
           summary: "Redis is down"
           description: "Redis health check failing"
+          runbook_url: "https://docs.credence.org/runbooks/infrastructure#redis-down"
 
       # Slow health checks
+      # SEV3 - Monitoring concern: low priority
       - alert: SlowHealthCheck
         expr: health_check_duration_seconds{job="credence-backend"} > 3
         for: 5m
         labels:
-          severity: warning
+          severity: SEV3
           service: credence-backend
+          team: platform
         annotations:
           summary: "Health check is slow"
           description: "{{ $labels.dependency }} health check taking {{ $value }}s"
+          runbook_url: "https://docs.credence.org/runbooks/monitoring#slow-health-checks"
 
       # Low verification rate (business metric)
+      # SEV2 - Business impact: ticket required
       - alert: LowVerificationRate
         expr: rate(identity_verifications_total{job="credence-backend"}[10m]) < 0.1
         for: 30m
         labels:
-          severity: warning
-          service: credence-backend
+          severity: SEV2
+          service: verification
+          team: platform
         annotations:
           summary: "Low identity verification rate"
           description: "Verification rate dropped to {{ $value }} req/s"
+          runbook_url: "https://docs.credence.org/runbooks/verification#low-rate"
 
       # High bulk verification failure rate
+      # SEV2 - Service degradation: ticket required
       - alert: HighBulkVerificationFailureRate
         expr: |
           rate(bulk_verifications_total{job="credence-backend", status="error"}[5m])
           / rate(bulk_verifications_total{job="credence-backend"}[5m]) > 0.1
         for: 5m
         labels:
-          severity: warning
-          service: credence-backend
+          severity: SEV2
+          service: verification
+          team: platform
         annotations:
           summary: "High bulk verification failure rate"
           description: "Bulk verification failure rate is {{ $value | humanizePercentage }}"
+          runbook_url: "https://docs.credence.org/runbooks/verification#high-failure-rate"
+
+      # Pool saturation — connections exhausted
+      # SEV2 - Resource exhaustion: ticket required
+      - alert: PgPoolSaturation
+        expr: |
+          pg_pool_waiting_count{job="credence-backend", pool="api"} > 0
+        for: 2m
+        labels:
+          severity: SEV2
+          service: database
+          team: infrastructure
+        annotations:
+          summary: "PostgreSQL connection pool saturated"
+          description: >-
+            API pool has {{ $value }} requests queued waiting for a
+            connection for >2 minutes. Consider increasing DB_POOL_MAX
+            or investigating slow queries.
+          runbook_url: "https://docs.credence.org/runbooks/database#pool-saturation"
+
+      # Worker pool saturation
+      # SEV3 - Worker concern: low priority ticket
+      - alert: PgWorkerPoolSaturation
+        expr: |
+          pg_pool_waiting_count{job="credence-backend", pool="worker"} > 0
+        for: 5m
+        labels:
+          severity: SEV3
+          service: database
+          team: infrastructure
+        annotations:
+          summary: "Worker connection pool saturated"
+          description: >-
+            Worker pool has {{ $value }} jobs queued waiting for a
+            connection for >5 minutes.
+          runbook_url: "https://docs.credence.org/runbooks/database#worker-pool-saturation"
+
+      # ─── Audit Log Tamper Detection ────────────────────────────────
+      - alert: AuditChainIntegrityViolation
+        expr: |
+          audit_chain_integrity_violation_total{job="credence-backend"} > 0
+        for: 0m
+        labels:
+          severity: SEV1
+          service: credence-backend
+          team: platform  # Change from 'security' to 'platform'
+        annotations:
+          summary: "Audit log chain integrity violation detected"
+          description: >-
+            {{ $value }} audit log chain integrity violations detected.
+            This indicates potential tampering with the audit_logs table
+            (rows mutated, deleted, or re-ordered). Investigate immediately.
+            Runbook: docs/audit-log.md#tamper-detection
+          runbook_url: "https://docs.credence.org/runbooks/security#audit-chain-violation"
+
+      # Warning: verifier hasn't run in 30 minutes (should run every 15)
+      - alert: AuditChainVerifierStale
+        expr: |
+          (time() - audit_chain_verifier_last_run_timestamp{job="credence-backend"}) > 1800
+        for: 5m
+        labels:
+          severity: SEV2  # Changed from 'warning' to SEV2
+          service: credence-backend
+          team: platform  # Added team label
+        annotations:
+          summary: "Audit chain verifier has not run recently"
+          description: >-
+            The audit chain verifier has not completed a run in over 30 minutes.
+            It is scheduled to run every 15 minutes. Check the job scheduler.
+          runbook_url: "https://docs.credence.org/runbooks/monitoring#verifier-stale"  # Added

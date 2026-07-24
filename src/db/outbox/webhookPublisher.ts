@@ -2,6 +2,7 @@ import type { EventPublisher } from './publisher.js'
 import type { OutboxEvent } from './types.js'
 import type { WebhookService } from '../../services/webhooks/service.js'
 import type { WebhookEventType } from '../../services/webhooks/types.js'
+import { logger } from '../../utils/logger.js'
 
 /**
  * Event publisher that integrates with the webhook service.
@@ -15,7 +16,7 @@ export class WebhookEventPublisher implements EventPublisher {
     const webhookEventType = this.mapEventType(event.eventType)
     
     if (!webhookEventType) {
-      console.warn(`[WebhookEventPublisher] Unknown event type: ${event.eventType}`)
+      logger.warn(`[WebhookEventPublisher] Unknown event type: ${event.eventType}`)
       return
     }
 
@@ -32,8 +33,9 @@ export class WebhookEventPublisher implements EventPublisher {
       'bond.created': 'bond.created',
       'bond.slashed': 'bond.slashed',
       'bond.withdrawn': 'bond.withdrawn',
-      'attestation.created': 'attestation.created',
+      'attestation.created': 'attestation.added',
       'attestation.revoked': 'attestation.revoked',
+      'credits.low': 'credits.low',
     }
 
     return mapping[eventType] ?? null

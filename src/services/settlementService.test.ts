@@ -14,7 +14,8 @@ vi.mock('../cache/redis.js', () => ({
 }))
 
 vi.mock('../middleware/metrics.js', () => ({
-  recordStaleCacheRead: vi.fn()
+  recordStaleCacheRead: vi.fn(),
+  recordSettlementDuplicate: vi.fn()
 }))
 
 describe('SettlementService', () => {
@@ -79,6 +80,51 @@ describe('SettlementService', () => {
   })
 
   describe('upsertSettlementStatus', () => {
+    it('should record settlement duplicate metric when isDuplicate is true', async () => {
+      const input: CreateSettlementInput = {
+        bondId: 100,
+        amount: '500',
+        transactionHash: '0x123abc',
+        status: 'settled'
+      }
+      
+      const updatedSettlement = { ...mockSettlement, status: 'settled' }
+      mockSettlementsRepository.upsert.mockResolvedValue({ 
+        settlement: updatedSettlement, 
+        isDuplicate: true 
+      })
+      
+      vi.mocked(cache.get).mockResolvedValue(null)
+
+      const result = await settlementService.upsertSettlementStatus(input)
+
+      expect(mockSettlementsRepository.upsert).toHaveBeenCalledWith(input)
+      expect(metrics.recordSettlementDuplicate).toHaveBeenCalled()
+      expect(result).toEqual(updatedSettlement)
+    })
+
+    it('should not record settlement duplicate metric when isDuplicate is false', async () => {
+      const input: CreateSettlementInput = {
+        bondId: 100,
+        amount: '500',
+        transactionHash: '0x123abc',
+        status: 'pending'
+      }
+      
+      mockSettlementsRepository.upsert.mockResolvedValue({ 
+        settlement: mockSettlement, 
+        isDuplicate: false 
+      })
+      
+      vi.mocked(cache.get).mockResolvedValue(null)
+
+      const result = await settlementService.upsertSettlementStatus(input)
+
+      expect(mockSettlementsRepository.upsert).toHaveBeenCalledWith(input)
+      expect(metrics.recordSettlementDuplicate).not.toHaveBeenCalled()
+      expect(result).toEqual(mockSettlement)
+    })
+
     it('should invalidate cache post-commit and not trigger stale read metric if cache deletes successfully', async () => {
       const input: CreateSettlementInput = {
         bondId: 100,
@@ -88,7 +134,10 @@ describe('SettlementService', () => {
       }
       
       const updatedSettlement = { ...mockSettlement, status: 'settled' }
-      mockSettlementsRepository.upsert.mockResolvedValue({ settlement: updatedSettlement })
+      mockSettlementsRepository.upsert.mockResolvedValue({ 
+        settlement: updatedSettlement,
+        isDuplicate: false 
+      })
       
       // Simulate cache deleting successfully (subsequent get returns null)
       vi.mocked(cache.get).mockResolvedValue(null)
@@ -111,7 +160,10 @@ describe('SettlementService', () => {
       }
       
       const updatedSettlement = { ...mockSettlement, status: 'settled' }
-      mockSettlementsRepository.upsert.mockResolvedValue({ settlement: updatedSettlement })
+      mockSettlementsRepository.upsert.mockResolvedValue({ 
+        settlement: updatedSettlement,
+        isDuplicate: false 
+      })
       
       // Simulate cache race condition where it still holds the old data
       const staleCachedData = { ...updatedSettlement, status: 'pending' }

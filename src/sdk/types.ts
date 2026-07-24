@@ -16,8 +16,12 @@ export interface BondStatus {
   address: string
   bondedAmount: string
   bondStart: string | null
-  bondDuration: string | null
+  /** Duration in seconds. Previously typed as `string | null` — corrected to match the API. */
+  bondDuration: number | null
+  /** @deprecated Use `status` for structured lifecycle state. */
   active: boolean
+  slashedAmount: string
+  status: 'active' | 'slashed' | 'inactive' | 'unbonded'
 }
 
 export interface Attestation {
@@ -41,6 +45,9 @@ export interface VerificationProof {
   timestamp: string | null
 }
 
+/**
+ * @deprecated Use {@link CredenceError} and typed subclasses from `./errors.generated.js`.
+ */
 export class CredenceApiError extends Error {
   public readonly status: number
   public readonly body: string

@@ -1,70 +1,3384 @@
-openapi: 3.1.0
-
+openapi: 3.0.0
 info:
+  version: 1.0.0
   title: Credence API
-  version: 0.1.0
-  description: |
-    Public query API for the Credence economic trust protocol.
-
-    Provides trust scores, bond status, and health checks. Trust scores are
-    computed off-chain from bonded amount, bond duration, and attestation
-    history.
-
-    ### Authentication
-    All read endpoints are public. Supply an `X-API-Key` header to unlock
-    the **premium** rate tier for higher request throughput.
-
-    ### Address format
-    All `:address` path parameters must be Ethereum addresses:
-    `0x` followed by exactly 40 hexadecimal characters (case-insensitive).
-
+  description: Generated OpenAPI documentation from Zod schemas
 servers:
-  - url: http://localhost:3000
-    description: Local development
-  - url: https://api.credence.example.com
-    description: Production (placeholder)
-
-tags:
-  - name: Health
-    description: Service liveness checks
-  - name: Trust
-    description: Trust score queries
-  - name: Bond
-    description: Bond status queries
-
+  - url: https://api.credence.org/v1
 components:
-  securitySchemes:
-    ApiKeyAuth:
-      type: apiKey
-      in: header
-      name: X-API-Key
-      description: |
-        Optional API key. Recognised keys unlock the **premium** rate tier.
-        Requests without a key are served at the **standard** rate tier.
-
-  parameters:
-    address:
-      name: address
-      in: path
-      required: true
-      description: |
-        Ethereum address — `0x`-prefixed, 40 hex characters.
-        Accepted in any case (EIP-55 checksummed or all lower-case).
-      schema:
-        type: string
-        pattern: "^0x[0-9a-fA-F]{40}$"
-        example: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
-
   schemas:
-    HealthResponse:
+    addressSchema:
+      def:
+        type: string
+        checks:
+          - {}
+          - {}
+      type: string
+      format: null
+      minLength: 1
+      maxLength: null
+    attestationEventSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          pagingToken:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          type:
+            def:
+              type: enum
+              entries:
+                add: add
+                revoke: revoke
+            type: enum
+            enum:
+              add: add
+              revoke: revoke
+            options:
+              - add
+              - revoke
+          subject:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          verifier:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          weight:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+          claim:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          transactionHash:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
       type: object
-      required: [status, service]
+    attestationsPathParamsSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    attestationsQuerySchema:
+      def:
+        type: object
+        shape:
+          page:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      coerce: true
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                    type: number
+                    minValue: 1
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+              defaultValue: 1
+            type: default
+          limit:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      coerce: true
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 1
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+              defaultValue: 20
+            type: default
+          offset:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      coerce: true
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+              defaultValue: 0
+            type: default
+          cursor:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    bondCreationEventSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          type:
+            def:
+              type: literal
+              values:
+                - create_bond
+            type: literal
+            values: {}
+          sourceAccount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          duration:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: nullable
+                  innerType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                type: nullable
+            type: optional
+          pagingToken:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          transactionHash:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    bondErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    bondPathParamsSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    bondQuerySchema:
+      def:
+        type: object
+        shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    bondResponseSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          bondedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          bondStart:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: nullable
+          bondDuration:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: number
+                  checks: []
+                type: number
+                minValue: null
+                maxValue: null
+                isInt: false
+                isFinite: true
+                format: null
+            type: nullable
+          active:
+            def:
+              type: boolean
+            type: boolean
+          slashedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          status:
+            def:
+              type: enum
+              entries:
+                active: active
+                slashed: slashed
+                inactive: inactive
+                unbonded: unbonded
+            type: enum
+            enum:
+              active: active
+              slashed: slashed
+              inactive: inactive
+              unbonded: unbonded
+            options:
+              - active
+              - slashed
+              - inactive
+              - unbonded
+      type: object
+    createAttestationBodySchema:
+      def:
+        type: object
+        shape:
+          bondId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          attesterAddress:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+          subject:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          value:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: 2048
+          key:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: 128
+            type: optional
+          score:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    createBondBodySchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          bondedAmount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          bondDuration:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    createPayoutSchema:
+      def:
+        type: object
+        shape:
+          bondId:
+            def:
+              type: union
+              options:
+                - def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                - def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+            type: union
+            options:
+              - def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+              - def:
+                  type: number
+                  checks: []
+                type: number
+                minValue: null
+                maxValue: null
+                isInt: false
+                isFinite: true
+                format: null
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+                - def:
+                    type: custom
+                    check: custom
+                  type: custom
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          transactionHash:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: 128
+          settledAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: datetime
+                        check: string_format
+                        offset: false
+                        local: false
+                        precision: null
+                        pattern: {}
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: datetime
+                minLength: null
+                maxLength: null
+            type: optional
+          status:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    pending: pending
+                    settled: settled
+                    failed: failed
+                type: enum
+                enum:
+                  pending: pending
+                  settled: settled
+                  failed: failed
+                options:
+                  - pending
+                  - settled
+                  - failed
+            type: optional
+      type: object
+    createPolicyBodySchema:
+      def:
+        type: object
+        shape:
+          subject:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          action:
+            def:
+              type: enum
+              entries:
+                org:read: org:read
+                org:update: org:update
+                org:delete: org:delete
+                org:member:invite: org:member:invite
+                org:member:remove: org:member:remove
+                org:member:list: org:member:list
+                org:role:assign: org:role:assign
+                org:apikey:create: org:apikey:create
+                org:apikey:revoke: org:apikey:revoke
+                org:apikey:list: org:apikey:list
+                org:audit:read: org:audit:read
+                org:policy:read: org:policy:read
+                org:policy:write: org:policy:write
+                "*": "*"
+            type: enum
+            enum:
+              org:read: org:read
+              org:update: org:update
+              org:delete: org:delete
+              org:member:invite: org:member:invite
+              org:member:remove: org:member:remove
+              org:member:list: org:member:list
+              org:role:assign: org:role:assign
+              org:apikey:create: org:apikey:create
+              org:apikey:revoke: org:apikey:revoke
+              org:apikey:list: org:apikey:list
+              org:audit:read: org:audit:read
+              org:policy:read: org:policy:read
+              org:policy:write: org:policy:write
+              "*": "*"
+            options:
+              - org:read
+              - org:update
+              - org:delete
+              - org:member:invite
+              - org:member:remove
+              - org:member:list
+              - org:role:assign
+              - org:apikey:create
+              - org:apikey:revoke
+              - org:apikey:list
+              - org:audit:read
+              - org:policy:read
+              - org:policy:write
+              - "*"
+          resource:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          effect:
+            def:
+              type: enum
+              entries:
+                allow: allow
+                deny: deny
+            type: enum
+            enum:
+              allow: allow
+              deny: deny
+            options:
+              - allow
+              - deny
+          conditions:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: record
+                  keyType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  valueType:
+                    def:
+                      type: union
+                      options:
+                        - def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        - def:
+                            type: boolean
+                          type: boolean
+                        - def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                type: record
+                keyType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                valueType:
+                  def:
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                  type: union
+                  options:
+                    - def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    - def:
+                        type: boolean
+                      type: boolean
+                    - def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    createReportBodySchema:
+      def:
+        type: object
+        shape:
+          type:
+            def:
+              type: enum
+              entries:
+                trust_score_summary: trust_score_summary
+                bond_audit: bond_audit
+                attestation_export: attestation_export
+            type: enum
+            enum:
+              trust_score_summary: trust_score_summary
+              bond_audit: bond_audit
+              attestation_export: attestation_export
+            options:
+              - trust_score_summary
+              - bond_audit
+              - attestation_export
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    createSlashRequestBodySchema:
+      def:
+        type: object
+        shape:
+          targetAddress:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          requestedBy:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          threshold:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          totalSigners:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    createWalletBodySchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          initialBalance:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          currency:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    dismissDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    disputeErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    disputePathParamsSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+      type: object
+    disputeSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          filedBy:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          respondent:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          evidence:
+            def:
+              type: array
+              element:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: array
+            element:
+              def:
+                type: string
+              type: string
+              format: null
+              minLength: null
+              maxLength: null
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                under_review: under_review
+                resolved: resolved
+                dismissed: dismissed
+                expired: expired
+            type: enum
+            enum:
+              pending: pending
+              under_review: under_review
+              resolved: resolved
+              dismissed: dismissed
+              expired: expired
+            options:
+              - pending
+              - under_review
+              - resolved
+              - dismissed
+              - expired
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          deadline:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          resolution:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: nullable
+      type: object
+    disputeStatusSchema:
+      def:
+        type: enum
+        entries:
+          pending: pending
+          under_review: under_review
+          resolved: resolved
+          dismissed: dismissed
+          expired: expired
+      type: enum
+      enum:
+        pending: pending
+        under_review: under_review
+        resolved: resolved
+        dismissed: dismissed
+        expired: expired
+      options:
+        - pending
+        - under_review
+        - resolved
+        - dismissed
+        - expired
+    disputeTransitionErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          code:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          error_code:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    governanceErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    policyListQuerySchema:
+      def:
+        type: object
+        shape:
+          page:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+          limit:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+      type: object
+    policyOrgPathParamsSchema:
+      def:
+        type: object
+        shape:
+          orgId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    policyRulePathParamsSchema:
+      def:
+        type: object
+        shape:
+          orgId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          ruleId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    reportJobParamsSchema:
+      def:
+        type: object
+        shape:
+          jobId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    reportTypeSchema:
+      def:
+        type: enum
+        entries:
+          trust_score_summary: trust_score_summary
+          bond_audit: bond_audit
+          attestation_export: attestation_export
+      type: enum
+      enum:
+        trust_score_summary: trust_score_summary
+        bond_audit: bond_audit
+        attestation_export: attestation_export
+      options:
+        - trust_score_summary
+        - bond_audit
+        - attestation_export
+    resolveDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          resolution:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    slashRequestPathParamsSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    slashRequestSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          targetAddress:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          requestedBy:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          votes:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    voterId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    choice:
+                      def:
+                        type: enum
+                        entries:
+                          approve: approve
+                          reject: reject
+                      type: enum
+                      enum:
+                        approve: approve
+                        reject: reject
+                      options:
+                        - approve
+                        - reject
+                    timestamp:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  voterId:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  choice:
+                    def:
+                      type: enum
+                      entries:
+                        approve: approve
+                        reject: reject
+                    type: enum
+                    enum:
+                      approve: approve
+                      reject: reject
+                    options:
+                      - approve
+                      - reject
+                  timestamp:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+              type: object
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                approved: approved
+                rejected: rejected
+            type: enum
+            enum:
+              pending: pending
+              approved: approved
+              rejected: rejected
+            options:
+              - pending
+              - approved
+              - rejected
+          threshold:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          totalSigners:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    slashRequestStatusSchema:
+      def:
+        type: enum
+        entries:
+          pending: pending
+          approved: approved
+          rejected: rejected
+      type: enum
+      enum:
+        pending: pending
+        approved: approved
+        rejected: rejected
+      options:
+        - pending
+        - approved
+        - rejected
+    slashRequestsListResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    targetAddress:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    reason:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    requestedBy:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    createdAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    votes:
+                      def:
+                        type: array
+                        element:
+                          def:
+                            type: object
+                            shape:
+                              voterId:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                              choice:
+                                def:
+                                  type: enum
+                                  entries:
+                                    approve: approve
+                                    reject: reject
+                                type: enum
+                                enum:
+                                  approve: approve
+                                  reject: reject
+                                options:
+                                  - approve
+                                  - reject
+                              timestamp:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                          type: object
+                      type: array
+                      element:
+                        def:
+                          type: object
+                          shape:
+                            voterId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            choice:
+                              def:
+                                type: enum
+                                entries:
+                                  approve: approve
+                                  reject: reject
+                              type: enum
+                              enum:
+                                approve: approve
+                                reject: reject
+                              options:
+                                - approve
+                                - reject
+                            timestamp:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    status:
+                      def:
+                        type: enum
+                        entries:
+                          pending: pending
+                          approved: approved
+                          rejected: rejected
+                      type: enum
+                      enum:
+                        pending: pending
+                        approved: approved
+                        rejected: rejected
+                      options:
+                        - pending
+                        - approved
+                        - rejected
+                    threshold:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    totalSigners:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  id:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  targetAddress:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  reason:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  requestedBy:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  createdAt:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+                  votes:
+                    def:
+                      type: array
+                      element:
+                        def:
+                          type: object
+                          shape:
+                            voterId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            choice:
+                              def:
+                                type: enum
+                                entries:
+                                  approve: approve
+                                  reject: reject
+                              type: enum
+                              enum:
+                                approve: approve
+                                reject: reject
+                              options:
+                                - approve
+                                - reject
+                            timestamp:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    type: array
+                    element:
+                      def:
+                        type: object
+                        shape:
+                          voterId:
+                            def:
+                              type: string
+                            type: string
+                            format: null
+                            minLength: null
+                            maxLength: null
+                          choice:
+                            def:
+                              type: enum
+                              entries:
+                                approve: approve
+                                reject: reject
+                            type: enum
+                            enum:
+                              approve: approve
+                              reject: reject
+                            options:
+                              - approve
+                              - reject
+                          timestamp:
+                            def:
+                              type: string
+                              checks:
+                                - def:
+                                    type: string
+                                    format: datetime
+                                    check: string_format
+                                    offset: false
+                                    local: false
+                                    precision: null
+                                    pattern: {}
+                                  type: string
+                                  format: datetime
+                                  minLength: null
+                                  maxLength: null
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: object
+                  status:
+                    def:
+                      type: enum
+                      entries:
+                        pending: pending
+                        approved: approved
+                        rejected: rejected
+                    type: enum
+                    enum:
+                      pending: pending
+                      approved: approved
+                      rejected: rejected
+                    options:
+                      - pending
+                      - approved
+                      - rejected
+                  threshold:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                    type: number
+                    minValue: -9007199254740991
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                  totalSigners:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                    type: number
+                    minValue: -9007199254740991
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+              type: object
+          page:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          limit:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          total:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          hasNext:
+            def:
+              type: boolean
+            type: boolean
+      type: object
+    slashRequestsQuerySchema:
+      def:
+        type: object
+        shape:
+          status:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    pending: pending
+                    approved: approved
+                    rejected: rejected
+                type: enum
+                enum:
+                  pending: pending
+                  approved: approved
+                  rejected: rejected
+                options:
+                  - pending
+                  - approved
+                  - rejected
+            type: optional
+          page:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          offset:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    stellarAddressSchema:
+      def:
+        type: string
+        checks:
+          - {}
+          - def:
+              type: custom
+              check: custom
+            type: custom
+      type: string
+      format: null
+      minLength: 1
+      maxLength: null
+    submitDisputeBodySchema:
+      def:
+        type: object
+        shape:
+          filedBy:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          respondent:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 10
+            maxLength: null
+          evidence:
+            def:
+              type: array
+              element:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+              checks:
+                - {}
+            type: array
+            element:
+              def:
+                type: string
+              type: string
+              format: null
+              minLength: null
+              maxLength: null
+          deadlineMs:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 3600000
+            maxValue: 2592000000
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    submitVoteBodySchema:
+      def:
+        type: object
+        shape:
+          voterId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+      type: object
+    transactionsHistoryQuerySchema:
+      def:
+        type: object
+        shape:
+          limit:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 1
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: optional
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 1
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+              type: optional
+          cursor:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: optional
+                  innerType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                type: optional
+              out:
+                def:
+                  type: transform
+                type: transform
+            type: pipe
+            in:
+              def:
+                type: optional
+                innerType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+              type: optional
+            out:
+              def:
+                type: transform
+              type: transform
+          bondId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    trustExplainQuerySchema:
+      def:
+        type: object
+        shape:
+          snapshotId:
+            def:
+              type: pipe
+              in:
+                def:
+                  type: transform
+                type: transform
+              out:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: pipe
+            in:
+              def:
+                type: transform
+              type: transform
+            out:
+              def:
+                type: number
+                checks:
+                  - def:
+                      type: number
+                      check: number_format
+                      abort: false
+                      format: safeint
+                    type: number
+                    minValue: -9007199254740991
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                  - {}
+              type: number
+              minValue: 0
+              maxValue: 9007199254740991
+              isInt: true
+              isFinite: true
+              format: safeint
+      type: object
+    trustPathParamsSchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    trustQuerySchema:
+      def:
+        type: object
+        shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    updatePolicyBodySchema:
+      def:
+        type: object
+        shape:
+          subject:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+          action:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    org:read: org:read
+                    org:update: org:update
+                    org:delete: org:delete
+                    org:member:invite: org:member:invite
+                    org:member:remove: org:member:remove
+                    org:member:list: org:member:list
+                    org:role:assign: org:role:assign
+                    org:apikey:create: org:apikey:create
+                    org:apikey:revoke: org:apikey:revoke
+                    org:apikey:list: org:apikey:list
+                    org:audit:read: org:audit:read
+                    org:policy:read: org:policy:read
+                    org:policy:write: org:policy:write
+                    "*": "*"
+                type: enum
+                enum:
+                  org:read: org:read
+                  org:update: org:update
+                  org:delete: org:delete
+                  org:member:invite: org:member:invite
+                  org:member:remove: org:member:remove
+                  org:member:list: org:member:list
+                  org:role:assign: org:role:assign
+                  org:apikey:create: org:apikey:create
+                  org:apikey:revoke: org:apikey:revoke
+                  org:apikey:list: org:apikey:list
+                  org:audit:read: org:audit:read
+                  org:policy:read: org:policy:read
+                  org:policy:write: org:policy:write
+                  "*": "*"
+                options:
+                  - org:read
+                  - org:update
+                  - org:delete
+                  - org:member:invite
+                  - org:member:remove
+                  - org:member:list
+                  - org:role:assign
+                  - org:apikey:create
+                  - org:apikey:revoke
+                  - org:apikey:list
+                  - org:audit:read
+                  - org:policy:read
+                  - org:policy:write
+                  - "*"
+            type: optional
+          resource:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+          effect:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    allow: allow
+                    deny: deny
+                type: enum
+                enum:
+                  allow: allow
+                  deny: deny
+                options:
+                  - allow
+                  - deny
+            type: optional
+          conditions:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: record
+                  keyType:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  valueType:
+                    def:
+                      type: union
+                      options:
+                        - def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        - def:
+                            type: boolean
+                          type: boolean
+                        - def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                type: record
+                keyType:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                valueType:
+                  def:
+                    type: union
+                    options:
+                      - def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                      - def:
+                          type: boolean
+                        type: boolean
+                      - def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                  type: union
+                  options:
+                    - def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    - def:
+                        type: boolean
+                      type: boolean
+                    - def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    voteChoiceSchema:
+      def:
+        type: enum
+        entries:
+          approve: approve
+          reject: reject
+      type: enum
+      enum:
+        approve: approve
+        reject: reject
+      options:
+        - approve
+        - reject
+    voteResultSchema:
+      def:
+        type: object
+        shape:
+          slashRequestId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          voterId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+          approveCount:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          rejectCount:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          status:
+            def:
+              type: enum
+              entries:
+                pending: pending
+                approved: approved
+                rejected: rejected
+            type: enum
+            enum:
+              pending: pending
+              approved: approved
+              rejected: rejected
+            options:
+              - pending
+              - approved
+              - rejected
+      type: object
+    voteSchema:
+      def:
+        type: object
+        shape:
+          voterId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          choice:
+            def:
+              type: enum
+              entries:
+                approve: approve
+                reject: reject
+            type: enum
+            enum:
+              approve: approve
+              reject: reject
+            options:
+              - approve
+              - reject
+          timestamp:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    walletDebitBodySchema:
+      def:
+        type: object
+        shape:
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    walletDebitResponseSchema:
+      def:
+        type: object
+        shape:
+          wallet:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                address:
+                  def:
+                    type: string
+                    checks:
+                      - {}
+                  type: string
+                  format: null
+                  minLength: 1
+                  maxLength: null
+                balance:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                currency:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                createdAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+                updatedAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+            type: object
+          previousBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          newBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          debitedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          balance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          currency:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
+          updatedAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
+      type: object
+    withdrawalEventSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          pagingToken:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          type:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          createdAt:
+            def:
+              type: union
+              options:
+                - def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+                - def:
+                    type: string
+                    checks:
+                      - {}
+                  type: string
+                  format: regex
+                  minLength: null
+                  maxLength: null
+            type: union
+            options:
+              - def:
+                  type: date
+                type: date
+                minDate: null
+                maxDate: null
+              - def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+          bondId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          account:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: regex
+            minLength: null
+            maxLength: null
+          assetType:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          assetCode:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          assetIssuer:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          transactionHash:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          operationIndex:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    Wallet:
+      type: object
       properties:
-        status:
+        id:
           type: string
-          enum: [ok]
-          example: ok
-        service:
+          format: uuid
+          description: Wallet UUID (auto-generated by Postgres)
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address
+          example: 0xTestAddress1
+        balance:
+          type: string
+          description: Current balance as a decimal string (NUMERIC(36,18))
+          example: "100.000000000000000000"
+        currency:
+          type: string
+          description: Currency code
+          example: USD
+        createdAt:
           type: string
           example: credence-backend
 
@@ -114,102 +3428,560 @@ components:
             $ref: "#/components/schemas/WorkerHealthEntry"
 
     TrustScore:
-      type: object
-      required: [address, score, bondedAmount, bondStart, attestationCount]
-      properties:
-        address:
-          type: string
-          description: Normalised (lower-case) Ethereum address.
-          example: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
-        score:
-          type: integer
-          minimum: 0
-          maximum: 100
-          description: |
-            Computed trust score (0–100).
-
-            Breakdown:
-            - Bond amount  → up to 50 pts (maxes at ≥ 1 ETH)
-            - Bond duration → up to 20 pts (maxes at ≥ 365 days)
-            - Attestations → up to 30 pts (maxes at ≥ 5 attestations)
-          example: 80
-        bondedAmount:
-          type: string
-          description: Amount bonded in wei (string-encoded bigint).
-          example: "1000000000000000000"
-        bondStart:
+          format: date-time
+          description: UTC timestamp when the wallet was created
+        updatedAt:
           type: string
           format: date-time
-          nullable: true
-          description: ISO 8601 timestamp when the bond was first posted, or null if unbonded.
-          example: "2024-01-15T00:00:00.000Z"
-        attestationCount:
-          type: integer
-          minimum: 0
-          description: Number of on-chain attestations recorded for this address.
-          example: 5
-        agreedFields:
-          type: object
-          additionalProperties:
-            type: string
-          nullable: true
-          description: Key/value fields the identity has explicitly attested to (omitted if none).
-          example:
-            name: Alice
-            role: validator
-
-    BondStatus:
-      type: object
+          description: UTC timestamp of the last balance change
       required:
-        [address, bondedAmount, bondStart, bondDuration, active, slashedAmount]
-      properties:
-        address:
-          type: string
-          description: Normalised (lower-case) Ethereum address.
-          example: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
-        bondedAmount:
-          type: string
-          description: Amount currently bonded in wei.
-          example: "1000000000000000000"
-        bondStart:
-          type: string
-          format: date-time
-          nullable: true
-          description: ISO 8601 timestamp of first bond, or null.
-          example: "2024-01-15T00:00:00.000Z"
-        bondDuration:
-          type: integer
-          nullable: true
-          description: Duration of the current bond in seconds, or null if unbonded.
-          example: 31536000
-        active:
-          type: boolean
-          description: Whether the bond is currently active.
-          example: true
-        slashedAmount:
-          type: string
-          description: Total amount slashed from this bond in wei.
-          example: "0"
-
-    Error:
+        - id
+        - address
+        - balance
+        - currency
+        - createdAt
+        - updatedAt
+    WalletError:
       type: object
-      required: [error]
       properties:
         error:
           type: string
-          description: Human-readable description of what went wrong.
-          example: "Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters."
-
+          example: Wallet abc not found
+      required:
+        - error
+    CreateWalletBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address (must be unique)
+          example: 0xNewAddress
+        initialBalance:
+          type: string
+          description: Optional initial balance as a decimal string. Defaults to "0".
+          example: "50"
+        currency:
+          type: string
+          description: Currency code. Defaults to "USD".
+          example: USD
+      required:
+        - address
+    WalletDebitResponse:
+      type: object
+      properties:
+        wallet:
+          $ref: "#/components/schemas/Wallet"
+        previousBalance:
+          type: string
+          description: Wallet balance before the debit
+          example: "100.000000000000000000"
+        newBalance:
+          type: string
+          description: Wallet balance after the debit
+          example: "74.500000000000000000"
+        debitedAmount:
+          type: string
+          description: Amount that was debited
+          example: "25.50"
+      required:
+        - wallet
+        - previousBalance
+        - newBalance
+        - debitedAmount
+    WalletDebitBody:
+      type: object
+      properties:
+        amount:
+          type: string
+          minLength: 1
+          description: Positive decimal string amount to deduct from the wallet balance.
+          example: "25.50"
+      required:
+        - amount
+    BondResponse:
+      type: object
+      properties:
+        address:
+          type: string
+          description: Normalised (lower-case) wallet address
+          example: "0x742d35cc6634c0532925a3b844bc454e4438f44e"
+        bondedAmount:
+          type: string
+          description: Current bonded amount as a string
+          example: "1000000000000000000"
+        bondStart:
+          type: string
+          nullable: true
+          description: ISO 8601 timestamp when the bond was first posted, or null
+          example: 2024-01-15T10:00:00.000Z
+        bondDuration:
+          type: number
+          nullable: true
+          description: Bond lock duration in seconds, or null if unbonded
+          example: 2592000
+        active:
+          type: boolean
+          description: "Deprecated: use `status` instead"
+          example: true
+        slashedAmount:
+          type: string
+          description: Cumulative slashed amount as a string
+          example: "0"
+        status:
+          type: string
+          enum:
+            - active
+            - slashed
+            - inactive
+            - unbonded
+          description: Canonical bond lifecycle status
+          example: active
+      required:
+        - address
+        - bondedAmount
+        - bondStart
+        - bondDuration
+        - active
+        - slashedAmount
+        - status
+    BondError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: No bond record found for address 0x…
+      required:
+        - error
+    CreateBondBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Wallet address to associate the bond with
+          example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+        bondedAmount:
+          type: string
+          minLength: 1
+          description: Amount to bond, expressed as a string to preserve precision (e.g.
+            wei)
+          example: "1000000000000000000"
+        bondDuration:
+          type: integer
+          minimum: 0
+          exclusiveMinimum: true
+          description: Bond lock duration in seconds
+          example: 2592000
+      required:
+        - address
+        - bondedAmount
+        - bondDuration
+    SlashRequest:
+      type: object
+      properties:
+        id:
+          type: string
+          example: a1b2c3d4e5f6a7b8
+        targetAddress:
+          type: string
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        reason:
+          type: string
+          example: Repeated SLA violations on delivery commitments
+        requestedBy:
+          type: string
+          example: validator-12
+        createdAt:
+          type: string
+          format: date-time
+          example: 2024-01-15T09:00:00.000Z
+        votes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Vote"
+        status:
+          $ref: "#/components/schemas/SlashRequestStatus"
+        threshold:
+          type: integer
+          example: 3
+        totalSigners:
+          type: integer
+          example: 5
+      required:
+        - id
+        - targetAddress
+        - reason
+        - requestedBy
+        - createdAt
+        - votes
+        - status
+        - threshold
+        - totalSigners
+    Vote:
+      type: object
+      properties:
+        voterId:
+          type: string
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+        timestamp:
+          type: string
+          format: date-time
+          description: ISO 8601 timestamp the vote was cast
+          example: 2024-01-15T10:00:00.000Z
+      required:
+        - voterId
+        - choice
+        - timestamp
+    VoteChoice:
+      type: string
+      enum:
+        - approve
+        - reject
+    SlashRequestStatus:
+      type: string
+      enum:
+        - pending
+        - approved
+        - rejected
+    GovernanceError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: NotFound
+        message:
+          type: string
+          example: Slash request not found
+      required:
+        - error
+        - message
+    CreateSlashRequestBody:
+      type: object
+      properties:
+        targetAddress:
+          type: string
+          minLength: 1
+          description: On-chain address of the entity being slashed
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        reason:
+          type: string
+          minLength: 1
+          description: Reason for requesting the slash
+          example: Repeated SLA violations on delivery commitments
+        requestedBy:
+          type: string
+          minLength: 1
+          description: Identifier of the requester
+          example: validator-12
+        threshold:
+          type: integer
+          minimum: 1
+          description: "Approve votes required to pass (default: 3)"
+          example: 3
+        totalSigners:
+          type: integer
+          minimum: 1
+          description: "Total eligible signers (default: 5)"
+          example: 5
+      required:
+        - targetAddress
+        - reason
+        - requestedBy
+    SlashRequestsListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/SlashRequest"
+        page:
+          type: integer
+          example: 1
+        limit:
+          type: integer
+          example: 20
+        total:
+          type: integer
+          example: 1
+        hasNext:
+          type: boolean
+          example: false
+      required:
+        - success
+        - data
+        - page
+        - limit
+        - total
+        - hasNext
+    VoteResult:
+      type: object
+      properties:
+        slashRequestId:
+          type: string
+          example: a1b2c3d4e5f6a7b8
+        voterId:
+          type: string
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+        approveCount:
+          type: integer
+          example: 2
+        rejectCount:
+          type: integer
+          example: 0
+        status:
+          $ref: "#/components/schemas/SlashRequestStatus"
+      required:
+        - slashRequestId
+        - voterId
+        - choice
+        - approveCount
+        - rejectCount
+        - status
+    SubmitVoteBody:
+      type: object
+      properties:
+        voterId:
+          type: string
+          minLength: 1
+          example: validator-3
+        choice:
+          $ref: "#/components/schemas/VoteChoice"
+      required:
+        - voterId
+        - choice
+    Dispute:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+        filedBy:
+          type: string
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        respondent:
+          type: string
+          example: GBVFLWXYZ6JJ7TUSU6QDJ6DOY4J5G5VHGJWSCMHL7QSAHRDEQU3EXFW2
+        reason:
+          type: string
+          example: Goods delivered did not match the agreed specification
+        evidence:
+          type: array
+          items:
+            type: string
+          example:
+            - ipfs://bafybeih...
+        status:
+          $ref: "#/components/schemas/DisputeStatus"
+        createdAt:
+          type: string
+          format: date-time
+          example: 2024-01-15T09:00:00.000Z
+        deadline:
+          type: string
+          format: date-time
+          example: 2024-01-16T09:00:00.000Z
+        resolution:
+          type: string
+          nullable: true
+          example: null
+      required:
+        - id
+        - filedBy
+        - respondent
+        - reason
+        - evidence
+        - status
+        - createdAt
+        - deadline
+        - resolution
+    DisputeStatus:
+      type: string
+      enum:
+        - pending
+        - under_review
+        - resolved
+        - dismissed
+        - expired
+    DisputeError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: NotFound
+        message:
+          type: string
+          example: Dispute not found
+      required:
+        - error
+        - message
+    SubmitDisputeBody:
+      type: object
+      properties:
+        filedBy:
+          type: string
+          pattern: ^G[A-Z2-7]{55}$
+          description: Stellar address of the party filing the dispute
+          example: GDUKMGUGDZQK6YHYA5Z6AY2G4XDSZPSZ3SW5UN3ARVMO6QSRDWP5YLEX
+        respondent:
+          type: string
+          pattern: ^G[A-Z2-7]{55}$
+          description: Stellar address of the respondent
+          example: GBVFLWXYZ6JJ7TUSU6QDJ6DOY4J5G5VHGJWSCMHL7QSAHRDEQU3EXFW2
+        reason:
+          type: string
+          minLength: 10
+          description: Reason for the dispute (minimum 10 characters)
+          example: Goods delivered did not match the agreed specification
+        evidence:
+          type: array
+          items:
+            type: string
+          minItems: 1
+          description: Evidence references (URIs, hashes, etc.) supporting the dispute
+          example:
+            - ipfs://bafybeih...
+        deadlineMs:
+          type: integer
+          minimum: 3600000
+          maximum: 2592000000
+          description: Resolution deadline expressed as milliseconds from now (min 1 hour,
+            max 30 days)
+          example: 86400000
+      required:
+        - filedBy
+        - respondent
+        - reason
+        - evidence
+        - deadlineMs
+    DisputeTransitionError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid dispute state transition
+        code:
+          type: string
+          example: invalid_dispute_transition
+        error_code:
+          type: string
+          example: invalid_dispute_transition
+        message:
+          type: string
+          example: Invalid transition from "resolved" to "resolved"
+      required:
+        - error
+        - code
+        - error_code
+        - message
+    ResolveDisputeBody:
+      type: object
+      properties:
+        resolution:
+          type: string
+          minLength: 1
+          description: Resolution text describing the outcome
+          example: Respondent agreed to a partial refund of 20%
+      required:
+        - resolution
+    DismissDisputeBody:
+      type: object
+      properties:
+        reason:
+          type: string
+          minLength: 1
+          description: Reason the dispute is being dismissed
+          example: Insufficient evidence provided
+      required:
+        - reason
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "API key sent as `Authorization: Bearer <key>`"
+  parameters: {}
 paths:
   /api/health:
     get:
-      operationId: getHealth
       summary: Health check
-      description: Returns service liveness. No authentication required.
-      tags: [Health]
+      description: Service health status.
+      tags:
+        - Health
       responses:
         "200":
-          description: Service is healthy.
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  version:
+                    type: object
+                    properties:
+                      gitSha:
+                        type: string
+                      buildTimestamp:
+                        type: string
+                      nodeVersion:
+                        type: string
+                    required:
+                      - gitSha
+                      - buildTimestamp
+                      - nodeVersion
+                required:
+                  - status
+                  - service
+                  - version
+        "503":
+          description: Unhealthy
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+                  version:
+                    type: object
+                    properties:
+                      gitSha:
+                        type: string
+                      buildTimestamp:
+                        type: string
+                      nodeVersion:
+                        type: string
+                    required:
+                      - gitSha
+                      - buildTimestamp
+                      - nodeVersion
+                required:
+                  - status
+                  - service
+                  - version
+  /.well-known/jwks.json:
+    get:
+      summary: JWKS
+      description: JSON Web Key Set for verifying JWT signatures.
+      tags:
+        - Security
+      responses:
+        "200":
+          description: JWKS returned
           content:
             application/json:
               schema:
@@ -262,126 +4034,746 @@ paths:
                     type: string
                     example: Unable to query worker health
 
+                type: object
+                additionalProperties:
+                  nullable: true
   /api/trust/{address}:
     get:
-      operationId: getTrustScore
       summary: Get trust score
-      description: |
-        Returns the computed trust score and identity data for an Ethereum
-        address. The score is derived from bonded amount, bond duration, and
-        attestation count.
-
-        Supply `X-API-Key` to use the premium rate tier.
-      tags: [Trust]
-      security:
-        - {} # public (no key)
-        - ApiKeyAuth: [] # or with key
+      description: Returns computed trust score and identity data.
+      tags:
+        - Trust
       parameters:
-        - $ref: "#/components/parameters/address"
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: address
+          in: path
       responses:
         "200":
-          description: Trust score found.
+          description: Trust data
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/TrustScore"
-              examples:
-                fullScore:
-                  summary: Fully bonded identity with agreed fields
-                  value:
-                    address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
-                    score: 100
-                    bondedAmount: "1000000000000000000"
-                    bondStart: "2024-01-15T00:00:00.000Z"
-                    attestationCount: 5
-                    agreedFields:
-                      name: Alice
-                      role: validator
-                partialScore:
-                  summary: Partially bonded identity
-                  value:
-                    address: "0x70997970c51812dc3a010c7d01b50e0d17dc79c8"
-                    score: 57
-                    bondedAmount: "500000000000000000"
-                    bondStart: "2024-06-01T00:00:00.000Z"
-                    attestationCount: 2
-                zeroScore:
-                  summary: Unbonded identity (score 0)
-                  value:
-                    address: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
-                    score: 0
-                    bondedAmount: "0"
-                    bondStart: null
-                    attestationCount: 0
+                nullable: true
         "400":
-          description: Address format is invalid.
+          description: Invalid address format
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: "Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters."
+                nullable: true
         "404":
-          description: No identity record found for this address.
+          description: No identity record
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: "No identity record found for address 0x1234567890123456789012345678901234567890."
-
+                nullable: true
+  /api/trust:
+    post:
+      summary: Trust query (internal)
+      description: Trust lookup entrypoint.
+      tags:
+        - Trust
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Trust data
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/attestations/{address}:
+    get:
+      summary: List attestations
+      description: Returns attestations for a subject address.
+      tags:
+        - Attestations
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: address
+          in: path
+      responses:
+        "200":
+          description: Attestations
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/attestations:
+    post:
+      summary: Create attestation
+      description: Creates an attestation and emits events.
+      tags:
+        - Attestations
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bondId:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                attesterAddress:
+                  type: string
+                  minLength: 1
+                subject:
+                  type: string
+                  minLength: 1
+                value:
+                  type: string
+                  minLength: 1
+                  maxLength: 2048
+                key:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                score:
+                  type: integer
+                  nullable: true
+                  minimum: 0
+                  maximum: 100
+              required:
+                - subject
+                - value
+              additionalProperties: false
+      responses:
+        "201":
+          description: Attestation created
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                nullable: true
+        "409":
+          description: Duplicate attestation
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/bulk:
+    post:
+      summary: Bulk operations
+      description: Performs bulk operations.
+      tags:
+        - Bulk
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Bulk result
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/imports:
+    post:
+      summary: Imports
+      description: Imports data.
+      tags:
+        - Imports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              nullable: true
+      responses:
+        "200":
+          description: Import result
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/orgs/{orgId}/policies:
+    get:
+      summary: List policies
+      description: Lists policies for an organization.
+      tags:
+        - Policy
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: orgId
+          in: path
+      responses:
+        "200":
+          description: Policies
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/analytics:
+    get:
+      summary: Analytics
+      description: Returns analytics summary.
+      tags:
+        - Analytics
+      responses:
+        "200":
+          description: Analytics
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/payouts:
+    post:
+      summary: Create payout
+      description: Creates a payout job.
+      tags:
+        - Payouts
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                bondId:
+                  anyOf:
+                    - type: string
+                    - type: number
+                amount:
+                  type: string
+                  pattern: ^\d+(\.\d{1,18})?$
+                transactionHash:
+                  type: string
+                  minLength: 1
+                  maxLength: 128
+                settledAt:
+                  type: string
+                  format: date-time
+                status:
+                  type: string
+                  enum:
+                    - pending
+                    - settled
+                    - failed
+              required:
+                - bondId
+                - amount
+                - transactionHash
+      responses:
+        "201":
+          description: Payout created
+          content:
+            application/json:
+              schema:
+                nullable: true
+  /api/wallets:
+    post:
+      summary: Create a wallet
+      description: Creates a new wallet with an optional initial balance.
+      tags:
+        - Wallets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWalletBody"
+      responses:
+        "201":
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+        "409":
+          description: A wallet with this address already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+  /api/wallets/{id}/debit:
+    post:
+      summary: Debit a wallet
+      description: Atomically debits the specified amount from a wallet balance. Fails
+        if the balance would go negative.
+      tags:
+        - Wallets
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletDebitBody"
+      responses:
+        "200":
+          description: Debit successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletDebitResponse"
+        "404":
+          description: Wallet not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+        "422":
+          description: Insufficient balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
   /api/bond/{address}:
     get:
-      operationId: getBondStatus
       summary: Get bond status
-      description: |
-        Returns the bond status for an Ethereum address from the database.
-        Validates address format and returns 404 when no bond record exists.
-      tags: [Bond]
-      security:
-        - {}
-        - ApiKeyAuth: []
+      description: Returns the current bond status and lifecycle state for a wallet address.
+      tags:
+        - Bond
       parameters:
-        - $ref: "#/components/parameters/address"
+        - schema:
+            type: string
+            minLength: 1
+            description: Ethereum (0x…) or Stellar (G…) wallet address
+            example: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e"
+          required: true
+          description: Ethereum (0x…) or Stellar (G…) wallet address
+          name: address
+          in: path
       responses:
         "200":
-          description: Bond record found.
+          description: Bond record found
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BondStatus"
-              examples:
-                active:
-                  summary: Active bond
-                  value:
-                    address: "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
-                    bondedAmount: "1000000000000000000"
-                    bondStart: "2024-01-15T00:00:00.000Z"
-                    bondDuration: 31536000
-                    active: true
-                    slashedAmount: "0"
-                inactive:
-                  summary: Inactive bond
-                  value:
-                    address: "0x3c44cdddb6a900fa2b585dd299e03d12fa4293bc"
-                    bondedAmount: "0"
-                    bondStart: null
-                    bondDuration: null
-                    active: false
-                    slashedAmount: "0"
+                $ref: "#/components/schemas/BondResponse"
         "400":
-          description: Address format is invalid.
+          description: Invalid address format
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: "Invalid address format. Expected an Ethereum address: 0x followed by 40 hex characters."
+                $ref: "#/components/schemas/BondError"
         "404":
-          description: No bond record found for this address.
+          description: No bond record for this address
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Error"
-              example:
-                error: "No bond record found for address 0x1234567890123456789012345678901234567890."
+                $ref: "#/components/schemas/BondError"
+  /api/bond:
+    post:
+      summary: Create or top-up a bond
+      description: Creates a new bond or tops up an existing one for the given wallet
+        address.
+      tags:
+        - Bond
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBondBody"
+      responses:
+        "201":
+          description: Bond created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondResponse"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BondError"
+  /api/governance/slash-requests:
+    post:
+      summary: Create a slash request
+      description: Opens a new slash request awaiting governance votes.
+      tags:
+        - Governance
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSlashRequestBody"
+      responses:
+        "201":
+          description: Slash request created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlashRequest"
+        "400":
+          description: Validation error (e.g. threshold < 1, or totalSigners < threshold)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+    get:
+      summary: List slash requests
+      description: Returns a paginated list of slash requests, optionally filtered by
+        status.
+      tags:
+        - Governance
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            $ref: "#/components/schemas/SlashRequestStatus"
+          required: false
+          name: status
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            example: 1
+          required: false
+          name: page
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            example: 20
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            nullable: true
+            minimum: 0
+          required: false
+          name: offset
+          in: query
+      responses:
+        "200":
+          description: Paginated list of slash requests
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlashRequestsListResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/governance/slash-requests/{id}:
+    get:
+      summary: Get a slash request
+      description: Returns a single slash request by ID.
+      tags:
+        - Governance
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            description: Slash request ID
+            example: a1b2c3d4e5f6a7b8
+          required: true
+          description: Slash request ID
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Slash request found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SlashRequest"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+        "404":
+          description: No slash request with this ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/governance/slash-requests/{id}/votes:
+    post:
+      summary: Vote on a slash request
+      description: Casts an approve/reject vote on a pending slash request.
+      tags:
+        - Governance
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            description: Slash request ID
+            example: a1b2c3d4e5f6a7b8
+          required: true
+          description: Slash request ID
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitVoteBody"
+      responses:
+        "201":
+          description: Vote recorded
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VoteResult"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+        "404":
+          description: No slash request with this ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+        "409":
+          description: Request already resolved, or voter has already voted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GovernanceError"
+  /api/disputes:
+    post:
+      summary: Submit a dispute
+      description: Files a new dispute between two Stellar addresses with supporting
+        evidence.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SubmitDisputeBody"
+      responses:
+        "201":
+          description: Dispute submitted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "400":
+          description: Validation error (invalid Stellar address, reason too short,
+            missing evidence, or deadline out of range)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+  /api/disputes/{id}:
+    get:
+      summary: Get a dispute
+      description: Returns a single dispute by ID.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Dispute found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "404":
+          description: No dispute with this ID
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+  /api/disputes/{id}/review:
+    post:
+      summary: Mark a dispute under review
+      description: Transitions a pending dispute to `under_review`.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      responses:
+        "200":
+          description: Dispute marked under review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition (e.g. dispute is not pending)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"
+  /api/disputes/{id}/resolve:
+    post:
+      summary: Resolve a dispute
+      description: Transitions a pending or under-review dispute to `resolved` with a
+        resolution note.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveDisputeBody"
+      responses:
+        "200":
+          description: Dispute resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition, missing resolution text, or dispute has
+            expired
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"
+  /api/disputes/{id}/dismiss:
+    post:
+      summary: Dismiss a dispute
+      description: Transitions a pending or under-review dispute to `dismissed` with a
+        reason.
+      tags:
+        - Disputes
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+            description: Dispute ID
+            example: 5f8d0d55-1c1b-4e9a-9b1a-4e6f6f6f6f6f
+          required: true
+          description: Dispute ID
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DismissDisputeBody"
+      responses:
+        "200":
+          description: Dispute dismissed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Dispute"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeError"
+        "422":
+          description: Invalid state transition or missing dismiss reason
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DisputeTransitionError"

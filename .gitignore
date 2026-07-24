@@ -1,5 +1,5 @@
-node_modules\
-dist\
+node_modules/
+dist/
 *.db
 coverage
 *.local
@@ -7,6 +7,9 @@ coverage
 .env
 .env.*
 !.env.example
+
+# Generated SBOM (produced by `npm run sbom:generate`)
+sbom.json
 
 # Monitoring data
 monitoring/data/

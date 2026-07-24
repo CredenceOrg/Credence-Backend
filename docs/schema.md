@@ -35,6 +35,30 @@ Stores every blockchain wallet address that has been registered with the Credenc
 
 ---
 
+### `wallets`
+
+Stores on-chain wallet balances managed by the protocol. Each wallet maps a blockchain address to a mutable balance.
+
+| Column | Type | Nullable | Default | Description |
+|---|---|---|---|---|
+| `id` | `UUID` | NO | `gen_random_uuid()` | Surrogate primary key |
+| `address` | `TEXT` | NO | — | Blockchain wallet address (unique) |
+| `balance` | `NUMERIC(36,18)` | NO | `0` | Current balance; 36 total digits, 18 after the decimal point |
+| `currency` | `TEXT` | NO | `'USD'` | Token/currency denomination |
+| `created_at` | `TIMESTAMPTZ` | NO | `NOW()` | Row creation time |
+| `updated_at` | `TIMESTAMPTZ` | NO | `NOW()` | Auto-updated on every `UPDATE` |
+
+**Constraints**
+- `PRIMARY KEY (id)`
+- `UNIQUE (address)`
+- `CHECK (balance >= 0)` — prevents negative balances at the database level
+
+**Balance arithmetic**
+
+All balance mutations use PostgreSQL `NUMERIC` arithmetic (`balance::NUMERIC ± $n::NUMERIC`) so no precision is lost in the database layer. The application layer (`WalletsRepository.debit()`) uses `compareDecimals()` from `src/lib/decimalMath.ts` — a BigInt-scaled exact comparison — for the sufficiency check. `Number()` is intentionally avoided: it loses precision beyond ~15 significant digits and can silently allow an overdraft on large or high-scale balances (e.g. `Number("10000000000000001") === Number("10000000000000002")`).
+
+---
+
 ### `bonds`
 
 Records staking/locking events. Each row represents one bond period for an identity.

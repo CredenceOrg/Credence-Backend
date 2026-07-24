@@ -21,7 +21,7 @@ export class PolicyEvaluator {
   constructor(private store: PolicyStore) {}
 
   evaluate(ctx: PolicyContext): PolicyDecision {
-    const rules = this.store.findByOrg(ctx.orgId)
+    const rules = this.store.findAllByOrg(ctx.orgId)
     const matching = rules.filter((r) => this.matches(r, ctx))
 
     // Explicit deny wins over everything

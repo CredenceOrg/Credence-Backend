@@ -1,12 +1,13 @@
 import type { Request, Response, NextFunction } from 'express'
 import { ROLE_HIERARCHY } from '../types/rbac.ts'
 import type { Role, AuthenticatedUser } from '../types/rbac.ts'
+import { logger } from '../utils/logger.js'
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-/** Structured access-denial logger. Replace with your logger (pino, winston…). */
+/** Structured access-denial logger. */
 function logDenial(
      req: Request,
      user: AuthenticatedUser | undefined,
@@ -22,7 +23,7 @@ function logDenial(
           userAddress: user?.address ?? null,
           timestamp: new Date().toISOString(),
      }
-     console.warn(JSON.stringify(entry))
+     logger.warn(entry)
 }
 
 import { UnauthorizedError, ForbiddenError } from '../lib/errors.js'

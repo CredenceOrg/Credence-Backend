@@ -57,8 +57,10 @@ export function validateConfig(config: MigrationConfig): boolean {
   }
 
   // Basic URL validation for PostgreSQL
-  if (!config.databaseUrl.startsWith('postgres://') && !config.databaseUrl.startsWith('postgresql://')) {
-    throw new Error('DATABASE_URL must be a valid PostgreSQL connection string starting with postgres:// or postgresql://')
+  if (!config.databaseUrl.startsWith('postgres://') && 
+      !config.databaseUrl.startsWith('postgresql://') &&
+      !config.databaseUrl.startsWith('pg-mem://')) {
+    throw new Error('DATABASE_URL must be a valid PostgreSQL connection string starting with postgres://, postgresql:// or pg-mem://')
   }
 
   if (!config.migrationsDir) {

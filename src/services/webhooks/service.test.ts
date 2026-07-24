@@ -38,6 +38,19 @@ describe('WebhookService', () => {
         return mockWebhooks.find(w => w.id === id) ?? null
       }),
       set: vi.fn(),
+      reserveWebhookDelivery: vi.fn(async () => true),
+      markWebhookDeliverySucceeded: vi.fn(async () => undefined),
+      clearWebhookDeliveryAttempt: vi.fn(async () => undefined),
+      rotateSecret: vi.fn(async (id: string, newSecret: string, previousSecret: string, previousSecretExpiresAt: string) => {
+        const webhook = mockWebhooks.find(w => w.id === id)
+        if (!webhook) throw new Error('Webhook not found')
+        return {
+          ...webhook,
+          secret: newSecret,
+          previousSecret,
+          previousSecretExpiresAt,
+        }
+      }),
     }
 
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
@@ -195,6 +208,65 @@ describe('WebhookService', () => {
     expect(results[0].success).toBe(true)
     expect(results[1].success).toBe(false)
     expect(results[1].error).toBeDefined()
+  })
+
+  it('skips duplicate deliveries for the same subscriber and event id', async () => {
+    mockStore.getByEvent = vi.fn(async () => [mockWebhooks[0]])
+    const service = new WebhookService(mockStore)
+    const reserveSpy = vi.mocked(mockStore.reserveWebhookDelivery)
+    const seen = new Set<string>()
+    reserveSpy.mockImplementation(async (subscriberId: string, eventId: string) => {
+      const marker = `${subscriberId}:${eventId}`
+      if (seen.has(marker)) {
+        return false
+      }
+      seen.add(marker)
+      return true
+    })
+
+    const results = await Promise.all([
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+    ])
+
+    expect(results[0]).toHaveLength(1)
+    expect(results[1]).toHaveLength(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows different event ids to be delivered independently', async () => {
+    const service = new WebhookService(mockStore)
+
+    await Promise.all([
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+      service.emit('bond.created', {
+        address: '0xdef',
+        bondedAmount: '2000',
+        bondStart: 1234567891,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-2' }),
+    ])
+
+    expect(fetch).toHaveBeenCalledTimes(4)
   })
 
   it('delivers to multiple webhooks in parallel', async () => {

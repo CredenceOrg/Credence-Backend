@@ -12,6 +12,7 @@ export function runMigrations(db: Database.Database): void {
     CREATE TABLE IF NOT EXISTS identities (
       id         INTEGER PRIMARY KEY AUTOINCREMENT,
       address    TEXT    NOT NULL UNIQUE,
+      tenant_id  TEXT,
       created_at TEXT    NOT NULL DEFAULT (datetime('now'))
     );
   `);
@@ -25,6 +26,7 @@ export function runMigrations(db: Database.Database): void {
       weight      REAL    NOT NULL DEFAULT 1.0,
       revoked     INTEGER NOT NULL DEFAULT 0,
       created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+      tenant_id   TEXT,
       FOREIGN KEY (identity_id) REFERENCES identities(id) ON DELETE CASCADE
     );
   `);
@@ -38,6 +40,7 @@ export function runMigrations(db: Database.Database): void {
       evidence_ref TEXT,
       timestamp    TEXT    NOT NULL DEFAULT (datetime('now')),
       created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+      tenant_id    TEXT,
       FOREIGN KEY (identity_id) REFERENCES identities(id) ON DELETE CASCADE
     );
   `);

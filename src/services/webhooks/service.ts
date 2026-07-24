@@ -1,7 +1,8 @@
 import { randomBytes } from 'crypto'
-import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig } from './types.js'
+import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig, DlqStore, WebhookEmitOptions } from './types.js'
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
 import { type AuditLogService, AuditAction } from '../audit/index.js'
+import { buildDlqEntry } from './dlq.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -12,15 +13,16 @@ export class WebhookService {
 
   constructor(
     private readonly store: WebhookStore,
+    private readonly deliveryOptions?: DeliveryOptions,
+    private readonly dlq?: DlqStore,
     private readonly auditLog?: AuditLogService,
-    private readonly deliveryOptions?: DeliveryOptions
   ) {}
 
   /**
    * Rotate a webhook's signing secret.
    * Moves current secret to previousSecret and generates a new one.
    */
-  async rotateSecret(id: string, admin?: { id: string, email: string }): Promise<WebhookConfig> {
+  async rotateSecret(id: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookConfig> {
     const webhook = await this.store.get(id)
     if (!webhook) {
       throw new Error('Webhook not found')
@@ -35,12 +37,17 @@ export class WebhookService {
 
     if (this.auditLog && admin) {
       this.auditLog.logAction(
+        admin.tenantId,
         admin.id,
         admin.email,
         AuditAction.ROTATE_WEBHOOK_SECRET,
         id,
         webhook.url,
-        { rotatedAt: webhook.secretUpdatedAt }
+        { rotatedAt: webhook.secretUpdatedAt },
+        undefined,
+        undefined,
+        undefined,
+        requestId
       )
     }
 
@@ -50,7 +57,7 @@ export class WebhookService {
   /**
    * Revoke the previous secret for a webhook.
    */
-  async revokePreviousSecret(id: string, admin?: { id: string, email: string }): Promise<WebhookConfig> {
+  async revokePreviousSecret(id: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookConfig> {
     const webhook = await this.store.get(id)
     if (!webhook) {
       throw new Error('Webhook not found')
@@ -61,11 +68,17 @@ export class WebhookService {
 
     if (this.auditLog && admin) {
       this.auditLog.logAction(
+        admin.tenantId,
         admin.id,
         admin.email,
         AuditAction.REVOKE_WEBHOOK_SECRET,
         id,
-        webhook.url
+        webhook.url,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        requestId
       )
     }
 
@@ -77,7 +90,7 @@ export class WebhookService {
    * Deliveries are queued and rate-limited per webhook.
    * Permanently failed deliveries are routed to the DLQ if one is configured.
    */
-  async emit(event: WebhookEventType, data: WebhookPayload['data']): Promise<WebhookDeliveryResult[]> {
+  async emit(event: WebhookEventType, data: WebhookPayload['data'], options: WebhookEmitOptions = {}): Promise<(WebhookDeliveryResult | WebhookDeliveryResult[])[]> {
     const webhooks = await this.store.getByEvent(event)
     const activeWebhooks = webhooks.filter(w => w.active)
 
@@ -91,21 +104,30 @@ export class WebhookService {
       data,
     }
 
-    const results = await Promise.all(
+    const rawResults = await Promise.all(
       activeWebhooks.map(webhook => this.deliverWithRateLimit(webhook.id, () =>
-        deliverWebhook(webhook, payload, this.deliveryOptions)
+        deliverWebhook(webhook, payload, {
+          ...this.deliveryOptions,
+          returnAllChunks: true,
+          eventId: options.eventId,
+          idempotencyStore: this.store,
+        })
       ))
     )
 
     if (this.dlq) {
       await Promise.all(
-        results
-          .filter(r => !r.success)
-          .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
+        rawResults.flatMap(webhookResults => 
+          webhookResults
+            .filter(r => !r.success)
+            .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
+        )
       )
     }
 
-    return results
+    return rawResults.map(webhookResults => 
+      webhookResults.length === 1 ? webhookResults[0] : webhookResults
+    )
   }
 
   /**
@@ -133,8 +155,9 @@ export class WebhookService {
  */
 export function createWebhookService(
   store: WebhookStore,
+  deliveryOptions?: DeliveryOptions,
+  dlq?: DlqStore,
   auditLog?: AuditLogService,
-  deliveryOptions?: DeliveryOptions
 ): WebhookService {
-  return new WebhookService(store, auditLog, deliveryOptions)
+  return new WebhookService(store, deliveryOptions, dlq, auditLog)
 }

@@ -4,6 +4,24 @@ import type { WebhookConfig, WebhookStore, WebhookEventType } from '../../servic
 export class PostgresWebhookRepository implements WebhookStore {
   constructor(private readonly pool: Pool) {}
 
+  async reserveWebhookDelivery(subscriberId: string, eventId: string, idempotencyKey: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      `INSERT INTO webhook_delivery_keys (subscriber_id, event_id, idempotency_key, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (subscriber_id, event_id) DO NOTHING`,
+      [subscriberId, eventId, idempotencyKey]
+    )
+
+    return (rowCount ?? 0) > 0
+  }
+
+  async clearWebhookDeliveryAttempt(subscriberId: string, eventId: string): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM webhook_delivery_keys WHERE subscriber_id = $1 AND event_id = $2',
+      [subscriberId, eventId]
+    )
+  }
+
   async getByEvent(event: WebhookEventType): Promise<WebhookConfig[]> {
     const { rows } = await this.pool.query(
       'SELECT * FROM webhook_configs WHERE active = true AND $1 = ANY(events)',
@@ -45,15 +63,44 @@ export class PostgresWebhookRepository implements WebhookStore {
     );
   }
 
+
+  async rotateSecret(
+    id: string,
+    newSecret: string,
+    previousSecret: string,
+    previousSecretExpiresAt: string,
+  ): Promise<WebhookConfig> {
+    const { rows } = await this.pool.query(
+      `UPDATE webhook_configs
+       SET secret = $2,
+           previous_secret = $3,
+           previous_secret_expires_at = $4,
+           secret_updated_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING *`,
+      [id, newSecret, previousSecret, previousSecretExpiresAt]
+    );
+
+    if (rows.length === 0) {
+      throw new Error(`Webhook not found: ${id}`);
+    }
+
+    return this.mapToConfig(rows[0]);
+  }
+
   private mapToConfig(row: any): WebhookConfig {
     return {
       id: row.id,
       url: row.url,
       secret: row.secret,
       previousSecret: row.previous_secret || undefined,
+      previousSecretExpiresAt: row.previous_secret_expires_at || undefined,
       secretUpdatedAt: new Date(row.secret_updated_at),
       active: row.active,
       events: row.events as WebhookEventType[],
+      maxAttempts: row.max_attempts ?? undefined,
+      timeoutMs: row.timeout_ms ?? undefined,
     };
   }
 }
