@@ -66,3 +66,31 @@ Focused notification tests cover:
 - all providers down -> notification routed to DLQ
 - retry after a successful failover -> no duplicate send
 - unhealthy provider deprioritized on later deliveries
+
+## Gradual Recovery (Thundering Herd Protection)
+
+When a provider's cooldown expires, it does not immediately return to full health.
+Instead it enters a **recovering** state for `PROVIDER_RECOVERY_BUFFER_MS` (default 5 seconds).
+
+### Provider ordering tiers
+
+1. **Healthy** — no recent failures or past the recovery buffer.
+2. **Recovering** — cooldown just expired; still within the recovery buffer.
+3. **Unhealthy** — still within the cooldown period.
+
+Recovering providers are placed behind fully-healthy providers in the delivery
+order but ahead of unhealthy ones. This spreads the re-introduction of traffic
+and avoids a thundering herd against a just-recovered provider.
+
+### Configuration
+
+The recovery buffer is configured via the `NotificationProviderHealthTracker`
+constructor's `recoveryBufferMs` parameter:
+
+```ts
+// Default: 5 000 ms
+new NotificationProviderHealthTracker(cooldownMs, failureThreshold, recoveryBufferMs)
+```
+
+The default value is exported as `PROVIDER_RECOVERY_BUFFER_MS` from
+`src/config/constants.ts`.
