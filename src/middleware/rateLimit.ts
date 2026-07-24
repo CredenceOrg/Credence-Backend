@@ -50,6 +50,29 @@ function hashIdentifier(raw: string): string {
 }
 
 /**
+ * Return the real client IP for rate-limiting purposes.
+ *
+ * Threat model: when Express `trust proxy` is enabled, `req.ip` is derived
+ * from the *leftmost* entry in `X-Forwarded-For`, which is fully
+ * attacker-controlled.  An adversary can set
+ *   X-Forwarded-For: <any-ip>, <legitimate-proxy>
+ * and `req.ip` will return `<any-ip>`, letting them cycle through arbitrary
+ * IPs to bypass per-IP rate limiting.
+ *
+ * Defence: ignore `req.ip` and `X-Forwarded-For` entirely.  Use
+ * `req.socket.remoteAddress` — the IP of the TCP peer that delivered the
+ * request to this process.  In a correctly configured deployment that IP is
+ * always a trusted reverse proxy (or the client directly when no proxy is
+ * present), so it cannot be spoofed at the application layer.
+ *
+ * Performance: two property reads and a string fallback — negligible on any
+ * hot path.  No allocation beyond the constant fallback string.
+ */
+export function getClientIp(req: Request): string {
+  return req.socket?.remoteAddress ?? 'unknown'
+}
+
+/**
  * Extract tenant identifier from a request.
  * Prefers authenticated ownerId / tenantId, falls back to a hashed credential
  * derived from the API key or Bearer token header so that unauthenticated
@@ -179,7 +202,9 @@ export function createRateLimitMiddleware(
     // Per-key limit: explicit override or same as tier ceiling
     const keyMax   = options?.max ?? effectiveTierMax
 
-    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    // Use getClientIp instead of req.ip to prevent X-Forwarded-For spoofing.
+    // See getClientIp for the full threat model and rationale.
+    const ip = getClientIp(req)
     const tenantSegment = tenantId ? `tenant:${tenantId}` : `ip:${ip}`
 
     const now         = Math.floor(Date.now() / 1000)
