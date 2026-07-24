@@ -554,3 +554,11 @@ pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evi
 pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
 ```
 
+
+## Rate Limiting
+
+[#rate-limiting](#rate-limiting)
+
+API requests are limited per-tier using a token-bucket algorithm. See
+**[docs/RATE_LIMITING_DESIGN.md](./docs/RATE_LIMITING_DESIGN.md)** for
+tier sizes, burst allowance, and reset windows.
