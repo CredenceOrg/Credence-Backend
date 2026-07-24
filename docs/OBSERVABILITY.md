@@ -305,6 +305,7 @@ Active stream names today: `bond_creation`, `bond_withdrawal`.
 | `pg_pool_total_count`             | Gauge | `pool` (`api`/`worker`)                       | [`src/observability/poolMetrics.ts`](../src/observability/poolMetrics.ts)                               | `collect()` callback sampling `pool.totalCount` at scrape time                                          |
 | `pg_pool_idle_count`              | Gauge | `pool`                                        | same                                                                                                   | same, `pool.idleCount`                                                                                 |
 | `pg_pool_waiting_count`           | Gauge | `pool`                                        | same                                                                                                   | same, `pool.waitingCount`                                                                              |
+| `pg_pool_utilization_percent`     | Gauge | `pool`                                        | same                                                                                                   | same, calculated as `(total - idle) / total * 100`; used by `PoolHighUtilization` alert              |
 | `pg_advisory_lock_age_seconds`    | Gauge | `lock_id`, `pid`, `database`, `query`         | [`src/jobs/advisoryLockMonitor.ts`](../src/jobs/advisoryLockMonitor.ts)                                 | `collectStaleAdvisoryLocks(pool)` populates one sample per lock held > 300 s                          |
 
 ### 3.12 Database transactions & WebSocket
@@ -474,6 +475,7 @@ and [`docs/alert-routing.md`](./alert-routing.md). At a glance:
 | `HighBulkVerificationFailureRate`  | SEV2     | `rate(…status="error"[5m]) / rate(…[5m]) > 0.1`                                                                          | —                                                 |
 | `PgPoolSaturation`                 | SEV2     | `pg_pool_waiting_count{pool="api"} > 0` for 2 m                                                                           | `docs/monitoring.md`                              |
 | `PgWorkerPoolSaturation`           | SEV3     | `pg_pool_waiting_count{pool="worker"} > 0` for 5 m                                                                       | `docs/monitoring.md`                              |
+| `PoolHighUtilization`              | SEV2     | `pg_pool_utilization_percent{pool="api"} > 80` for 5 m                                                                    | `docs/monitoring.md`                              |
 | `AuditChainIntegrityViolation`     | SEV1     | `audit_chain_integrity_violation_total > 0`                                                                              | `docs/audit-log.md`                               |
 | `AuditChainVerifierStale`          | SEV2     | `time() - audit_chain_verifier_last_run_timestamp > 1800`                                                                | `docs/audit-log.md`                               |
 

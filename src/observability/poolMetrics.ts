@@ -53,4 +53,21 @@ export function registerPoolMetrics(
       this.set({ pool: "worker" }, workerPool.waitingCount);
     },
   });
+
+  new client.Gauge({
+    name: "pg_pool_utilization_percent",
+    help: "Percentage of pool capacity in use (active connections / total connections * 100)",
+    labelNames: ["pool"] as const,
+    registers: [registry],
+    collect() {
+      const apiUtilization = apiPool.totalCount > 0
+        ? ((apiPool.totalCount - apiPool.idleCount) / apiPool.totalCount) * 100
+        : 0;
+      const workerUtilization = workerPool.totalCount > 0
+        ? ((workerPool.totalCount - workerPool.idleCount) / workerPool.totalCount) * 100
+        : 0;
+      this.set({ pool: "api" }, apiUtilization);
+      this.set({ pool: "worker" }, workerUtilization);
+    },
+  });
 }

@@ -6,7 +6,7 @@ groups:
       # SEV1 - Trust score critical: page on-call immediately
       - alert: SuccessRateSLOViolation
         expr: |
-          sum(rate(http_requests_status_total{status_class="5xx"}[5m])) 
+          sum(rate(http_requests_status_total{status_class="5xx"}[5m]))
           / sum(rate(http_requests_status_total[5m])) > 0.001
         for: 2m
         labels:
@@ -24,7 +24,7 @@ groups:
       - alert: ErrorBudgetBurnRateHigh
         expr: |
           (
-            sum(rate(http_requests_status_total{status_class="5xx"}[1h])) 
+            sum(rate(http_requests_status_total{status_class="5xx"}[1h]))
             / sum(rate(http_requests_status_total[1h]))
           ) / 0.001 > 2
         for: 2m
@@ -43,7 +43,7 @@ groups:
         expr: |
           (
             sum(rate(http_request_duration_seconds_bucket{le="0.25", status_class="2xx"}[5m])) by (route)
-            / 
+            /
             sum(rate(http_request_duration_seconds_count{status_class="2xx"}[5m])) by (route)
           ) < 0.95
         for: 5m
@@ -60,7 +60,7 @@ groups:
       # SEV2 - High latency: investigate and ticket
       - alert: HighP99Latency
         expr: |
-          histogram_quantile(0.99, 
+          histogram_quantile(0.99,
             sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
           ) > 1
         for: 5m
@@ -77,7 +77,7 @@ groups:
       # SEV3 - Performance concern: low priority
       - alert: HighLatency
         expr: |
-          histogram_quantile(0.95, 
+          histogram_quantile(0.95,
             sum(rate(http_request_duration_seconds_bucket[5m])) by (le, route)
           ) > 1
         for: 5m
@@ -196,6 +196,23 @@ groups:
             Worker pool has {{ $value }} jobs queued waiting for a
             connection for >5 minutes.
           runbook_url: "https://docs.credence.org/runbooks/database#worker-pool-saturation"
+
+      # High pool utilization
+      # SEV2 - Resource pressure: ticket required
+      - alert: PoolHighUtilization
+        expr: |
+          pg_pool_utilization_percent{job="credence-backend", pool="api"} > 80
+        for: 5m
+        labels:
+          severity: SEV2
+          service: database
+          team: infrastructure
+        annotations:
+          summary: "PostgreSQL connection pool high utilization"
+          description: >-
+            API pool utilization is {{ $value | humanize }}%.
+            Consider increasing DB_POOL_MAX or investigating slow queries.
+          runbook_url: "https://docs.credence.org/runbooks/database#pool-utilization"
 
       # ─── Audit Log Tamper Detection ────────────────────────────────
       - alert: AuditChainIntegrityViolation
