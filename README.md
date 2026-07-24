@@ -577,6 +577,7 @@ For more details, see **[docs/graceful-degrade.md](docs/graceful-degrade.md)**.
 To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) when failed inbound events are replayed or retried, the system implements a context-aware replay-safe handler wrapper and a side-effect execution helper.
 
 For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
+- [Replay & Inspection Guide (Operator)](docs/replay_and_inspection.md)
 
 ## Security
 
