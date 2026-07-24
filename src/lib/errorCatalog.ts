@@ -163,6 +163,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The authenticated caller is not allowed to perform this action',
     category: 'authorization',
   },
+  CRAWLER_BLOCKED: {
+    code: 'crawler_blocked',
+    sdkClassName: 'CrawlerBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 403,
+    defaultMessage: 'Automated crawling of admin surfaces is forbidden.',
+    category: 'authorization',
+  },
   NOT_FOUND: {
     code: 'not_found',
     sdkClassName: 'NotFoundCredenceError',

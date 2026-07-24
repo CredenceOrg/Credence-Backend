@@ -91,6 +91,17 @@ export class AppError extends Error {
   }
 }
 
+export class CrawlerBlockedError extends Error {
+  public readonly statusCode = 403;
+  public readonly code = 'ADMIN_CRAWLER_BLOCKED';
+
+  constructor(message = 'Automated crawling of admin surfaces is forbidden.') {
+    super(message);
+    this.name = 'CrawlerBlockedError';
+    Object.setPrototypeOf(this, CrawlerBlockedError.prototype);
+  }
+}
+
 /**
  * Specific error for validation failures (e.g. Zod).
  */

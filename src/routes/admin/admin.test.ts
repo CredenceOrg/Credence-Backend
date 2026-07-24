@@ -170,3 +170,28 @@ describe('Admin Router - Strict Validation', () => {
     })
   })
 })
+
+describe('Admin Anti-Crawling Defenses', () => {
+  it('should reject requests from known crawler User-Agents with a typed error', async () => {
+    const response = await request(setup())
+      .get('/admin') // Adjust if the path is wrong
+      .set('User-Agent', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
+
+    expect(response.status).toBe(403);
+    
+    // Adjust Zod/Error catalog shape is wrong.
+    expect(response.body).toMatchObject({
+      error: expect.objectContaining({
+        code: 'ADMIN_CRAWLER_BLOCKED'
+      })
+    });
+  });
+
+  it('should attach X-Robots-Tag headers to legitimate admin requests', async () => {
+    const response = await request(setup())
+      .get('/admin')
+      .set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+
+    expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
+  });
+});

@@ -31,6 +31,7 @@ import { BondsRepository } from "../../db/repositories/bondsRepository.js";
 import { pool } from "../../db/pool.js";
 import { validate } from '../../middleware/validate.js'
 import { z } from 'zod'
+import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.ts";
 
 /**
  * Create the admin router with role and user management endpoints
@@ -49,6 +50,8 @@ export function createAdminRouter(): Router {
 
   // Register handlers
   registerAllReplayHandlers(replayService, identityRepo, bondsRepo);
+
+  router.use(preventAdminCrawling);
 
   /**
    * GET /api/admin/users
