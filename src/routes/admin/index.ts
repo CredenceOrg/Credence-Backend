@@ -8,6 +8,7 @@ import {
 import erasureProofRouter from './erasureProof.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
+import { createRateLimitOverridesAdminRouter } from './rateLimitOverrides.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
@@ -557,6 +558,9 @@ export function createAdminRouter(): Router {
 
   // Mount settlement reconciliation report (read-only)
   router.use('/settlement', settlementReconciliationRouter)
+
+  // Mount rate-limit overrides administration
+  router.use('/rate-limits/overrides', createRateLimitOverridesAdminRouter())
 
   return router
 }

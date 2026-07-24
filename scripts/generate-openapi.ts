@@ -742,12 +742,78 @@ registry.registerPath({
       description: 'Missing or invalid bearer token',
       content: { 'application/json': { schema: schemas.flagErrorResponseSchema } },
     },
-    404: {
-      description: 'Per-tenant rollout not found',
-      content: { 'application/json': { schema: schemas.flagErrorResponseSchema } },
+  },
+});
+
+// Rate Limit Overrides API
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/rate-limits/overrides',
+  summary: 'List tenant rate-limit overrides',
+  description: 'Lists all active tenant rate-limit overrides.',
+  tags: ['Admin', 'Rate Limits'],
+  security: bearerAuth,
+  responses: {
+    200: {
+      description: 'List of rate-limit overrides',
+      content: { 'application/json': { schema: schemas.listRateLimitOverridesResponseSchema } },
     },
   },
 });
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/rate-limits/overrides',
+  summary: 'Set tenant rate-limit override',
+  description: 'Sets or updates a per-tenant rate-limit override. Mandates an audit trail entry.',
+  tags: ['Admin', 'Rate Limits'],
+  security: bearerAuth,
+  request: {
+    body: {
+      content: { 'application/json': { schema: schemas.setRateLimitOverrideBodySchema } },
+    },
+  },
+  responses: {
+    201: {
+      description: 'Rate-limit override created or updated',
+      content: { 'application/json': { schema: schemas.setRateLimitOverrideResponseSchema } },
+    },
+    400: {
+      description: 'Validation failure (missing reason, invalid limit, or bad inputs)',
+      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'delete',
+  path: '/api/admin/rate-limits/overrides/{tenantId}',
+  summary: 'Remove tenant rate-limit override',
+  description: 'Removes a per-tenant rate-limit override. Mandates an audit trail entry.',
+  tags: ['Admin', 'Rate Limits'],
+  security: bearerAuth,
+  request: {
+    params: z.object({ tenantId: z.string() }),
+    body: {
+      content: { 'application/json': { schema: schemas.removeRateLimitOverrideBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Rate-limit override removed successfully',
+      content: { 'application/json': { schema: z.object({ success: z.boolean() }) } },
+    },
+    400: {
+      description: 'Missing reason',
+      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    },
+    404: {
+      description: 'Override not found',
+      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    },
+  },
+});
+
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({

@@ -62,6 +62,16 @@ export {
   type TransactionsHistoryQuery,
 } from "./transactions.js";
 export {
+  setRateLimitOverrideBodySchema,
+  removeRateLimitOverrideBodySchema,
+  rateLimitOverrideSchema,
+  setRateLimitOverrideResponseSchema,
+  listRateLimitOverridesResponseSchema,
+  type SetRateLimitOverrideBody,
+  type RemoveRateLimitOverrideBody,
+  type RateLimitOverrideDto,
+} from "./rateLimitOverride.js";
+export {
   policyOrgPathParamsSchema,
   policyRulePathParamsSchema,
   createPolicyBodySchema,

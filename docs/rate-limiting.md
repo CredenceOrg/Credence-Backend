@@ -155,6 +155,21 @@ This indicates that the backend cannot communicate with its Redis cache, and the
 
 ### Q4: Can we increase the rate limit temporarily for a single tenant?
 **Answer**:
-No, tier limits are global and configured environment-wide via the `RATE_LIMIT_MAX_*` variables. To grant a higher limit, you must:
-1. Promote the customer's API key to a higher subscription tier (e.g. from Pro to Enterprise).
-2. Or, if they are already on Enterprise, the operator can increase the global Enterprise limit (`RATE_LIMIT_MAX_ENTERPRISE`) in the environment config, or create a custom route rate limit configuration if required.
+Yes. Admins can configure per-tenant rate limit overrides via the Admin API:
+- `POST /api/admin/rate-limits/overrides`: Sets or updates a tenant's custom rate limit (`rateLimit`, `windowSize`, `reason`).
+- `DELETE /api/admin/rate-limits/overrides/:tenantId`: Removes a tenant's custom rate limit override (`reason`).
+
+---
+
+## Per-Tenant Rate Limit Overrides & Audit Trail
+
+To support custom SLAs or high-volume campaigns without changing global tier defaults, admins can set per-tenant rate limit overrides.
+
+### Mandatory Audit Logging
+Every override operation (`SET_RATE_LIMIT_OVERRIDE` or `REMOVE_RATE_LIMIT_OVERRIDE`) records an immutable entry in the audit trail (`audit_logs` table) containing:
+- **actor**: Admin user ID (`actorId`) and email (`actorEmail`).
+- **tenant**: Target tenant ID (`tenantId`).
+- **old/new value**: `oldRateLimit`, `newRateLimit`, `oldWindowSize`, `newWindowSize`.
+- **reason**: Mandatory justification string explaining why the override was applied or removed.
+- **timestamp**: ISO8601 creation timestamp (`occurred_at`).
+
