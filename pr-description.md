@@ -1,25 +1,21 @@
-# feat(shutdown): drain in-flight requests, close DB pools, and exit cleanly on SIGTERM
+# feat(replay): add replay-safe wrapper around effectful handlers
 
 ## Description
 
-This PR fixes a bug where `SIGTERM` and `SIGINT` signals bypassed the configured `GracefulShutdownManager` in production (due to duplicate signal handlers in `src/index.ts` that immediately called `process.exit(0)` when the HTTP server closed, bypassing the closing of DB pools, Redis connections, and background schedulers).
+This PR implements a context-aware replay-safety mechanism in the Credence Backend. This ensures that effectful event handlers (e.g. sending webhooks, notification emails, external API integration) do not run duplicate side-effects when failed inbound events are replayed or retried.
 
-With this fix, signals are correctly routed to the `GracefulShutdownManager`, which performs a clean, ordered graceful shutdown sequence before exiting.
+Only side-effects explicitly marked as `replaySafe` will be executed during replay/retry runs, while others are safely skipped.
 
-Closes #<this-issue>
+Closes #
 
 ## Changes
 
-- **`src/index.ts`**: Removed duplicate local `shutdown` handler and its signal registrations to ensure `GracefulShutdownManager` manages the shutdown process.
-- **`src/__tests__/gracefulShutdown.test.ts`**: Added a new sequence verification test to ensure that the server closing/draining, database pools closing, and process exiting occur in the correct order.
-- **`README.md`**: Documented the graceful shutdown behavior.
-- **`docs/graceful-shutdown.md`**: Updated signal handling architecture notes.
-
-## Commits
-
-1. `fix(shutdown): remove redundant signal handlers in index.ts`
-2. `test(shutdown): add test to verify shutdown sequence order`
-3. `docs(shutdown): document production graceful shutdown and signal handling`
+- **`src/lib/replaySafe.ts`**: Core utility implementing the `replayContext` (`AsyncLocalStorage`), the `replaySafeHandler` wrapper (supporting both function and object-based handlers), and the `runSideEffect` helper.
+- **`src/lib/replaySafe.test.ts`**: Unit tests verifying the retry context isolation, the behavior of `runSideEffect` under normal vs retry conditions, and default fallback settings.
+- **`src/config/constants.ts`**: Added central `DEFAULT_REPLAY_SAFE` constant.
+- **`src/services/replayHandlers.ts`**: Integrated the `replaySafeHandler` wrapper in `registerAllReplayHandlers` to automatically enforce the retry context for all registered replay handlers.
+- **`docs/REPLAY_SAFE_HANDLERS.md`**: Created a detailed architecture and API usage guide.
+- **`README.md`**: Updated documentation references.
 
 ## Checklist
 
@@ -27,4 +23,4 @@ Closes #<this-issue>
 - [x] No regression in the existing test suite.
 - [x] The change is documented where it is observable (README, docs/).
 - [x] Lint, type-check, and tests all pass locally.
-- [x] PR description references this issue with `Closes #<this-issue>`.
+- [x] PR description references this issue with `Closes #`.
