@@ -17,6 +17,7 @@ import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
 import { pool } from "./db/pool.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
+import { cacheControlMiddleware } from "./middleware/cacheControl.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { createRateLimitMiddleware } from "./middleware/rateLimit.js";
 import { createCostMeterMiddleware } from "./middleware/costMeter.js";
@@ -64,6 +65,7 @@ try {
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
 app.use(requestIdMiddleware);
+app.use(cacheControlMiddleware);
 
 const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
   ?.split(',')
