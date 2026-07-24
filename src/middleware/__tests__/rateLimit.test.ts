@@ -27,6 +27,7 @@ import {
   resolveTierLimit,
   rateLimitRejectedTotal,
   rateLimitHitsTotal,
+  getClientIp,
 } from '../rateLimit.js'
 import type { Config } from '../../config/index.js'
 import type { SubscriptionTier } from '../../services/apiKeys.js'
@@ -523,5 +524,61 @@ describe('prometheus counter behaviour', () => {
       .reduce((sum, v) => sum + v.value, 0)
 
     expect(after).toBeGreaterThan(before)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 5. getClientIp — XFF spoofing prevention (security fix #723)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Negative tests for getClientIp.
+ *
+ * These tests document and pin the exact security invariant: the IP used for
+ * rate limiting must come from the TCP socket, not from the HTTP
+ * X-Forwarded-For header, which is fully attacker-controlled.
+ *
+ * A test that calls getClientIp and gets back the spoofed req.ip value would
+ * indicate a regression to the vulnerable behaviour.
+ */
+describe('getClientIp — XFF spoofing prevention', () => {
+  it('returns socket.remoteAddress, not req.ip (spoofed XFF)', () => {
+    const req: any = {
+      ip: '1.2.3.4',                        // spoofed via X-Forwarded-For under trust proxy
+      socket: { remoteAddress: '10.0.0.1' }, // real peer IP
+      headers: { 'x-forwarded-for': '1.2.3.4, 10.0.0.1' },
+    }
+    expect(getClientIp(req)).toBe('10.0.0.1')
+    // Explicitly assert that the spoofed value is NOT returned.
+    expect(getClientIp(req)).not.toBe('1.2.3.4')
+  })
+
+  it('returns socket.remoteAddress even when X-Forwarded-For contains many hops', () => {
+    const req: any = {
+      ip: '192.168.1.1',   // Express resolved from XFF chain under trust proxy
+      socket: { remoteAddress: '172.16.0.1' },
+      headers: { 'x-forwarded-for': '192.168.1.1, 10.10.0.1, 172.16.0.1' },
+    }
+    expect(getClientIp(req)).toBe('172.16.0.1')
+  })
+
+  it('returns "unknown" when socket.remoteAddress is absent (no socket object)', () => {
+    const req: any = { ip: '5.5.5.5', socket: undefined, headers: {} }
+    expect(getClientIp(req)).toBe('unknown')
+  })
+
+  it('returns "unknown" when socket exists but remoteAddress is undefined', () => {
+    const req: any = { ip: '6.6.6.6', socket: {}, headers: {} }
+    expect(getClientIp(req)).toBe('unknown')
+  })
+
+  it('returns socket.remoteAddress when req.ip is undefined (no proxy)', () => {
+    // Direct connection, no trust proxy — socket.remoteAddress is the client.
+    const req: any = {
+      ip: undefined,
+      socket: { remoteAddress: '203.0.113.42' },
+      headers: {},
+    }
+    expect(getClientIp(req)).toBe('203.0.113.42')
   })
 })
