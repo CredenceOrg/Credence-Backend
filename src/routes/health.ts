@@ -85,6 +85,18 @@ export function createHealthRouter(options: HealthRouterOptions = {}): Router {
   })
 
   /**
+   * Dependencies: down-stream up/down states.
+   */
+  router.get('/dependencies', async (_req: Request, res: Response) => {
+    const result = await runChecks()
+    if (options.isReady && !options.isReady()) {
+      result.status = 'unhealthy'
+    }
+    const code = result.status === 'unhealthy' ? 503 : 200
+    res.status(code).json(result.dependencies)
+  })
+
+  /**
    * Liveness: process is running. No dependency checks; always 200.
    */
   router.get('/live', (_req: Request, res: Response) => {

@@ -171,6 +171,27 @@ describe('Health routes', () => {
     })
   })
 
+  describe('GET /api/health/dependencies', () => {
+    it('returns dependencies object and 200 when up', async () => {
+      const app = appWithHealth(allUp)
+      const res = await request(app).get('/api/health/dependencies')
+      expect(res.status).toBe(200)
+      expect(res.body.postgres.status).toBe('up')
+      expect(res.body.redis.status).toBe('up')
+      expect(res.body).not.toHaveProperty('status', 'ok') // Not the full envelope
+    })
+
+    it('returns dependencies object and 503 when down', async () => {
+      const app = appWithHealth({
+        ...allUp,
+        postgres: async () => ({ status: 'down' }),
+      })
+      const res = await request(app).get('/api/health/dependencies')
+      expect(res.status).toBe(503)
+      expect(res.body.postgres.status).toBe('down')
+    })
+  })
+
   describe('GET /api/health/live (liveness)', () => {
     it('returns 200 always even when all deps are down', async () => {
       const app = appWithHealth({
