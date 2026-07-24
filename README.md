@@ -240,7 +240,10 @@ We rely on structured logging to maintain a consistent schema and protect PII. S
 
 ## Monitoring
 
-Comprehensive monitoring with Prometheus and Grafana is available. See **[docs/monitoring.md](docs/monitoring.md)** for:
+Comprehensive monitoring with Prometheus and Grafana is available.
+
+- **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)** — operator's index of every Prometheus metric, the Grafana dashboard panel for each, the PromQL behind every alert, and runnable triage queries. **Start here if you are operating the service.**
+- **[docs/monitoring.md](docs/monitoring.md)** — full setup, instrumentation, and deployment guide for Prometheus + Grafana.
 
 - Metrics instrumentation guide
 - Grafana dashboard setup

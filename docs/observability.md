@@ -354,3 +354,9 @@ It also exports the following Prometheus metrics to track throughput, lag, and f
 ## Timeouts & Retry Policies
 
 Timeout events are captured in observability metrics and logs. For a comprehensive guide to configuring timeout budgets, retry policies, and operational tuning runbooks, see [`docs/timeouts-and-retries.md`](./timeouts-and-retries.md).
+
+> **See also:** For the operator-facing index of every Prometheus metric, the
+> Grafana dashboard panels, the PromQL behind every alert, and runnable
+> triage queries, see [`docs/OBSERVABILITY.md`](./OBSERVABILITY.md).
+> This document focuses on tracing, log schemas, and PII redaction; it does
+> not duplicate the metric catalogue.

@@ -2,6 +2,14 @@
 
 This document describes the monitoring setup for Credence Backend, including Prometheus metrics instrumentation and Grafana dashboard configuration.
 
+> **Need a quick index of what's available to operate on?** See
+> **[`docs/OBSERVABILITY.md`](./OBSERVABILITY.md)** — it lists every
+> Prometheus metric the backend emits, the Grafana panel it appears in,
+> the PromQL behind each alert rule, and runnable triage queries. This
+> document covers *how* to install and configure the stack;
+> `OBSERVABILITY.md` is the operator's reference index for the deployed
+> stack.
+
 ## Overview
 
 The monitoring stack consists of:
