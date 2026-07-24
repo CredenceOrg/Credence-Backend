@@ -143,9 +143,20 @@ const redacted = redact(event, {
 logger.info(redacted);
 ```
 
+### Request-Scoped Logger (`req.log`)
+
+Inside Express handlers, use `req.log` to write logs with pre-bound request-scoped context:
+```typescript
+app.get("/items", (req, res) => {
+  // Emits a log entry including the current request's ID, Correlation ID, Route, Tenant, and Actor.
+  req.log.info("Fetching items");
+  res.json({ ok: true });
+});
+```
+
 ### ESLint Rules for Validation
 
-The project includes **two ESLint rules** that enforce schema-aware logging:
+The project includes **two ESLint rules** that enforce schema-aware logging (supporting both `logger` and `req.log` calls):
 
 | Rule | Severity | Description |
 | ---- | -------- | ----------- |

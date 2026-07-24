@@ -8,6 +8,24 @@ This document outlines the logging standards for contributors to the Credence ba
 2.  **Log context, not prose.** Let the message be a simple, searchable event name or action, and put variable data in the JSON payload.
 3.  **Protect PII.** Never log sensitive user data in plain text.
 
+## Request-scoped Logging (`req.log`)
+
+Inside Express route handlers and middleware, a pre-configured logger is attached to the request object as `req.log`.
+
+Using `req.log.info()`, `req.log.warn()`, or `req.log.error()` automatically carries the request-scoped context (such as Request ID, Correlation ID, route, tenant, and actor ID) in the log metadata. This is the preferred method for logging inside handlers.
+
+Example:
+```typescript
+app.get('/bonds/:id', (req, res) => {
+  req.log.info({
+    message: 'bond_accessed',
+    bondId: req.params.id
+  }, { eventType: LogEventType.BOND_READ });
+  
+  res.json({ ok: true });
+});
+```
+
 ## Reserved Keys
 
 To maintain a consistent schema across all services, the following keys are reserved at the root of the log payload. If you need to log this information, use exactly these keys:

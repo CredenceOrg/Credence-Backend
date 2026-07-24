@@ -581,6 +581,12 @@ To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) wh
 For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
 - [Replay & Inspection Guide (Operator)](docs/replay_and_inspection.md)
 
+## Observability & Logging
+
+For observability, request tracing, metrics, and structured logging guidelines:
+- **Structured Logging Policy**: See [docs/LOGGING.md](docs/LOGGING.md) for logs, formats, and conventions.
+- **Request Tracing & Metrics**: See [docs/observability.md](docs/observability.md) for request tracing, PII redaction rules, and the `req.log` request-scoped logger.
+
 ## Security
 
 For security policies, reporting, and architecture documentation:

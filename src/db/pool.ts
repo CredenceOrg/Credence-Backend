@@ -3,6 +3,8 @@ import dotenv from "dotenv";
 import { AppError, ErrorCode } from "../lib/errors.js";
 import { logger } from "../utils/logger.js";
 import { getTenantId } from "../utils/tenantContext.js";
+import { redact } from "../observability/redaction.js";
+import { LogEventType } from "../observability/logSchemas.js";
 
 dotenv.config();
 

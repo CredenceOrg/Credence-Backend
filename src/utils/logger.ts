@@ -24,8 +24,9 @@ function formatMessage(
   level: LogLevel,
   message: string | object,
   redactionContext?: RedactionContext,
+  customContext?: Map<string, string>,
 ) {
-  const context = tracingContext.getStore();
+  const context = customContext || tracingContext.getStore();
 
   const metadata = {
     level,
@@ -49,24 +50,56 @@ function formatMessage(
 }
 
 export const logger = {
-  info: (message: string | object) => {
-    console.log(formatMessage("INFO", message));
+  info: (message: string | object, redactionContext?: RedactionContext) => {
+    console.log(formatMessage("INFO", message, redactionContext));
   },
-  error: (message: string | object, error?: any) => {
+  error: (message: string | object, error?: any, redactionContext?: RedactionContext) => {
     const msg = error
       ? { message, error: error.message || error, stack: error.stack }
       : message;
-    console.error(formatMessage("ERROR", msg));
+    console.error(formatMessage("ERROR", msg, redactionContext));
   },
-  warn: (message: string | object) => {
-    console.warn(formatMessage("WARN", message));
+  warn: (message: string | object, redactionContext?: RedactionContext) => {
+    console.warn(formatMessage("WARN", message, redactionContext));
   },
-  debug: (message: string | object) => {
+  debug: (message: string | object, redactionContext?: RedactionContext) => {
     if (
       process.env.DEBUG === "true" ||
       process.env.NODE_ENV === "development"
     ) {
-      console.debug(formatMessage("DEBUG", message));
+      console.debug(formatMessage("DEBUG", message, redactionContext));
     }
   },
 };
+
+export interface RequestLogger {
+  info(message: string | object, redactionContext?: RedactionContext): void;
+  warn(message: string | object, redactionContext?: RedactionContext): void;
+  error(message: string | object, error?: any, redactionContext?: RedactionContext): void;
+  debug(message: string | object, redactionContext?: RedactionContext): void;
+}
+
+export function createRequestLogger(customContext: Map<string, string>): RequestLogger {
+  return {
+    info: (message: string | object, redactionContext?: RedactionContext) => {
+      console.log(formatMessage("INFO", message, redactionContext, customContext));
+    },
+    error: (message: string | object, error?: any, redactionContext?: RedactionContext) => {
+      const msg = error
+        ? { message, error: error.message || error, stack: error.stack }
+        : message;
+      console.error(formatMessage("ERROR", msg, redactionContext, customContext));
+    },
+    warn: (message: string | object, redactionContext?: RedactionContext) => {
+      console.warn(formatMessage("WARN", message, redactionContext, customContext));
+    },
+    debug: (message: string | object, redactionContext?: RedactionContext) => {
+      if (
+        process.env.DEBUG === "true" ||
+        process.env.NODE_ENV === "development"
+      ) {
+        console.debug(formatMessage("DEBUG", message, redactionContext, customContext));
+      }
+    },
+  };
+}
