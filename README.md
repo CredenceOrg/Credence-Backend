@@ -534,6 +534,12 @@ On `SIGTERM` or `SIGINT`, the Credence Backend API executes an ordered graceful 
 
 The grace period is configurable via `SHUTDOWN_GRACE_PERIOD_MS` (default: 30,000 ms). For more details, see **[docs/graceful-shutdown.md](docs/graceful-shutdown.md)**.
 
+## Replay-Safe Handlers & Side-Effects
+
+To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) when failed inbound events are replayed or retried, the system implements a context-aware replay-safe handler wrapper and a side-effect execution helper.
+
+For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
+
 ## Security
 
 For security policies, reporting, and architecture documentation:
