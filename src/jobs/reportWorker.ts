@@ -58,9 +58,10 @@ export class ReportWorker {
       yield Buffer.from(`Total Requests: ${report.totalRequests}\n\n`, 'utf-8')
       yield Buffer.from(`Rank | Tenant ID | Request Count | Share (%)\n`, 'utf-8')
       yield Buffer.from(`-----|-----------|---------------|----------\n`, 'utf-8')
-      report.topTalkers.forEach((entry, idx) => {
+      for (let idx = 0; idx < report.topTalkers.length; idx++) {
+        const entry = report.topTalkers[idx]
         yield Buffer.from(`${idx + 1} | ${entry.tenantId} | ${entry.requestCount} | ${entry.percentage}%\n`, 'utf-8')
-      })
+      }
       yield Buffer.from('\n--- End of Report ---\n', 'utf-8')
       return
     }
