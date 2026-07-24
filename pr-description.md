@@ -1,26 +1,41 @@
-# feat(replay): add replay-safe wrapper around effectful handlers
+# docs(security): add secret-rotation posture document
 
 ## Description
 
-This PR implements a context-aware replay-safety mechanism in the Credence Backend. This ensures that effectful event handlers (e.g. sending webhooks, notification emails, external API integration) do not run duplicate side-effects when failed inbound events are replayed or retried.
+This PR adds `docs/SECRETS.md`, a contributor-facing document that captures the secret-rotation posture for the Credence Backend.
 
-Only side-effects explicitly marked as `replaySafe` will be executed during replay/retry runs, while others are safely skipped.
+The intent is to move rotation policy off of tribal knowledge and into the repository, so that reviewers can verify actual behaviour against the documented intent, new contributors can orient themselves without reading commit history, and the support team can answer common questions without paging an engineer.
 
 Closes #
 
 ## Changes
 
-- **`src/lib/replaySafe.ts`**: Core utility implementing the `replayContext` (`AsyncLocalStorage`), the `replaySafeHandler` wrapper (supporting both function and object-based handlers), and the `runSideEffect` helper.
-- **`src/lib/replaySafe.test.ts`**: Unit tests verifying the retry context isolation, the behavior of `runSideEffect` under normal vs retry conditions, and default fallback settings.
-- **`src/config/constants.ts`**: Added central `DEFAULT_REPLAY_SAFE` constant.
-- **`src/services/replayHandlers.ts`**: Integrated the `replaySafeHandler` wrapper in `registerAllReplayHandlers` to automatically enforce the retry context for all registered replay handlers.
-- **`docs/REPLAY_SAFE_HANDLERS.md`**: Created a detailed architecture and API usage guide.
-- **`README.md`**: Updated documentation references.
+- **`docs/SECRETS.md`** *(new)*: Describes all four secret types managed by the platform — Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets — with concrete storage location, rotation cadence, blast radius and mitigation notes, and runnable CLI / HTTP examples for each.
+- **`README.md`**: Links `docs/SECRETS.md` from the **Security** section so it is discoverable from the repo's top-level entry point.
+- **`docs/security.md`**: Adds a **See Also** section at the end, cross-linking `docs/SECRETS.md` and `docs/kms-rotation-runbook.md`.
+
+## Secret types documented
+
+| Secret | Mechanism | Cadence | Blast radius |
+|---|---|---|---|
+| Evidence KEK | `KekManager` + CLI (`rotate-kms-key.ts`), dual-control | Manual / on-demand | Evidence records encrypted under the compromised version |
+| JWT signing key | `KeyManager` in-memory scheduler | Automated every 24 h | Token forgery within the key's active window |
+| Integration API key | `ApiKeyRotationService` via REST | Manual / on-demand | Endpoints within the key's granted scope |
+| Webhook signing secret | `WebhookRotationService` via REST, 24 h grace period | Manual / on-demand | Forged webhook payloads to the subscriber's endpoint |
+
+## Verification
+
+```bash
+npx tsc --noEmit   # no TypeScript errors introduced
+npm test           # full vitest suite passes
+npm run security:scan   # npm audit --omit=dev
+npm run sbom:check      # CycloneDX SBOM schema validation
+```
 
 ## Checklist
 
 - [x] The change matches the summary above.
-- [x] No regression in the existing test suite.
-- [x] The change is documented where it is observable (README, docs/).
+- [x] The new document is linked from `README.md` and `docs/security.md`.
+- [x] No new env vars, Zod schemas, or OpenAPI entries are required (documentation-only change).
 - [x] Lint, type-check, and tests all pass locally.
 - [x] PR description references this issue with `Closes #`.

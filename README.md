@@ -577,6 +577,7 @@ For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
 - **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
+- **Secret-Rotation Posture**: See [docs/SECRETS.md](docs/SECRETS.md) for where secrets live, rotation cadence, and blast radius of each credential type.
 
 ## Testing
 

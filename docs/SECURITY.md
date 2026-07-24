@@ -300,44 +300,7 @@ When deploying to production, operators must configure allowed origins:
 
 ---
 
-## Open Redirect Protection
+## See Also
 
-### Threat mitigated
-
-An **open redirect** lets an attacker construct a link that points at a trusted admin host (`https://api.credence.io/api/admin/...?returnTo=...`) but, once followed, sends the victim's browser on to an attacker-controlled site. Because the link's hostname is genuinely `credence.io`, it survives casual inspection, defeats copy-pasted-URL trust heuristics, and is commonly chained into phishing (harvesting credentials on a look-alike page after a "legitimate" redirect) or OAuth/token-leak flows (an authorization code or bearer token appended to the redirect target is handed straight to the attacker's host). Admin routes are the highest-value target for this because a successful lure there is far more likely to yield privileged session material.
-
-No admin route currently issues a redirect, so there is no known exploit today — this is a proactive, defence-in-depth control adopted as part of the security baseline (see the tracking issue) rather than a reaction to an incident, so the gap is closed before any handler that redirects is added.
-
-### Implementation
-
-- **`src/lib/safeRedirect.ts`** — pure validation. `isSafeRedirectTarget(target, allowedHosts)` / `resolveSafeRedirectTarget(target, allowedHosts)` accept only:
-  - same-origin relative paths (a single leading `/`, not `//` or a backslash variant of it), or
-  - absolute `http`/`https` URLs whose `host` (parsed via the WHATWG `URL` class, so userinfo tricks like `https://trusted@evil.com` resolve to the real host) is on the configured allowlist.
-
-  Everything else — protocol-relative URLs, `javascript:`/`data:` schemes, backslash-as-slash tricks, literal or percent-encoded control characters (the WHATWG tab/newline-stripping bypass), and unlisted absolute hosts — is rejected. Rejection throws `UnsafeRedirectError`, a catalog-backed `AppError` (`code: unsafe_redirect_target`, HTTP `400`) that flows through the standard `errorHandler` rather than panicking or falling through to a generic `500`.
-- **`src/middleware/safeRedirect.ts`** — `createSafeRedirectMiddleware({ allowedHosts })` wraps `res.redirect` for the duration of a request so *every* call to it is validated before Express writes the `Location` header, regardless of which handler makes the call. It is mounted once, ahead of all three admin routers in `src/app.ts` (`app.use('/api/admin', createSafeRedirectMiddleware(...))`), so the guarantee — every 302 in an admin route goes through this check — holds for routes added in the future without each one remembering to call the validator itself.
-- **`src/schemas/redirect.ts`** — `redirectTargetSchema`, a Zod schema for validating a redirect target supplied as request input (e.g. a `returnTo` query/body field) at the request boundary, complementing the response-side middleware guard.
-
-### Configuration
-
-| Variable | Default | Description |
-|----------|---------|--------------|
-| `ADMIN_REDIRECT_ALLOWED_HOSTS` | unset (no absolute hosts allowed) | Comma-separated list of hosts (`hostname[:port]`) that admin routes may redirect to as an absolute URL. Same-origin relative paths are always allowed and do not need to be listed. |
-
-```
-ADMIN_REDIRECT_ALLOWED_HOSTS=admin.credence.io,partner.credence.io
-```
-
-When unset, only relative (`/...`) redirect targets are accepted — the secure default.
-
-### Performance
-
-The guard only runs when a handler actually calls `res.redirect()`; wrapping the method costs one extra function reference per request and adds no overhead to every other response. A 200k-iteration microbenchmark of `isSafeRedirectTarget` (Node 20, this repo's dev container) measured:
-
-| Input | Cost |
-|---|---|
-| Relative path (`/dashboard`) — the expected common case | ~0.13–1.0 µs/call |
-| Allow-listed absolute URL (requires one `URL` parse) | ~2.4 µs/call |
-| Rejected protocol-relative target (`//evil.com`, short-circuits before any parse) | ~0.13 µs/call |
-
-All well below request-handling latency; this is not a hot-path concern.
+- **[docs/SECRETS.md](SECRETS.md)** — Secret-rotation posture: where credentials live, rotation cadence, and blast radius for the Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets.
+- **[docs/kms-rotation-runbook.md](kms-rotation-runbook.md)** — Step-by-step operational runbook for Evidence KEK rotation.
