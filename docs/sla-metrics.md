@@ -237,3 +237,5 @@ Coverage includes:
 - [Prometheus Summary Metric](https://prometheus.io/docs/practices/histograms/)
 - [Cardinality Best Practices](https://prometheus.io/docs/practices/naming/#labels)
 - [Express Route Matching](https://expressjs.com/en/guide/routing.html)
+- [Performance Baselines Documentation](./PERF_BASELINE.md)
+
