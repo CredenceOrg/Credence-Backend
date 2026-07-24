@@ -1,41 +1,21 @@
-# docs(security): add secret-rotation posture document
+# Pull Request Description
 
-## Description
+## Overview
+This PR introduces the **Replay & Inspection Guide** (`docs/replay_and_inspection.md`) for operators running the Credence Backend. This guide outlines the exact scenarios under which failed inbound events should be replayed and details how to inspect prior failures using logs, the administrative API, and database tools.
 
-This PR adds `docs/SECRETS.md`, a contributor-facing document that captures the secret-rotation posture for the Credence Backend.
+## Key Additions & Changes
+1. **New Guide** (`docs/replay_and_inspection.md`):
+   - **When to Replay:** Clearly explains scenarios such as transient database connectivity issues, network timeouts, or manual overrides.
+   - **How to Inspect:** Step-by-step instructions on querying the failure ledger (`GET /api/admin/failure-ledger`), searching logs for specific `eventId` occurrences, and executing target database queries on `failed_events`.
+   - **How to Replay:** Concrete documentation of the `POST /api/admin/replay/:eventId` API endpoint (including the use of the `Idempotency-Key` header) and CLI examples.
+   - **Verification:** Post-replay validation steps to verify the event state transitions and confirm that no duplicate side effects were dispatched.
+   - **Common Pitfalls:** Tips on preventing duplicate side effects and handling stale state conflicts during replays.
+   
+2. **Discoverability & Link Upgrades**:
+   - Cross-linked the new guide directly under the "Replay-Safe Handlers & Side-Effects" section in the root [README.md](README.md).
+   - Created [docs/README.md](docs/README.md) as a top-level documentation index and referenced the new operator guide to prevent orphan documents.
 
-The intent is to move rotation policy off of tribal knowledge and into the repository, so that reviewers can verify actual behaviour against the documented intent, new contributors can orient themselves without reading commit history, and the support team can answer common questions without paging an engineer.
+## Out of Scope
+- No modifications were made to the codebase itself (such as changes to `ReplayService` or `replaySafeHandler`), maintaining the integrity of adjacent modules.
 
 Closes #
-
-## Changes
-
-- **`docs/SECRETS.md`** *(new)*: Describes all four secret types managed by the platform — Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets — with concrete storage location, rotation cadence, blast radius and mitigation notes, and runnable CLI / HTTP examples for each.
-- **`README.md`**: Links `docs/SECRETS.md` from the **Security** section so it is discoverable from the repo's top-level entry point.
-- **`docs/security.md`**: Adds a **See Also** section at the end, cross-linking `docs/SECRETS.md` and `docs/kms-rotation-runbook.md`.
-
-## Secret types documented
-
-| Secret | Mechanism | Cadence | Blast radius |
-|---|---|---|---|
-| Evidence KEK | `KekManager` + CLI (`rotate-kms-key.ts`), dual-control | Manual / on-demand | Evidence records encrypted under the compromised version |
-| JWT signing key | `KeyManager` in-memory scheduler | Automated every 24 h | Token forgery within the key's active window |
-| Integration API key | `ApiKeyRotationService` via REST | Manual / on-demand | Endpoints within the key's granted scope |
-| Webhook signing secret | `WebhookRotationService` via REST, 24 h grace period | Manual / on-demand | Forged webhook payloads to the subscriber's endpoint |
-
-## Verification
-
-```bash
-npx tsc --noEmit   # no TypeScript errors introduced
-npm test           # full vitest suite passes
-npm run security:scan   # npm audit --omit=dev
-npm run sbom:check      # CycloneDX SBOM schema validation
-```
-
-## Checklist
-
-- [x] The change matches the summary above.
-- [x] The new document is linked from `README.md` and `docs/security.md`.
-- [x] No new env vars, Zod schemas, or OpenAPI entries are required (documentation-only change).
-- [x] Lint, type-check, and tests all pass locally.
-- [x] PR description references this issue with `Closes #`.
