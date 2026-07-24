@@ -10,6 +10,7 @@ import {
 } from '../../lib/retryPolicy.js'
 import { noopRetryObserver, type RetryObserver } from '../../observability/retryMetrics.js'
 import { webhookPayloadBytes } from '../../observability/customMetrics.js'
+import { checkHostBlocked } from '../../lib/ssrfProtection.js'
 import { logger } from '../../utils/logger.js'
 import type { WebhookConfig, WebhookPayload, WebhookDeliveryResult } from './types.js'
 import { generateWebhookIdempotencyKey } from './idempotency.js'
@@ -280,6 +281,19 @@ async function deliverSingleWebhook(
 
   // Create HTTPS agent with mTLS configuration if available
   const agent = createHttpsAgent(webhook, customHttpsAgent)
+
+  // --- SSRF protection: block private/internal network targets (before retry loop) ---
+  const hostCheck = checkHostBlocked(webhook.url)
+  if (hostCheck.blocked) {
+    logger.warn({ message: 'Webhook delivery blocked by SSRF guard', webhookId: webhook.id, reason: hostCheck.reason, host: hostCheck.host })
+    return {
+      webhookId: webhook.id,
+      success: false,
+      error: `Webhook target '${hostCheck.host}' is restricted: ${hostCheck.reason}`,
+      attempts: 0,
+      errorCode: 'SSRF_BLOCKED',
+    }
+  }
 
   let attempts = 0
   let lastError: string | undefined

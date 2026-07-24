@@ -40,6 +40,7 @@ const DEFAULT_MESSAGES = {
   'conflict': "The request conflicts with the current resource state",
   'idempotency_key_mismatch': "Idempotency key is already bound to a different actor or payload",
   'insufficient_credits': "Monthly credit budget exhausted",
+  'ssrf_blocked': "The target URL resolves to a restricted or internal network address",
   'insufficient_funds': "The account has insufficient funds for this operation",
   'invalid_dispute_transition': "Invalid dispute state transition",
   'rate_limit_exceeded': "Rate limit exceeded",
@@ -392,6 +393,20 @@ export class InsufficientCreditsCredenceError extends CredenceError {
   }
 }
 
+export class SsrfBlockedCredenceError extends CredenceError {
+  static readonly errorCode = 'ssrf_blocked' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['ssrf_blocked'],
+    status: number = 422,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'ssrf_blocked', status, details, options)
+    this.name = 'SsrfBlockedCredenceError'
+  }
+}
+
 export class InsufficientFundsCredenceError extends CredenceError {
   static readonly errorCode = 'insufficient_funds' as const
 
@@ -554,6 +569,7 @@ export const CREDENCE_ERROR_REGISTRY = {
   'conflict': ConflictCredenceError,
   'idempotency_key_mismatch': IdempotencyKeyMismatchCredenceError,
   'insufficient_credits': InsufficientCreditsCredenceError,
+  'ssrf_blocked': SsrfBlockedCredenceError,
   'insufficient_funds': InsufficientFundsCredenceError,
   'invalid_dispute_transition': InvalidDisputeTransitionCredenceError,
   'rate_limit_exceeded': RateLimitExceededCredenceError,

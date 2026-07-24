@@ -195,6 +195,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'Monthly credit budget exhausted',
     category: 'business',
   },
+  SSRF_BLOCKED: {
+    code: 'ssrf_blocked',
+    sdkClassName: 'SsrfBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 422,
+    defaultMessage: 'The target URL resolves to a restricted or internal network address',
+    category: 'validation',
+  },
   INSUFFICIENT_FUNDS: {
     code: 'insufficient_funds',
     sdkClassName: 'InsufficientFundsCredenceError',
