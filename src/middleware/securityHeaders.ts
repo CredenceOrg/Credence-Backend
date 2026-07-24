@@ -7,7 +7,7 @@ import { Request, Response, NextFunction } from 'express'
  * 
  * Features:
  * - Content Security Policy with no unsafe-inline
- * - HSTS (HTTP Strict Transport Security) with preload in production
+ * - HSTS (HTTP Strict Transport Security) with preload enabled
  * - Referrer Policy
  * - Cross-Origin Resource Policy
  * - Per-route override capability via res.locals
@@ -31,7 +31,7 @@ const getSecurityHeadersMiddleware = () => helmet({
   hsts: {
     maxAge: 31536000, // 1 year
     includeSubDomains: true,
-    preload: process.env.NODE_ENV === 'production',
+    preload: true,
   },
   referrerPolicy: {
     policy: 'strict-origin-when-cross-origin',
@@ -126,7 +126,7 @@ export const securityHeadersWithOverride = (
     helmetConfig.hsts = {
       maxAge: 31536000,
       includeSubDomains: true,
-      preload: process.env.NODE_ENV === 'production',
+      preload: true,
     }
   }
 

@@ -38,13 +38,13 @@ describe('Security Headers Middleware', () => {
       expect(response.headers['strict-transport-security']).toContain('includeSubDomains')
     })
 
-    it('disables HSTS preload in non-production environment', async () => {
+it('includes preload directive in the HSTS header in non-production environment', async () => {
       process.env.NODE_ENV = 'development'
-      
+
       const response = await request(app).get('/test')
-      
+
       expect(response.headers['strict-transport-security']).toBeDefined()
-      expect(response.headers['strict-transport-security']).not.toContain('preload')
+      expect(response.headers['strict-transport-security']).toContain('preload')
     })
 
     it('enables HSTS preload in production environment', async () => {
