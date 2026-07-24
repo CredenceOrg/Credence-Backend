@@ -809,6 +809,43 @@ registry.registerPath({
   },
 });
 
+// Admin Replay Event API
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/replay-event',
+  summary: 'Replay a failed inbound event',
+  description:
+    'Replays a specific failed inbound event by id (passed in body) to its registered handler pipeline. Audit-logged via ReplayService.replayEvent.',
+  tags: ['Admin'],
+  security: bearerAuth,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.replayEventBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Event replayed successfully',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.boolean().openapi({ example: true }),
+            message: z.string().openapi({ example: 'Event successfully replayed' }),
+          }),
+        },
+      },
+    },
+    400: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    404: {
+      description: 'Event not found',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({

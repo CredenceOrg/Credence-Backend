@@ -192,6 +192,7 @@ export {
   migrationsDryRunQuerySchema,
   migrationsDryRunBodySchema,
   migrationsDryRunResponseSchema,
+  replayEventBodySchema,
   type AssignRoleBody,
   type RevokeApiKeyBody,
   type IssueImpersonationTokenBody,
@@ -200,6 +201,7 @@ export {
   type MigrationsDryRunQuery,
   type MigrationsDryRunBody,
   type MigrationsDryRunResponse,
+  type ReplayEventBody,
 } from './admin.js'
 export {
   redirectTargetSchema,
