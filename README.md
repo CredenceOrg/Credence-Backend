@@ -279,7 +279,14 @@ The Grafana dashboard includes:
 - Infrastructure health (DB, Redis status and check duration)
 - Business metrics (reputation calculations, identity verifications, bulk operations)
 
-## Performance Baselines
+## Deployment: Cutover, Health Gates & Rollback
+
+The service deploys to Kubernetes as a zero-downtime rolling update (`k8s/deployment.yaml`). See:
+
+- **[docs/k8s.md](docs/k8s.md)** — manifests, ConfigMap/Secret keys, and the first-time `kubectl apply -k k8s/` quick start.
+- **[docs/deployment-cutover.md](docs/deployment-cutover.md)** — the cutover sequence, exactly what the readiness/liveness/startup probes check (and their timing), and how to detect a bad rollout and trigger `kubectl rollout undo`.
+
+## Backup Strategy (WAL + PITR)
 
 Historical performance benchmarks, latency distributions, and throughput figures across major releases are documented in **[docs/PERF_BASELINE.md](docs/PERF_BASELINE.md)**. Use this document to eyeball performance regressions during pre-release testing.
 

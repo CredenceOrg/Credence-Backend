@@ -150,6 +150,8 @@ kubectl set image deployment/credence-backend \
   -n credence
 ```
 
+For the full cutover sequence — health-gate thresholds, how to tell a stalled rollout from a healthy one, and how/when to trigger a rollback — see [docs/deployment-cutover.md](deployment-cutover.md).
+
 ## Teardown
 
 ```bash

@@ -534,6 +534,7 @@ redis-cli -u "$REDIS_URL" FLUSHALL
 
 ## Related Documentation
 
+- [Deployment Cutover, Health Gates & Rollback](deployment-cutover.md) — cutover sequence, readiness/liveness thresholds, and when/how to trigger `kubectl rollout undo`
 - [Alert Routing](docs/alert-routing.md) — Severity levels and on-call escalation
 - [Monitoring](docs/monitoring.md) — Metrics and health checks
 - [Graceful Shutdown](docs/graceful-shutdown.md) — How the service shuts down cleanly
