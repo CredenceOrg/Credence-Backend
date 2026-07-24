@@ -31,6 +31,22 @@ spec:
         memory: "2Gi"
 ```
 
+## Per-tenant Database Connection Budget
+
+Set `DB_TENANT_CONNECTION_BUDGET` to cap how many concurrent PostgreSQL clients a single tenant can hold at once. This is a defence-in-depth control that prevents one noisy tenant from draining the shared pool and affecting other tenants.
+
+### Recommended Configuration
+
+- Default: `5`
+- Increase only when you have strong evidence the workload needs more per-tenant concurrency.
+- Keep the value lower than the global `DB_POOL_MAX` to preserve headroom for other tenants.
+
+### Example
+
+```bash
+docker run -e DB_TENANT_CONNECTION_BUDGET=5 -e DB_POOL_MAX=20 credence-backend
+```
+
 ## Metrics for OOM Detection
 
 The application exposes `oom_events_total` counter metric that increments when an out-of-memory event is detected. Configure alerts for this metric in your monitoring system.

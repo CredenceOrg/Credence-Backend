@@ -60,6 +60,11 @@ export const envSchema = z.object({
     .default('5000')
     .transform(Number)
     .pipe(z.number().int().min(1000).max(30000)),
+  DB_TENANT_CONNECTION_BUDGET: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(200)),
   DB_STATEMENT_TIMEOUT_MS: z
     .string()
     .default('30000')

@@ -1,8 +1,8 @@
 import { Pool, type PoolClient, type QueryResult } from "pg";
 import dotenv from "dotenv";
+import { AppError, ErrorCode } from "../lib/errors.js";
 import { logger } from "../utils/logger.js";
-import { LogEventType } from "../observability/logSchemas.js";
-import { redact } from "../observability/redaction.js";
+import { getTenantId } from "../utils/tenantContext.js";
 
 dotenv.config();
 
@@ -34,6 +34,62 @@ const SLOW_QUERY_THRESHOLD_MS = envInt("SLOW_QUERY_THRESHOLD_MS", 1_000);
 
 const DB_REPLICA_URL = process.env.DB_REPLICA_URL || DB_URL;
 const MAX_REPLICA_LAG_MS = envInt("MAX_REPLICA_LAG_MS", 1000);
+const TENANT_CONNECTION_BUDGET = Math.max(1, Math.min(envInt("DB_TENANT_CONNECTION_BUDGET", Math.max(1, Math.floor(POOL_MAX / 4))), POOL_MAX));
+const tenantConnectionCounts = new Map<string, number>();
+
+export class TenantConnectionBudgetError extends AppError {
+  constructor(
+    public readonly tenantId: string,
+    public readonly limit: number,
+  ) {
+    super(
+      `Tenant ${tenantId} exceeded its DB connection budget of ${limit}`,
+      ErrorCode.RATE_LIMIT_EXCEEDED,
+      undefined,
+      { tenantId, limit, resource: 'db_connection_budget' },
+    );
+    this.name = "TenantConnectionBudgetError";
+  }
+}
+
+function wrapTenantBudgetedClient(client: PoolClient, tenantId: string): PoolClient {
+  const release = client.release.bind(client);
+  const key = tenantId;
+
+  client.release = ((err?: Error | boolean) => {
+    const active = tenantConnectionCounts.get(key) ?? 0;
+    if (active <= 1) {
+      tenantConnectionCounts.delete(key);
+    } else {
+      tenantConnectionCounts.set(key, active - 1);
+    }
+    return release(err);
+  }) as typeof client.release;
+
+  return client;
+}
+
+function withTenantConnectionBudget(pool: Pool): Pool {
+  const originalConnect = pool.connect.bind(pool);
+
+  pool.connect = (async () => {
+    const tenantId = getTenantId();
+    if (!tenantId) {
+      return await originalConnect();
+    }
+
+    const activeConnections = tenantConnectionCounts.get(tenantId) ?? 0;
+    if (activeConnections >= TENANT_CONNECTION_BUDGET) {
+      throw new TenantConnectionBudgetError(tenantId, TENANT_CONNECTION_BUDGET);
+    }
+
+    const client = await originalConnect();
+    tenantConnectionCounts.set(tenantId, activeConnections + 1);
+    return wrapTenantBudgetedClient(client, tenantId);
+  }) as typeof pool.connect;
+
+  return pool;
+}
 
 /**
  * Primary API pool — serves route handlers and services.
@@ -41,13 +97,13 @@ const MAX_REPLICA_LAG_MS = envInt("MAX_REPLICA_LAG_MS", 1000);
  * Configured with a default statement_timeout so that runaway queries
  * are killed automatically and cannot hold connections indefinitely.
  */
-export const pool = new Pool({
+export const pool = withTenantConnectionBudget(new Pool({
   connectionString: DB_URL,
   max: POOL_MAX,
   idleTimeoutMillis: IDLE_TIMEOUT,
   connectionTimeoutMillis: CONN_TIMEOUT,
   options: `-c statement_timeout=${STMT_TIMEOUT}`,
-});
+}));
 
 pool.on("error", (err) => {
   logger.error("[pool] unexpected client error", err);
@@ -61,13 +117,13 @@ pool.on("error", (err) => {
  * is 4× longer than the API pool since report/export jobs are inherently
  * slower.
  */
-export const workerPool = new Pool({
+export const workerPool = withTenantConnectionBudget(new Pool({
   connectionString: DB_URL,
   max: WORKER_MAX,
   idleTimeoutMillis: IDLE_TIMEOUT,
   connectionTimeoutMillis: CONN_TIMEOUT,
   options: `-c statement_timeout=${STMT_TIMEOUT * 4}`,
-});
+}));
 
 workerPool.on("error", (err) => {
   logger.error("[workerPool] unexpected client error", err);
@@ -76,13 +132,13 @@ workerPool.on("error", (err) => {
 /**
  * Secondary API pool — serves read-heavy endpoints.
  */
-export const replicaPool = new Pool({
+export const replicaPool = withTenantConnectionBudget(new Pool({
   connectionString: DB_REPLICA_URL,
   max: POOL_MAX,
   idleTimeoutMillis: IDLE_TIMEOUT,
   connectionTimeoutMillis: CONN_TIMEOUT,
   options: `-c statement_timeout=${STMT_TIMEOUT}`,
-});
+}));
 
 replicaPool.on("error", (err) => {
   logger.error("[replicaPool] unexpected client error", err);

@@ -10,6 +10,7 @@ describe('DB Pool configuration', () => {
 
   afterEach(() => {
     process.env = envSnapshot
+    vi.restoreAllMocks()
     vi.resetModules()
   })
 
@@ -74,6 +75,31 @@ describe('DB Pool configuration', () => {
     const { pool, replicaPool } = await import('./pool.js')
     expect(replicaPool).toBeInstanceOf(Pool)
     expect(replicaPool).not.toBe(pool)
+  })
+
+  it('rejects a tenant that exceeds its connection budget', async () => {
+    process.env.DB_TENANT_CONNECTION_BUDGET = '1'
+
+    const connectSpy = vi.spyOn(Pool.prototype, 'connect').mockResolvedValueOnce({
+      release: vi.fn(),
+    } as any)
+
+    const { pool, TenantConnectionBudgetError } = await import('./pool.js')
+    const { runWithTenant } = await import('../utils/tenantContext.js')
+
+    const firstClient = await runWithTenant('tenant-budget', () => pool.connect())
+
+    await expect(
+      runWithTenant('tenant-budget', () => pool.connect())
+    ).rejects.toMatchObject({
+      name: TenantConnectionBudgetError.name,
+      tenantId: 'tenant-budget',
+      limit: 1,
+      code: 'rate_limit_exceeded',
+    })
+
+    expect(connectSpy).toHaveBeenCalledTimes(1)
+    firstClient.release()
   })
 
   it('withReplica uses replicaPool when lag is within bounds', async () => {
