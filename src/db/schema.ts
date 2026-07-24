@@ -140,6 +140,27 @@ const CREATE_TABLE_STATEMENTS = [
   )
   `,
   `
+  CREATE TABLE IF NOT EXISTS pg_stat_activity_snapshots (
+    snapshot_at TIMESTAMPTZ NOT NULL,
+    pid INTEGER NOT NULL,
+    usename TEXT,
+    datname TEXT,
+    state TEXT,
+    query TEXT,
+    backend_type TEXT,
+    application_name TEXT,
+    client_addr TEXT,
+    wait_event_type TEXT,
+    wait_event TEXT,
+    backend_start TIMESTAMPTZ,
+    xact_start TIMESTAMPTZ,
+    query_start TIMESTAMPTZ,
+    state_change TIMESTAMPTZ,
+    PRIMARY KEY (snapshot_at, pid)
+  )
+  `,
+  `CREATE INDEX IF NOT EXISTS pg_stat_activity_snapshots_snapshot_at_idx ON pg_stat_activity_snapshots (snapshot_at DESC)`,
+  `
   CREATE TABLE IF NOT EXISTS settlements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     bond_id BIGINT NOT NULL REFERENCES bonds(id) ON DELETE CASCADE,
@@ -218,6 +239,7 @@ const DROP_TABLE_STATEMENTS = [
   "DROP TABLE IF EXISTS event_outbox",
   "DROP TABLE IF EXISTS settlements",
   "DROP TABLE IF EXISTS report_jobs",
+  "DROP TABLE IF EXISTS pg_stat_activity_snapshots",
   "DROP TABLE IF EXISTS score_history",
   "DROP TABLE IF EXISTS audit_logs",
   "DROP TABLE IF EXISTS slash_events",
@@ -235,7 +257,7 @@ export async function createSchema(db: Queryable): Promise<void> {
 
 export async function resetDatabase(db: Queryable): Promise<void> {
   await db.query(
-    "TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities, org_members RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE settlements, report_jobs, pg_stat_activity_snapshots, audit_logs, score_history, slash_events, attestations, bonds, identities, org_members RESTART IDENTITY CASCADE",
   );
 }
 

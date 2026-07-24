@@ -1,30 +1,34 @@
-import 'dotenv/config'
-import http from 'http'
-import { initTracing } from './tracing/tracer.js'
-import app from './app.js'
-import { createAdminRouter } from './routes/admin/index.js'
-import governanceRouter from './routes/governance.js'
-import disputesRouter from './routes/disputes.js'
-import evidenceRouter from './routes/evidence.js'
-import { loadConfig } from './config/index.js'
-import { pool, workerPool, replicaPool } from './db/pool.js'
-import { redisConnection } from './cache/redis.js'
-import { createShutdownMetrics } from './observability/shutdownMetrics.js'
-import { AnalyticsService } from './services/analytics/service.js'
-import { AnalyticsRefreshWorker, getAnalyticsRefreshIntervalMs } from './jobs/analyticsRefreshWorker.js'
-import { AnalyticsRefreshScheduler } from './jobs/analyticsRefreshScheduler.js'
-import { createAnalyticsRefreshMetrics } from './jobs/analyticsRefreshMetrics.js'
-import { SettlementReconciler } from './jobs/settlementReconciler.js'
-import { createScheduler } from './jobs/scheduler.js'
-import { keyManager } from './services/keyManager/index.js'
-import { GracefulShutdownManager } from './gracefulShutdown.js'
-import { FailedInboundEventsSweeper } from './jobs/failedInboundEventsSweeper.js'
-import { loadFailedInboundSweeperConfig } from './config/retention.js'
-import { getInvalidationBus } from './cache/index.js'
-import { createWsSubscriptionServer } from './routes/ws.js'
-import { impersonationService } from './services/impersonation/index.js'
-import { recordOomEvent } from './middleware/metrics.js'
-import { logger } from './utils/logger.js'
+import "dotenv/config";
+import http from "http";
+import { initTracing } from "./tracing/tracer.js";
+import app from "./app.js";
+import { createAdminRouter } from "./routes/admin/index.js";
+import governanceRouter from "./routes/governance.js";
+import disputesRouter from "./routes/disputes.js";
+import evidenceRouter from "./routes/evidence.js";
+import { loadConfig } from "./config/index.js";
+import { pool, workerPool, replicaPool } from "./db/pool.js";
+import { redisConnection } from "./cache/redis.js";
+import { createShutdownMetrics } from "./observability/shutdownMetrics.js";
+import { AnalyticsService } from "./services/analytics/service.js";
+import {
+  AnalyticsRefreshWorker,
+  getAnalyticsRefreshIntervalMs,
+} from "./jobs/analyticsRefreshWorker.js";
+import { AnalyticsRefreshScheduler } from "./jobs/analyticsRefreshScheduler.js";
+import { createAnalyticsRefreshMetrics } from "./jobs/analyticsRefreshMetrics.js";
+import { SettlementReconciler } from "./jobs/settlementReconciler.js";
+import { createScheduler } from "./jobs/scheduler.js";
+import { keyManager } from "./services/keyManager/index.js";
+import { GracefulShutdownManager } from "./gracefulShutdown.js";
+import { FailedInboundEventsSweeper } from "./jobs/failedInboundEventsSweeper.js";
+import { PgStatActivitySnapshotJob } from "./jobs/pgStatActivitySnapshotJob.js";
+import { loadFailedInboundSweeperConfig } from "./config/retention.js";
+import { getInvalidationBus } from "./cache/index.js";
+import { createWsSubscriptionServer } from "./routes/ws.js";
+import { impersonationService } from "./services/impersonation/index.js";
+import { recordOomEvent } from "./middleware/metrics.js";
+import { logger } from "./utils/logger.js";
 
 // Outbox imports
 import { OutboxJob } from "./jobs/outbox.js";
@@ -42,6 +46,7 @@ let server: http.Server | null = null;
 let scheduler: AnalyticsRefreshScheduler | null = null;
 let outboxJob: OutboxJob | null = null;
 let failedInboundSweeper: FailedInboundEventsSweeper | null = null;
+let pgStatActivitySnapshotJob: PgStatActivitySnapshotJob | null = null;
 let shutdownManager: GracefulShutdownManager | null = null;
 let wss: ReturnType<typeof createWsSubscriptionServer> | null = null;
 let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
@@ -64,18 +69,28 @@ if (process.env.NODE_ENV !== "test") {
   initTracing();
 
   // Listen for uncaught exceptions and unhandled rejections
-  process.on('uncaughtException', (err) => {
-    logger.error('Uncaught Exception:', err);
-    if (err.message.includes('heap out of memory') || err.name === 'JavaScript heap out of memory') {
+  process.on("uncaughtException", (err) => {
+    logger.error("Uncaught Exception:", err);
+    if (
+      err.message.includes("heap out of memory") ||
+      err.name === "JavaScript heap out of memory"
+    ) {
       recordOomEvent();
     }
     // Let the process exit after logging
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason, promise) => {
-    logger.error(`Unhandled Rejection at: ${promise} reason: ${reason}`, reason instanceof Error ? reason : undefined);
-    if (reason instanceof Error && (reason.message.includes('heap out of memory') || reason.name === 'JavaScript heap out of memory')) {
+  process.on("unhandledRejection", (reason, promise) => {
+    logger.error(
+      `Unhandled Rejection at: ${promise} reason: ${reason}`,
+      reason instanceof Error ? reason : undefined,
+    );
+    if (
+      reason instanceof Error &&
+      (reason.message.includes("heap out of memory") ||
+        reason.name === "JavaScript heap out of memory")
+    ) {
       recordOomEvent();
     }
   });
@@ -118,7 +133,6 @@ if (process.env.NODE_ENV !== "test") {
 
     installShutdownHandlers();
 
-
     if (process.env.DATABASE_URL) {
       const thresholdSeconds = Number(
         process.env.ANALYTICS_STALENESS_SECONDS ?? "300",
@@ -139,45 +153,60 @@ if (process.env.NODE_ENV !== "test") {
         metrics,
       });
 
-      const reconcilerJob = new SettlementReconciler(pool)
+      const reconcilerJob = new SettlementReconciler(pool);
       const reconcilerScheduler = createScheduler(reconcilerJob, {
-        cronExpression: '0 * * * *', // hourly
+        cronExpression: "0 * * * *", // hourly
         runOnStart: false,
         logger: logger.info,
-        lockKey: 'cron:settlement-reconciliation'
-      })
+        lockKey: "cron:settlement-reconciliation",
+      });
 
-      const impersonationCleanupScheduler = createScheduler({
-        run: async () => {
-          const removed = await impersonationService.cleanupExpiredTokens()
-          return { removed }
-        }
-      }, {
-        cronExpression: '0 * * * *', // hourly
-        runOnStart: false,
+      const impersonationCleanupScheduler = createScheduler(
+        {
+          run: async () => {
+            const removed = await impersonationService.cleanupExpiredTokens();
+            return { removed };
+          },
+        },
+        {
+          cronExpression: "0 * * * *", // hourly
+          runOnStart: false,
+          logger: logger.info,
+          lockKey: "cron:impersonation-cleanup",
+        },
+      );
+
+      refreshScheduler.start();
+      reconcilerScheduler.start();
+      impersonationCleanupScheduler.start();
+
+      const failedInboundSweeperConfig = loadFailedInboundSweeperConfig();
+      failedInboundSweeper = new FailedInboundEventsSweeper(
+        pool,
+        failedInboundSweeperConfig,
+      );
+      failedInboundSweeper.start();
+
+      pgStatActivitySnapshotJob = new PgStatActivitySnapshotJob(pool, {
         logger: logger.info,
-        lockKey: 'cron:impersonation-cleanup'
-      })
-
-      refreshScheduler.start()
-      reconcilerScheduler.start()
-      impersonationCleanupScheduler.start()
-
-      const failedInboundSweeperConfig = loadFailedInboundSweeperConfig()
-      failedInboundSweeper = new FailedInboundEventsSweeper(pool, failedInboundSweeperConfig)
-      failedInboundSweeper.start()
+      });
+      pgStatActivitySnapshotJob.start();
 
       scheduler = {
         stop() {
-          refreshScheduler.stop()
-          reconcilerScheduler.stop()
-          impersonationCleanupScheduler.stop()
-          failedInboundSweeper?.stop()
+          refreshScheduler.stop();
+          reconcilerScheduler.stop();
+          impersonationCleanupScheduler.stop();
+          failedInboundSweeper?.stop();
+          pgStatActivitySnapshotJob?.stop();
         },
         isJobRunning() {
-          return refreshScheduler.isJobRunning() || reconcilerScheduler.isJobRunning()
+          return (
+            refreshScheduler.isJobRunning() ||
+            reconcilerScheduler.isJobRunning()
+          );
         },
-      } as any
+      } as any;
     }
 
     // Start Outbox Publisher job if enabled
@@ -216,7 +245,10 @@ if (process.env.NODE_ENV !== "test") {
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown error";
-        logger.error(`Failed to start Request Snapshots Sweeper: ${message}`, error);
+        logger.error(
+          `Failed to start Request Snapshots Sweeper: ${message}`,
+          error,
+        );
       }
     }
 
@@ -239,8 +271,7 @@ if (process.env.NODE_ENV !== "test") {
       await invalidationBus.start();
       logger.info("[Main] Cache invalidation bus started");
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown error";
+      const message = error instanceof Error ? error.message : "Unknown error";
       logger.error(`Failed to start cache invalidation bus: ${message}`, error);
     }
 
@@ -257,9 +288,9 @@ if (process.env.NODE_ENV !== "test") {
           logger.info("[Main] Stopping Request Snapshots Sweeper");
           requestSnapshotsSweeper.stop();
         }
-        if (idempotencyKeySweeper) {
-          logger.info("[Main] Stopping Idempotency Key Sweeper");
-          idempotencyKeySweeper.stop();
+        if (pgStatActivitySnapshotJob) {
+          logger.info("[Main] Stopping pg_stat_activity Snapshot Job");
+          pgStatActivitySnapshotJob.stop();
         }
         return originalShutdown(signal ?? "SIGTERM");
       };
