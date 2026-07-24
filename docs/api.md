@@ -32,6 +32,24 @@ X-API-Key: <your-key>
 
 ---
 
+## Graceful Degradation (X-Read-Only Header)
+
+Operators can trigger a graceful degradation mode (read-only mode) on a per-request basis by supplying the `X-Read-Only` header with the value `true` or `1`.
+
+When graceful degradation is active, any write requests (mutations using HTTP methods `POST`, `PUT`, `PATCH`, or `DELETE`) will be cleanly rejected with a `503 Service Unavailable` status and a structured error response:
+
+```json
+{
+  "error": "Writes are temporarily disabled due to maintenance",
+  "code": "service_unavailable",
+  "error_code": "service_unavailable"
+}
+```
+
+Safe read-only methods (`GET`, `HEAD`, `OPTIONS`) continue to function normally.
+
+---
+
 ## Address format
 
 All `:address` path parameters must be Ethereum addresses:

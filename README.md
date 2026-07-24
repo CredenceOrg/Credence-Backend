@@ -557,11 +557,13 @@ On `SIGTERM` or `SIGINT`, the Credence Backend API executes an ordered graceful 
 
 The grace period is configurable via `SHUTDOWN_GRACE_PERIOD_MS` (default: 30,000 ms). For more details, see **[docs/graceful-shutdown.md](docs/graceful-shutdown.md)**.
 
-## Replay-Safe Handlers & Side-Effects
+## Graceful Degradation
 
-To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) when failed inbound events are replayed or retried, the system implements a context-aware replay-safe handler wrapper and a side-effect execution helper.
+During maintenance or database upgrades, operators can gracefully degrade the service to a read-only state. This is done on a per-request basis by passing the `X-Read-Only` header set to `true` or `1`.
 
-For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
+When active, any state-mutating requests (`POST`, `PUT`, `PATCH`, `DELETE`) are cleanly rejected with a `503 Service Unavailable` response, while read-only requests (`GET`, `HEAD`, `OPTIONS`) are permitted to proceed.
+
+For more details, see **[docs/graceful-degrade.md](docs/graceful-degrade.md)**.
 
 ## Security
 

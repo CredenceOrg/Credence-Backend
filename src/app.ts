@@ -39,6 +39,7 @@ import { createCostMeterMiddleware } from "./middleware/costMeter.js";
 import { validateConfig } from "./config/index.js";
 import { createAttestationRouter } from "./routes/attestations.js";
 import { tenantContextMiddleware } from './middleware/tenantContext.js'
+import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
 import {
   compressionMiddleware,
   compressionMetricsMiddleware,
@@ -220,6 +221,7 @@ app.use(compressionMiddleware);
 app.use(jsonBodyParser);
 app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
+app.use(gracefulDegradeMiddleware);
 
 app.use("/.well-known/jwks.json", createJwksRouter());
 
