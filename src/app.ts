@@ -2,6 +2,7 @@ import express from 'express'
 import { createJwksRouter } from './routes/jwks.js'
 import { createHealthRouter } from './routes/health.js'
 import { createDefaultProbes } from './services/health/probes.js'
+import { RedisConnection } from './cache/redis.js'
 import trustRouter from './routes/trust.js'
 import bulkRouter from './routes/bulk.js'
 import importsRouter from './routes/imports.js'
@@ -46,7 +47,21 @@ app.use('/.well-known/jwks.json', createJwksRouter())
 
 // Health – full readiness check with per-dependency status
 const healthProbes = createDefaultProbes()
-app.use('/api/health', createHealthRouter(healthProbes))
+
+// If Redis is configured, wire up a client for the worker-health endpoint
+let redisClient: import('./cache/redis.js').RedisClient | undefined
+if (process.env.REDIS_URL) {
+  try {
+    const conn = RedisConnection.getInstance()
+    // Best-effort connect — the endpoint degrades gracefully if Redis is down
+    conn.connect().catch(() => {})
+    redisClient = conn.getClient()
+  } catch {
+    // Redis may not be reachable at startup; worker-health will degrade gracefully
+  }
+}
+
+app.use('/api/health', createHealthRouter({ ...healthProbes, redisClient }))
 
 // Trust score
 app.use('/api/trust', trustRouter)

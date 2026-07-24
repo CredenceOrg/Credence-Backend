@@ -68,6 +68,51 @@ components:
           type: string
           example: credence-backend
 
+    WorkerHealthEntry:
+      type: object
+      required: [name, lockKey, held, acquiredAt, pid, ttlMs]
+      properties:
+        name:
+          type: string
+          description: Friendly worker name (e.g. score-snapshot).
+          example: score-snapshot
+        lockKey:
+          type: string
+          description: Redis lock key.
+          example: cron:score-snapshot
+        held:
+          type: boolean
+          description: Whether a worker currently holds the lease.
+          example: true
+        acquiredAt:
+          oneOf:
+            - type: string
+              format: date-time
+            - type: "null"
+          description: ISO 8601 timestamp when the lock was acquired, or null.
+          example: "2024-05-06T07:33:20.000Z"
+        pid:
+          oneOf:
+            - type: integer
+            - type: "null"
+          description: Process ID that acquired the lock, or null.
+          example: 12345
+        ttlMs:
+          type: integer
+          description: |
+            Remaining lease TTL in milliseconds. -1 if no expiry,
+            -2 if the key does not exist.
+          example: 25000
+
+    WorkerHealthResponse:
+      type: object
+      required: [workers]
+      properties:
+        workers:
+          type: array
+          items:
+            $ref: "#/components/schemas/WorkerHealthEntry"
+
     TrustScore:
       type: object
       required: [address, score, bondedAmount, bondStart, attestationCount]
@@ -172,6 +217,50 @@ paths:
               example:
                 status: ok
                 service: credence-backend
+
+  /api/health/workers:
+    get:
+      operationId: getWorkerHealth
+      summary: Worker health
+      description: |
+        Returns the lease + last-heartbeat state of every known
+        distributed-lock key. This is an on-call debugging aid for
+        inspecting whether background workers hold their locks, when
+        they last heartbeated, and their remaining lease time.
+
+        Requires a configured Redis client (set REDIS_URL). Returns 404
+        when Redis is not configured.
+      tags: [Health]
+      responses:
+        "200":
+          description: Worker lock states.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WorkerHealthResponse"
+              example:
+                workers:
+                  - name: score-snapshot
+                    lockKey: cron:score-snapshot
+                    held: true
+                    acquiredAt: "2024-05-06T07:33:20.000Z"
+                    pid: 12345
+                    ttlMs: 25000
+        "503":
+          description: Redis is unreachable.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  workers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WorkerHealthEntry"
+                    example: []
+                  error:
+                    type: string
+                    example: Unable to query worker health
 
   /api/trust/{address}:
     get:

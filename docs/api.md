@@ -63,6 +63,64 @@ GET /api/health
 
 ---
 
+### `GET /api/health/workers`
+
+> **Requires Redis client.** Returns 404 when Redis is not configured.
+
+Returns the lease + last-heartbeat state of every known distributed-lock key.
+This is an on-call debugging aid for inspecting whether background workers
+hold their locks, when they last heartbeated, and their remaining lease time.
+
+```
+GET /api/health/workers
+```
+
+**Response `200`**
+
+```json
+{
+  "workers": [
+    {
+      "name": "score-snapshot",
+      "lockKey": "cron:score-snapshot",
+      "held": true,
+      "acquiredAt": "2024-05-06T07:33:20.000Z",
+      "pid": 12345,
+      "ttlMs": 25000
+    }
+  ]
+}
+```
+
+**Response `503`** – Redis is unreachable:
+
+```json
+{
+  "workers": [],
+  "error": "Unable to query worker health"
+}
+```
+
+**Response fields**
+
+| Field        | Type                | Description                                              |
+| ------------ | ------------------- | -------------------------------------------------------- |
+| `workers`    | array               | Array of worker lock state entries                       |
+| `workers[].name` | string           | Friendly worker name (e.g. `"score-snapshot"`)           |
+| `workers[].lockKey` | string        | Redis lock key (e.g. `"cron:score-snapshot"`)            |
+| `workers[].held` | boolean          | Whether a worker currently holds the lease               |
+| `workers[].acquiredAt` | string \| null | ISO 8601 timestamp when the lock was acquired            |
+| `workers[].pid` | number \| null    | Process ID that acquired the lock                        |
+| `workers[].ttlMs` | number          | Remaining lease TTL in milliseconds (`-2` = key gone)    |
+
+**cURL example**
+
+```bash
+curl http://localhost:3000/api/health/workers
+```
+
+---
+
 ### `GET /api/trust/:address`
 
 Returns the computed trust score and identity data for an Ethereum address.
