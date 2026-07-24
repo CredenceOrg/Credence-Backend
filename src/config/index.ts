@@ -52,7 +52,7 @@ export const envSchema = z.object({
     .pipe(z.number().int().min(1).max(200)),
   DB_POOL_IDLE_TIMEOUT_MS: z
     .string()
-    .default('30000')
+    .default('300000') // 5 minutes: kills idle connections to keep pool counts predictable (#724)
     .transform(Number)
     .pipe(z.number().int().min(0)),
   DB_POOL_CONNECTION_TIMEOUT_MS: z

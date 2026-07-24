@@ -376,7 +376,64 @@ OUTBOUND_RETRY_WEBHOOK_BASE_DELAY_MS=
 OUTBOUND_RETRY_WEBHOOK_MAX_DELAY_MS=
 OUTBOUND_RETRY_WEBHOOK_BACKOFF_MULTIPLIER=
 OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY=
+
+# Pool idle-connection timeout (milliseconds)
+# Connections idle longer than this are closed and removed from the pool.
+# Prevents stale connections from accumulating and keeps pool counts predictable.
+DB_POOL_IDLE_TIMEOUT_MS=300000   # 5 minutes (default)
 ```
+
+---
+
+## Connection Pool Idle Timeout
+
+The `idleTimeoutMillis` option controls how long a connection can remain idle in
+the pool before it is automatically closed and evicted. This keeps the live
+connection count predictable and reclaims OS resources held by connections that
+are no longer needed.
+
+### Default behaviour
+
+All three pools (API, worker, replica) share the same `DB_POOL_IDLE_TIMEOUT_MS`
+value:
+
+| Pool | Purpose | Idle timeout |
+|------|---------|--------------|
+| `pool` | Route handlers and services | `DB_POOL_IDLE_TIMEOUT_MS` |
+| `workerPool` | Background jobs (outbox, exports) | `DB_POOL_IDLE_TIMEOUT_MS` |
+| `replicaPool` | Read-heavy endpoints | `DB_POOL_IDLE_TIMEOUT_MS` |
+
+The default is **300 000 ms (5 minutes)**, chosen because:
+- Short enough to reclaim connections after a traffic lull (e.g. nightly quiet
+  period or after a burst).
+- Long enough not to thrash the pool on workloads that naturally pause for tens
+  of seconds between bursts.
+
+### Tuning
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Very low-traffic service | Lower to `60000` (1 min) to free connections sooner |
+| High-frequency background jobs | Raise to `600000` (10 min) to avoid reconnect overhead |
+| Connection-limit-constrained DB | Lower to reap idle connections more aggressively |
+
+```bash
+# Example: reclaim idle connections after 1 minute
+DB_POOL_IDLE_TIMEOUT_MS=60000
+
+# Example: tolerate longer idle periods for batch-heavy workloads
+DB_POOL_IDLE_TIMEOUT_MS=600000
+```
+
+### Related pool env vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_POOL_IDLE_TIMEOUT_MS` | `300000` | Milliseconds before an idle connection is closed |
+| `DB_POOL_MAX` | `20` | Max connections in the API / replica pool |
+| `DB_WORKER_POOL_MAX` | `5` | Max connections in the worker pool |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | `5000` | Max wait time for a free connection |
+| `DB_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout (kills runaway queries) |
 
 ---
 

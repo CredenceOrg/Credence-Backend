@@ -112,6 +112,17 @@ describe('validateConfig – valid environments', () => {
     expect(config.outboundHttp.retry.defaults.jitterStrategy).toBe('none')
   })
 
+  it('defaults DB_POOL_IDLE_TIMEOUT_MS to 300 000 ms (5 minutes) when unset', () => {
+    // Ensures idle connections are evicted after 5 min by default (#724)
+    const config = validateConfig(validEnv())
+    expect(config.db.pool.idleTimeoutMillis).toBe(300_000)
+  })
+
+  it('accepts a custom DB_POOL_IDLE_TIMEOUT_MS value', () => {
+    const config = validateConfig(validEnv({ DB_POOL_IDLE_TIMEOUT_MS: '60000' }))
+    expect(config.db.pool.idleTimeoutMillis).toBe(60_000)
+  })
+
   it('supports provider-specific outbound retry overrides', () => {
     const config = validateConfig(
       validEnv({

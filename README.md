@@ -358,6 +358,11 @@ try {
 | `CORS_ORIGIN`                 | No       | `*`           | Allowed CORS origin                                    |
 | `ANALYTICS_REFRESH_CRON`      | No       | `*/5 * * * *` | Refresh cadence for analytics materialized view        |
 | `ANALYTICS_STALENESS_SECONDS` | No       | `300`         | Max acceptable analytics staleness before marked stale |
+| `DB_POOL_IDLE_TIMEOUT_MS`     | No       | `300000`      | Milliseconds a pooled connection may stay idle before being closed. Kills idle connections to keep pool counts predictable. |
+| `DB_POOL_MAX`                 | No       | `20`          | Maximum connections in the primary / replica pools     |
+| `DB_WORKER_POOL_MAX`          | No       | `5`           | Maximum connections in the background-worker pool      |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | No     | `5000`        | Milliseconds to wait for an available connection       |
+| `DB_STATEMENT_TIMEOUT_MS`     | No       | `30000`       | Per-statement timeout; kills runaway queries           |
 
 ## Analytics materialized views
 

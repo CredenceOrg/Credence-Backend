@@ -18,7 +18,7 @@ export function envInt(key: string, fallback: number): number {
 
 const DB_URL = process.env.DB_URL;
 const POOL_MAX = envInt("DB_POOL_MAX", 20);
-const IDLE_TIMEOUT = envInt("DB_POOL_IDLE_TIMEOUT_MS", 30_000);
+const IDLE_TIMEOUT = envInt("DB_POOL_IDLE_TIMEOUT_MS", 300_000); // 5 minutes: kills idle connections to keep pool counts predictable
 const CONN_TIMEOUT = envInt("DB_POOL_CONNECTION_TIMEOUT_MS", 5_000);
 const STMT_TIMEOUT = envInt("DB_STATEMENT_TIMEOUT_MS", 30_000);
 const WORKER_MAX = envInt("DB_WORKER_POOL_MAX", 5);
