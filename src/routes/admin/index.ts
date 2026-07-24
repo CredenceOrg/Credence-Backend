@@ -8,7 +8,7 @@ import {
 import erasureProofRouter from './erasureProof.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
-import { createRateLimitOverridesAdminRouter } from './rateLimitOverrides.js'
+import migrationsRouter from './migrations.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
@@ -31,6 +31,11 @@ import { IdentityRepository } from "../../db/repositories/identityRepository.js"
 import { BondsRepository } from "../../db/repositories/bondsRepository.js";
 import { pool } from "../../db/pool.js";
 import { validate } from '../../middleware/validate.js'
+import {
+  assignRoleBodySchema,
+  revokeApiKeyBodySchema,
+  issueImpersonationTokenBodySchema,
+} from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
 import { validateConfig, ConfigValidationError } from "../../config/index.js";
@@ -102,7 +107,7 @@ export function createAdminRouter(): Router {
   /**
    * POST /api/admin/roles/assign
    */
-  router.post('/roles/assign', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  router.post('/roles/assign', requireUserAuth, requireAdminRole, validate({ body: assignRoleBodySchema }), async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -183,7 +188,7 @@ export function createAdminRouter(): Router {
   /**
    * POST /api/admin/keys/revoke
    */
-  router.post('/keys/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  router.post('/keys/revoke', requireUserAuth, requireAdminRole, validate({ body: revokeApiKeyBodySchema }), async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -211,7 +216,7 @@ export function createAdminRouter(): Router {
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  router.post('/impersonate', requireUserAuth, requireAdminRole, validate({ body: issueImpersonationTokenBodySchema }), async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -559,8 +564,8 @@ export function createAdminRouter(): Router {
   // Mount settlement reconciliation report (read-only)
   router.use('/settlement', settlementReconciliationRouter)
 
-  // Mount rate-limit overrides administration
-  router.use('/rate-limits/overrides', createRateLimitOverridesAdminRouter())
+  // Mount migrations sub-router (dry-run)
+  router.use('/migrations', migrationsRouter)
 
   return router
 }

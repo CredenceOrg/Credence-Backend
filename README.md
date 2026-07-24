@@ -448,7 +448,10 @@ npm run migrate:dev
 
 # Check which migrations would run (dry run)
 npm run migrate:dev -- --dry-run
+# Preview pending SQL statements via Admin API
+curl -X GET http://localhost:3000/api/admin/migrations/dry-run -H "Authorization: Bearer <ADMIN_API_KEY>"
 ```
+
 
 **Production/CI (requires build first):**
 

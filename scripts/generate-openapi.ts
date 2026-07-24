@@ -745,24 +745,65 @@ registry.registerPath({
   },
 });
 
-// Reports API
+// Admin Migrations API
 registry.registerPath({
   method: 'get',
-  path: '/api/reports/top-talkers',
-  summary: 'Top talkers report',
-  description: 'Returns the Top N tenants by request count in the access log over the last hour (or specified windowMinutes).',
-  tags: ['Reports'],
+  path: '/api/admin/migrations/dry-run',
+  summary: 'Migration dry-run (GET)',
+  description: 'Previews the SQL statements that would be executed by the next pending database migration up.',
+  tags: ['Admin Migrations'],
   security: bearerAuth,
   request: {
-    query: schemas.topTalkersQuerySchema,
+    query: schemas.migrationsDryRunQuerySchema,
   },
   responses: {
     200: {
-      description: 'Top talkers report generated successfully',
-      content: { 'application/json': { schema: schemas.topTalkersResponseSchema } },
+      description: 'Dry run completed successfully with pending SQL statements',
+      content: { 'application/json': { schema: schemas.migrationsDryRunResponseSchema } },
+    },
+    400: {
+      description: 'Migration dry run failed',
+      content: { 'application/json': { schema: z.object({ success: z.literal(false), error: z.string(), message: z.string() }) } },
     },
     401: {
       description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/migrations/dry-run',
+  summary: 'Migration dry-run (POST)',
+  description: 'Previews the SQL statements that would be executed by the next pending database migration up.',
+  tags: ['Admin Migrations'],
+  security: bearerAuth,
+  request: {
+    body: {
+      required: false,
+      content: { 'application/json': { schema: schemas.migrationsDryRunBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Dry run completed successfully with pending SQL statements',
+      content: { 'application/json': { schema: schemas.migrationsDryRunResponseSchema } },
+    },
+    400: {
+      description: 'Migration dry run failed',
+      content: { 'application/json': { schema: z.object({ success: z.literal(false), error: z.string(), message: z.string() }) } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
       content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
     },
   },

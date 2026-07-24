@@ -5,6 +5,11 @@ import { createAdminRouter } from './index.js'
 
 // ---- Mock middleware ----
 vi.mock('../../middleware/auth.ts', () => ({
+  UserRole: {
+    ADMIN: 'admin',
+    VERIFIER: 'verifier',
+    USER: 'user',
+  },
   requireUserAuth: (req: Request, _res: Response, next: NextFunction) => {
     (req as any).user = { id: 'admin-1', email: 'admin@test.com' }
     next()
@@ -12,25 +17,32 @@ vi.mock('../../middleware/auth.ts', () => ({
   requireAdminRole: (_req: Request, _res: Response, next: NextFunction) => next(),
 }))
 
-// ---- Mock AdminService ----
-const mockAdminService = {
-  listUsers: vi.fn(),
-  assignRole: vi.fn(),
-  revokeApiKey: vi.fn(),
-  getAuditLogs: vi.fn(),
-  exportAuditLogs: vi.fn(),
-  logExportCompletion: vi.fn(),
-}
-
-vi.mock('../../services/admin/index.js', () => ({
-  AdminService: vi.fn().mockImplementation(() => mockAdminService),
+// ---- Mock AdminService & ImpersonationService ----
+const { mockAdminService, mockImpersonationService } = vi.hoisted(() => ({
+  mockAdminService: {
+    listUsers: vi.fn(),
+    assignRole: vi.fn(),
+    revokeApiKey: vi.fn(),
+    getAuditLogs: vi.fn(),
+    exportAuditLogs: vi.fn(),
+    logExportCompletion: vi.fn(),
+  },
+  mockImpersonationService: {
+    issueToken: vi.fn(),
+    revokeToken: vi.fn(),
+  },
 }))
 
-// ---- Mock impersonation service ----
-const mockImpersonationService = {
-  issueToken: vi.fn(),
-  revokeToken: vi.fn(),
-}
+vi.mock('../../services/admin/index.js', () => ({
+  AdminService: class {
+    listUsers = mockAdminService.listUsers
+    assignRole = mockAdminService.assignRole
+    revokeApiKey = mockAdminService.revokeApiKey
+    getAuditLogs = mockAdminService.getAuditLogs
+    exportAuditLogs = mockAdminService.exportAuditLogs
+    logExportCompletion = mockAdminService.logExportCompletion
+  },
+}))
 
 vi.mock('../../services/impersonation/index.js', () => ({
   impersonationService: mockImpersonationService,
@@ -44,33 +56,36 @@ vi.mock('../../lib/pagination.ts', () => ({
 
 // ---- Mock ReplayService ----
 vi.mock('../../services/replayService.js', () => ({
-  ReplayService: vi.fn().mockImplementation(() => ({
-    listFailedEvents: vi.fn().mockResolvedValue({ events: [], total: 0 }),
-    replayEvent: vi.fn().mockResolvedValue({ success: true }),
-  })),
+  ReplayService: class {
+    listFailedEvents = vi.fn().mockResolvedValue({ events: [], total: 0 })
+    replayEvent = vi.fn().mockResolvedValue({ success: true })
+  },
 }))
 
 // ---- Mock repositories ----
 vi.mock('../../db/repositories/failedInboundEventsRepository.js', () => ({
-  FailedInboundEventsRepository: vi.fn().mockImplementation(() => ({})),
+  FailedInboundEventsRepository: class {},
 }))
 
 vi.mock('../../db/repositories/identityRepository.js', () => ({
-  IdentityRepository: vi.fn().mockImplementation(() => ({})),
+  IdentityRepository: class {},
 }))
 
 vi.mock('../../db/repositories/bondsRepository.js', () => ({
-  BondsRepository: vi.fn().mockImplementation(() => ({})),
+  BondsRepository: class {},
 }))
 
 vi.mock('../../services/replayHandlers.js', () => ({
   registerAllReplayHandlers: vi.fn(),
 }))
 
+import { errorHandler } from '../../middleware/errorHandler.js'
+
 function setup() {
   const app = express()
   app.use(express.json())
   app.use('/api/admin', createAdminRouter())
+  app.use(errorHandler)
   return app
 }
 

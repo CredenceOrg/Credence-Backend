@@ -37,6 +37,8 @@ export interface MigrationResult {
   success: boolean;
   /** List of migrations that were applied */
   applied: string[];
+  /** Captured SQL statements from dry-run */
+  sql?: string[];
   /** Error message if failed */
   error?: string;
   /** Preflight check results */
@@ -243,12 +245,14 @@ export async function dryRunMigration(
     return {
       success: true,
       applied,
+      sql: sqlStatements,
     };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
       success: false,
       applied,
+      sql: sqlStatements,
       error: errorMessage,
     };
   }

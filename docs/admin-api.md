@@ -566,14 +566,58 @@ curl -X POST "${BASE_URL}/keys/revoke" \
   -H "Content-Type: application/json" \
   -d '{"userId": "verifier-user-1", "apiKey": "<VERIFIER_API_KEY_RAW>"}'
 
-# 4. Review audit logs
-curl -X GET "${BASE_URL}/audit-logs?adminId=admin-user-1" \
-  -H "Authorization: ${ADMIN_TOKEN}"
+### Migrations Dry-Run
+
+**GET / POST** `/api/admin/migrations/dry-run`
+
+Previews the SQL statements that would be executed by the next pending database migration (`up`) without running them against the database. Useful for operators and engineers reviewing pending schema changes.
+
+#### Parameters (Query for GET, JSON Body for POST)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `count` | number | No | Number of pending migrations to preview |
+| `file` | string | No | Specific migration filename to preview |
+| `skipPreflight` | boolean / string (`"true"`/`"false"`) | No | Skip preflight guardrail checks |
+
+#### Example Request (GET)
+
+```bash
+curl -X GET 'http://localhost:3000/api/admin/migrations/dry-run?count=1' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
+```
+
+#### Example Request (POST)
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/migrations/dry-run' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"count": 1, "skipPreflight": true}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "data": {
+    "applied": [
+      "001_initial_schema.ts"
+    ],
+    "sql": [
+      "CREATE TABLE IF NOT EXISTS identities (...);"
+    ],
+    "sqlText": "CREATE TABLE IF NOT EXISTS identities (...);",
+    "count": 1
+  }
+}
 ```
 
 ---
 
 ## Troubleshooting
+
 
 ### Common Issues
 

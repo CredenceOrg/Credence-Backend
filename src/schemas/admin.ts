@@ -69,8 +69,46 @@ export const updateMemberRoleBodySchema = z
   })
   .strict()
 
+/**
+ * Query parameters for GET /api/admin/migrations/dry-run
+ */
+export const migrationsDryRunQuerySchema = z
+  .object({
+    count: z.coerce.number().int().positive().optional(),
+    file: z.string().optional(),
+    skipPreflight: z.enum(['true', 'false']).transform((val) => val === 'true').optional(),
+  })
+
+/**
+ * Request body schema for POST /api/admin/migrations/dry-run
+ */
+export const migrationsDryRunBodySchema = z
+  .object({
+    count: z.number().int().positive().optional(),
+    file: z.string().optional(),
+    skipPreflight: z.boolean().optional(),
+  })
+  .strict()
+
+/**
+ * Response schema for GET/POST /api/admin/migrations/dry-run
+ */
+export const migrationsDryRunResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    applied: z.array(z.string()),
+    sql: z.array(z.string()),
+    sqlText: z.string(),
+    count: z.number(),
+  }),
+})
+
 export type AssignRoleBody = z.infer<typeof assignRoleBodySchema>
 export type RevokeApiKeyBody = z.infer<typeof revokeApiKeyBodySchema>
 export type IssueImpersonationTokenBody = z.infer<typeof issueImpersonationTokenBodySchema>
 export type InviteMemberBody = z.infer<typeof inviteMemberBodySchema>
 export type UpdateMemberRoleBody = z.infer<typeof updateMemberRoleBodySchema>
+export type MigrationsDryRunQuery = z.infer<typeof migrationsDryRunQuerySchema>
+export type MigrationsDryRunBody = z.infer<typeof migrationsDryRunBodySchema>
+export type MigrationsDryRunResponse = z.infer<typeof migrationsDryRunResponseSchema>
+

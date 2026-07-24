@@ -3238,6 +3238,212 @@ components:
             type: never
           type: never
       type: object
+    migrationsDryRunBodySchema:
+      def:
+        type: object
+        shape:
+          count:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          file:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          skipPreflight:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: boolean
+                type: boolean
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    migrationsDryRunQuerySchema:
+      def:
+        type: object
+        shape:
+          count:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          file:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          skipPreflight:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: pipe
+                  in:
+                    def:
+                      type: enum
+                      entries:
+                        "true": "true"
+                        "false": "false"
+                    type: enum
+                    enum:
+                      "true": "true"
+                      "false": "false"
+                    options:
+                      - "true"
+                      - "false"
+                  out:
+                    def:
+                      type: transform
+                    type: transform
+                type: pipe
+                in:
+                  def:
+                    type: enum
+                    entries:
+                      "true": "true"
+                      "false": "false"
+                  type: enum
+                  enum:
+                    "true": "true"
+                    "false": "false"
+                  options:
+                    - "true"
+                    - "false"
+                out:
+                  def:
+                    type: transform
+                  type: transform
+            type: optional
+      type: object
+    migrationsDryRunResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                applied:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: array
+                  element:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                sql:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: array
+                  element:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                sqlText:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                count:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+            type: object
+      type: object
     overrideResponseEnvelopeSchema:
       def:
         type: object
@@ -5325,248 +5531,6 @@ components:
                   format: datetime
                   minLength: null
                   maxLength: null
-            type: object
-      type: object
-    topTalkerEntrySchema:
-      def:
-        type: object
-        shape:
-          tenantId:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-          requestCount:
-            def:
-              type: number
-              checks: []
-            type: number
-            minValue: null
-            maxValue: null
-            isInt: false
-            isFinite: true
-            format: null
-          percentage:
-            def:
-              type: number
-              checks: []
-            type: number
-            minValue: null
-            maxValue: null
-            isInt: false
-            isFinite: true
-            format: null
-          lastRequestAt:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-      type: object
-    topTalkersQuerySchema:
-      def:
-        type: object
-        shape:
-          limit:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: number
-                  coerce: true
-                  checks:
-                    - def:
-                        type: number
-                        check: number_format
-                        abort: false
-                        format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                    - {}
-                    - {}
-                type: number
-                minValue: 1
-                maxValue: 100
-                isInt: true
-                isFinite: true
-                format: safeint
-            type: optional
-          windowMinutes:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: number
-                  coerce: true
-                  checks:
-                    - def:
-                        type: number
-                        check: number_format
-                        abort: false
-                        format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                    - {}
-                    - {}
-                type: number
-                minValue: 1
-                maxValue: 1440
-                isInt: true
-                isFinite: true
-                format: safeint
-            type: optional
-      type: object
-    topTalkersResponseSchema:
-      def:
-        type: object
-        shape:
-          success:
-            def:
-              type: boolean
-            type: boolean
-          data:
-            def:
-              type: object
-              shape:
-                windowStart:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                windowEnd:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                windowMinutes:
-                  def:
-                    type: number
-                    checks: []
-                  type: number
-                  minValue: null
-                  maxValue: null
-                  isInt: false
-                  isFinite: true
-                  format: null
-                totalRequests:
-                  def:
-                    type: number
-                    checks: []
-                  type: number
-                  minValue: null
-                  maxValue: null
-                  isInt: false
-                  isFinite: true
-                  format: null
-                topTalkers:
-                  def:
-                    type: array
-                    element:
-                      def:
-                        type: object
-                        shape:
-                          tenantId:
-                            def:
-                              type: string
-                            type: string
-                            format: null
-                            minLength: null
-                            maxLength: null
-                          requestCount:
-                            def:
-                              type: number
-                              checks: []
-                            type: number
-                            minValue: null
-                            maxValue: null
-                            isInt: false
-                            isFinite: true
-                            format: null
-                          percentage:
-                            def:
-                              type: number
-                              checks: []
-                            type: number
-                            minValue: null
-                            maxValue: null
-                            isInt: false
-                            isFinite: true
-                            format: null
-                          lastRequestAt:
-                            def:
-                              type: optional
-                              innerType:
-                                def:
-                                  type: string
-                                type: string
-                                format: null
-                                minLength: null
-                                maxLength: null
-                            type: optional
-                      type: object
-                  type: array
-                  element:
-                    def:
-                      type: object
-                      shape:
-                        tenantId:
-                          def:
-                            type: string
-                          type: string
-                          format: null
-                          minLength: null
-                          maxLength: null
-                        requestCount:
-                          def:
-                            type: number
-                            checks: []
-                          type: number
-                          minValue: null
-                          maxValue: null
-                          isInt: false
-                          isFinite: true
-                          format: null
-                        percentage:
-                          def:
-                            type: number
-                            checks: []
-                          type: number
-                          minValue: null
-                          maxValue: null
-                          isInt: false
-                          isFinite: true
-                          format: null
-                        lastRequestAt:
-                          def:
-                            type: optional
-                            innerType:
-                              def:
-                                type: string
-                              type: string
-                              format: null
-                              minLength: null
-                              maxLength: null
-                          type: optional
-                    type: object
             type: object
       type: object
     transactionsHistoryQuerySchema:
@@ -8574,33 +8538,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FlagErrorResponse"
-  /api/reports/top-talkers:
+  /api/admin/migrations/dry-run:
     get:
-      summary: Top talkers report
-      description: Returns the Top N tenants by request count in the access log over
-        the last hour (or specified windowMinutes).
+      summary: Migration dry-run (GET)
+      description: Previews the SQL statements that would be executed by the next
+        pending database migration up.
       tags:
-        - Reports
+        - Admin Migrations
       security:
         - bearerAuth: []
       parameters:
         - schema:
             type: integer
-            minimum: 1
-            maximum: 100
+            minimum: 0
+            exclusiveMinimum: true
           required: false
-          name: limit
+          name: count
           in: query
         - schema:
-            type: integer
-            minimum: 1
-            maximum: 1440
+            type: string
           required: false
-          name: windowMinutes
+          name: file
+          in: query
+        - schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+          required: false
+          name: skipPreflight
           in: query
       responses:
         "200":
-          description: Top talkers report generated successfully
+          description: Dry run completed successfully with pending SQL statements
           content:
             application/json:
               schema:
@@ -8611,42 +8581,165 @@ paths:
                   data:
                     type: object
                     properties:
-                      windowStart:
-                        type: string
-                      windowEnd:
-                        type: string
-                      windowMinutes:
-                        type: number
-                      totalRequests:
-                        type: number
-                      topTalkers:
+                      applied:
                         type: array
                         items:
-                          type: object
-                          properties:
-                            tenantId:
-                              type: string
-                            requestCount:
-                              type: number
-                            percentage:
-                              type: number
-                            lastRequestAt:
-                              type: string
-                          required:
-                            - tenantId
-                            - requestCount
-                            - percentage
+                          type: string
+                      sql:
+                        type: array
+                        items:
+                          type: string
+                      sqlText:
+                        type: string
+                      count:
+                        type: number
                     required:
-                      - windowStart
-                      - windowEnd
-                      - windowMinutes
-                      - totalRequests
-                      - topTalkers
+                      - applied
+                      - sql
+                      - sqlText
+                      - count
                 required:
                   - success
                   - data
+        "400":
+          description: Migration dry run failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - success
+                  - error
+                  - message
         "401":
           description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+    post:
+      summary: Migration dry-run (POST)
+      description: Previews the SQL statements that would be executed by the next
+        pending database migration up.
+      tags:
+        - Admin Migrations
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                count:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                file:
+                  type: string
+                skipPreflight:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        "200":
+          description: Dry run completed successfully with pending SQL statements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      applied:
+                        type: array
+                        items:
+                          type: string
+                      sql:
+                        type: array
+                        items:
+                          type: string
+                      sqlText:
+                        type: string
+                      count:
+                        type: number
+                    required:
+                      - applied
+                      - sql
+                      - sqlText
+                      - count
+                required:
+                  - success
+                  - data
+        "400":
+          description: Migration dry run failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - success
+                  - error
+                  - message
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
           content:
             application/json:
               schema:

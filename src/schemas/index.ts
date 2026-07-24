@@ -189,11 +189,17 @@ export {
   issueImpersonationTokenBodySchema,
   inviteMemberBodySchema,
   updateMemberRoleBodySchema,
+  migrationsDryRunQuerySchema,
+  migrationsDryRunBodySchema,
+  migrationsDryRunResponseSchema,
   type AssignRoleBody,
   type RevokeApiKeyBody,
   type IssueImpersonationTokenBody,
   type InviteMemberBody,
   type UpdateMemberRoleBody,
+  type MigrationsDryRunQuery,
+  type MigrationsDryRunBody,
+  type MigrationsDryRunResponse,
 } from './admin.js'
 export {
   redirectTargetSchema,
@@ -204,4 +210,5 @@ export {
   versionResponseSchema,
   type VersionResponse,
 } from './version.js'
+
 
