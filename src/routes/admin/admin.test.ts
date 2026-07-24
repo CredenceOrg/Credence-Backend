@@ -169,6 +169,57 @@ describe('Admin Router - Strict Validation', () => {
       expect(res.status).toBe(201)
     })
   })
+
+  describe('POST /api/admin/refresh-secrets', () => {
+    it('should reject invalid secrets from the vault and surface a typed error', async () => {
+      // Temporarily mock fs and dotenv just for this test
+      const fs = await import('fs')
+      const dotenv = await import('dotenv')
+      
+      const existsSyncSpy = vi.spyOn(fs.default, 'existsSync').mockReturnValue(true)
+      const readFileSyncSpy = vi.spyOn(fs.default, 'readFileSync').mockReturnValue(Buffer.from('JWT_SECRET=short'))
+      const parseSpy = vi.spyOn(dotenv.default, 'parse').mockReturnValue({ JWT_SECRET: 'short' })
+      
+      const res = await request(setup())
+        .post('/api/admin/refresh-secrets')
+        .send()
+        
+      expect(res.status).toBe(400)
+      expect(res.body.error).toBe('ConfigValidationError')
+      
+      existsSyncSpy.mockRestore()
+      readFileSyncSpy.mockRestore()
+      parseSpy.mockRestore()
+    })
+
+    it('should successfully refresh secrets if valid', async () => {
+      const fs = await import('fs')
+      const dotenv = await import('dotenv')
+      
+      // Ensure we pass validateConfig by having a valid candidateEnv
+      const originalEnv = { ...process.env }
+      process.env.DB_URL = 'postgres://localhost/test'
+      process.env.REDIS_URL = 'redis://localhost/test'
+      process.env.JWT_SECRET = 'valid-secret-at-least-32-chars-long'
+
+      const existsSyncSpy = vi.spyOn(fs.default, 'existsSync').mockReturnValue(true)
+      const readFileSyncSpy = vi.spyOn(fs.default, 'readFileSync').mockReturnValue(Buffer.from('JWT_SECRET=new-valid-secret-at-least-32-chars-long'))
+      const parseSpy = vi.spyOn(dotenv.default, 'parse').mockReturnValue({ JWT_SECRET: 'new-valid-secret-at-least-32-chars-long' })
+      
+      const res = await request(setup())
+        .post('/api/admin/refresh-secrets')
+        .send()
+        
+      expect(res.status).toBe(200)
+      expect(res.body.success).toBe(true)
+      expect(process.env.JWT_SECRET).toBe('new-valid-secret-at-least-32-chars-long')
+      
+      existsSyncSpy.mockRestore()
+      readFileSyncSpy.mockRestore()
+      parseSpy.mockRestore()
+      process.env = originalEnv
+    })
+  })
 })
 
 describe('Admin Anti-Crawling Defenses', () => {

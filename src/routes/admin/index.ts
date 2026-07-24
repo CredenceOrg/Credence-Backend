@@ -31,7 +31,10 @@ import { BondsRepository } from "../../db/repositories/bondsRepository.js";
 import { pool } from "../../db/pool.js";
 import { validate } from '../../middleware/validate.js'
 import { z } from 'zod'
-import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.ts";
+import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
+import { validateConfig, ConfigValidationError } from "../../config/index.js";
+import fs from "fs";
+import dotenv from "dotenv";
 
 /**
  * Create the admin router with role and user management endpoints
@@ -119,6 +122,60 @@ export function createAdminRouter(): Router {
       });
     } catch (error) {
       next(error);
+    }
+  });
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+    try {
+      const authReq = req as AuthenticatedRequest
+      const user = authReq.user!
+      const requestId = (req as any).requestId
+
+      const envPath = process.cwd() + '/.env';
+      let parsed = {};
+      if (fs.existsSync(envPath)) {
+        parsed = dotenv.parse(fs.readFileSync(envPath));
+      }
+      
+      const candidateEnv = { ...process.env, ...parsed };
+      
+      try {
+        validateConfig(candidateEnv as any);
+      } catch (err: any) {
+        if (err instanceof ConfigValidationError) {
+          res.status(400).json({ error: 'ConfigValidationError', message: 'Vault secrets validation failed', issues: err.issues });
+          return;
+        }
+        throw err;
+      }
+      
+      // Apply the validated config to process.env
+      for (const [k, v] of Object.entries(parsed)) {
+        process.env[k] = v as string;
+      }
+
+      // Audit log the action
+      void auditLogService.logAction(
+        user.tenantId,
+        user.id,
+        user.email,
+        AuditAction.UPDATE_SETTINGS,
+        'system',
+        undefined,
+        { action: 'refresh-secrets' },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      );
+
+      res.status(200).json({ success: true });
+    } catch (err) {
+      next(err);
     }
   });
 
