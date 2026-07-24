@@ -1,0 +1,24 @@
+name: FIXME check
+
+on:
+  pull_request:
+    branches: [master]
+
+# Needed so scripts/check-fixme.sh can diff against the PR base branch.
+permissions:
+  contents: read
+
+jobs:
+  fixme-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history, so `git diff master...HEAD` works
+
+      - name: Check for unreferenced FIXME comments
+        run: |
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          chmod +x scripts/check-fixme.sh
+          ./scripts/check-fixme.sh --diff "origin/${{ github.base_ref }}"

@@ -553,4 +553,10 @@ pnpm run test:coverage     # with coverage (40% global threshold)
 pnpm run coverage:audit    # audit-sensitive coverage (disputes, governance, evidence)
 pnpm run test:chaos        # chaos suite (requires docker-compose.test.yml up)
 ```
+## FIXME Comments
+
+Every `FIXME` comment must reference a GitHub issue, e.g.
+`FIXME(#123): ...`. This is enforced in CI — see
+[docs/fixme-convention.md](docs/fixme-convention.md) for the full
+convention and how to run the check locally.
 
