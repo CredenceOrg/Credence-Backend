@@ -2,11 +2,10 @@
 export const OUTBOX_MAX_LAG_SECONDS = 60
 export const OUTBOX_MAX_LAG_MS = OUTBOX_MAX_LAG_SECONDS * 1000
 
-/** Header name used to trigger graceful degradation / read-only mode */
-export const READ_ONLY_HEADER = 'x-read-only'
+/** Default number of top talker tenants to return in top talkers reports. */
+export const DEFAULT_TOP_TALKERS_LIMIT = 10
+export const MAX_TOP_TALKERS_LIMIT = 100
 
-/** Default replay safety setting for handler side effects. */
-export const DEFAULT_REPLAY_SAFE = false
+/** Default time window in minutes for top talkers request aggregation (1 hour). */
+export const DEFAULT_TOP_TALKERS_WINDOW_MINUTES = 60
 
-/** Header used by clients to advertise their version, echoed back for debugging */
-export const HEADER_CLIENT_VERSION = 'X-Client-Version'

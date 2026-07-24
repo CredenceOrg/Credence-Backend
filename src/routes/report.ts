@@ -8,14 +8,51 @@ import { validate, type ValidatedRequest } from "../middleware/validate.js";
 import {
   createReportBodySchema,
   reportJobParamsSchema,
+  topTalkersQuerySchema,
   type CreateReportBody,
   type ReportJobParams,
 } from "../schemas/report.js";
+import { auditLogService } from "../services/audit/index.js";
 
 const router = Router();
 const reportRepository = new ReportRepository(pool);
 const reportStorage = new ReportStorageService();
 const reportService = new ReportService(reportRepository, reportStorage);
+
+/**
+ * GET /api/reports/top-talkers
+ *
+ * Returns Top N tenants by request count in the aggregate window (default: last hour).
+ *
+ * @requires enterprise scope
+ */
+router.get(
+  "/top-talkers",
+  requireApiKey(ApiScope.ENTERPRISE),
+  validate({ query: topTalkersQuerySchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { limit, windowMinutes } = (req.query as unknown) as {
+        limit?: number;
+        windowMinutes?: number;
+      };
+
+      const report = await auditLogService.getTopTalkers(limit, windowMinutes);
+
+      res.status(200).json({
+        success: true,
+        data: report,
+      });
+    } catch (error) {
+      console.error("Top talkers report error:", error);
+      res.status(500).json({
+        error: "InternalServerError",
+        message: "An unexpected error occurred while fetching top talkers report",
+      });
+    }
+  },
+);
+
 
 /**
  * POST /api/reports

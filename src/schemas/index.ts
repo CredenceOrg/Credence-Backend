@@ -48,9 +48,14 @@ export {
   reportTypeSchema,
   createReportBodySchema,
   reportJobParamsSchema,
+  topTalkersQuerySchema,
+  topTalkersResponseSchema,
+  topTalkerEntrySchema,
   type ReportType,
   type CreateReportBody,
   type ReportJobParams,
+  type TopTalkersQuery,
+  type TopTalkersResponse,
 } from "./report.js";
 export {
   createPayoutSchema,

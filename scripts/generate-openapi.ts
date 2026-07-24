@@ -745,71 +745,25 @@ registry.registerPath({
   },
 });
 
-// Rate Limit Overrides API
+// Reports API
 registry.registerPath({
   method: 'get',
-  path: '/api/admin/rate-limits/overrides',
-  summary: 'List tenant rate-limit overrides',
-  description: 'Lists all active tenant rate-limit overrides.',
-  tags: ['Admin', 'Rate Limits'],
-  security: bearerAuth,
-  responses: {
-    200: {
-      description: 'List of rate-limit overrides',
-      content: { 'application/json': { schema: schemas.listRateLimitOverridesResponseSchema } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'post',
-  path: '/api/admin/rate-limits/overrides',
-  summary: 'Set tenant rate-limit override',
-  description: 'Sets or updates a per-tenant rate-limit override. Mandates an audit trail entry.',
-  tags: ['Admin', 'Rate Limits'],
+  path: '/api/reports/top-talkers',
+  summary: 'Top talkers report',
+  description: 'Returns the Top N tenants by request count in the access log over the last hour (or specified windowMinutes).',
+  tags: ['Reports'],
   security: bearerAuth,
   request: {
-    body: {
-      content: { 'application/json': { schema: schemas.setRateLimitOverrideBodySchema } },
-    },
-  },
-  responses: {
-    201: {
-      description: 'Rate-limit override created or updated',
-      content: { 'application/json': { schema: schemas.setRateLimitOverrideResponseSchema } },
-    },
-    400: {
-      description: 'Validation failure (missing reason, invalid limit, or bad inputs)',
-      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
-    },
-  },
-});
-
-registry.registerPath({
-  method: 'delete',
-  path: '/api/admin/rate-limits/overrides/{tenantId}',
-  summary: 'Remove tenant rate-limit override',
-  description: 'Removes a per-tenant rate-limit override. Mandates an audit trail entry.',
-  tags: ['Admin', 'Rate Limits'],
-  security: bearerAuth,
-  request: {
-    params: z.object({ tenantId: z.string() }),
-    body: {
-      content: { 'application/json': { schema: schemas.removeRateLimitOverrideBodySchema } },
-    },
+    query: schemas.topTalkersQuerySchema,
   },
   responses: {
     200: {
-      description: 'Rate-limit override removed successfully',
-      content: { 'application/json': { schema: z.object({ success: z.boolean() }) } },
+      description: 'Top talkers report generated successfully',
+      content: { 'application/json': { schema: schemas.topTalkersResponseSchema } },
     },
-    400: {
-      description: 'Missing reason',
-      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
-    },
-    404: {
-      description: 'Override not found',
-      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
     },
   },
 });

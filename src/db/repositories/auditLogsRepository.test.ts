@@ -266,4 +266,74 @@ describe('PostgresAuditLogsRepository', () => {
     expect(selectSql).toContain('LIMIT $3')
     expect(selectParams).toEqual(['admin-7', 'user-9', 6]) // limit + 1 for hasNextPage detection
   })
+
+  it('queries top talkers report for PostgresAuditLogsRepository', async () => {
+    const db = {
+      query: vi
+        .fn()
+        .mockResolvedValueOnce({ rows: [{ total: 10 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            { tenant_id: 'tenant-a', request_count: 7, last_request_at: new Date() },
+            { tenant_id: 'tenant-b', request_count: 3, last_request_at: new Date() },
+          ],
+        }),
+    }
+
+    const repository = new PostgresAuditLogsRepository(db as any)
+    const report = await repository.getTopTalkers(5, 60, new Date('2026-07-24T18:00:00.000Z'))
+
+    expect(report.totalRequests).toBe(10)
+    expect(report.topTalkers).toHaveLength(2)
+    expect(report.topTalkers[0].tenantId).toBe('tenant-a')
+    expect(report.topTalkers[0].requestCount).toBe(7)
+    expect(report.topTalkers[0].percentage).toBe(70)
+    expect(report.topTalkers[1].tenantId).toBe('tenant-b')
+    expect(report.topTalkers[1].requestCount).toBe(3)
+    expect(report.topTalkers[1].percentage).toBe(30)
+  })
 })
+
+describe('InMemoryAuditLogsRepository - Top Talkers', () => {
+  it('aggregates top talker request counts over the specified time window', async () => {
+    const repository = new InMemoryAuditLogsRepository()
+
+    // Append requests for tenant-a and tenant-b in the last hour
+    await repository.append({
+      actorId: 'user-1',
+      actorEmail: 'u1@test.com',
+      action: 'API_CALL',
+      resourceType: 'api',
+      resourceId: 'res-1',
+      tenantId: 'tenant-a',
+    })
+    await repository.append({
+      actorId: 'user-1',
+      actorEmail: 'u1@test.com',
+      action: 'API_CALL',
+      resourceType: 'api',
+      resourceId: 'res-2',
+      tenantId: 'tenant-a',
+    })
+    await repository.append({
+      actorId: 'user-2',
+      actorEmail: 'u2@test.com',
+      action: 'API_CALL',
+      resourceType: 'api',
+      resourceId: 'res-3',
+      tenantId: 'tenant-b',
+    })
+
+    const report = await repository.getTopTalkers(10, 60)
+
+    expect(report.totalRequests).toBe(3)
+    expect(report.topTalkers).toHaveLength(2)
+    expect(report.topTalkers[0].tenantId).toBe('tenant-a')
+    expect(report.topTalkers[0].requestCount).toBe(2)
+    expect(report.topTalkers[0].percentage).toBe(66.67)
+    expect(report.topTalkers[1].tenantId).toBe('tenant-b')
+    expect(report.topTalkers[1].requestCount).toBe(1)
+    expect(report.topTalkers[1].percentage).toBe(33.33)
+  })
+})
+

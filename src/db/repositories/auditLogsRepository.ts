@@ -5,8 +5,15 @@ import type {
   AuditLogFilters,
   AuditLogInput,
   AuditStatus,
+  TopTalkerEntry,
+  TopTalkersReport,
 } from '../../services/audit/types.js'
 import { decodeCursor, encodeCursor } from '../../lib/pagination.js'
+import {
+  DEFAULT_TOP_TALKERS_LIMIT,
+  MAX_TOP_TALKERS_LIMIT,
+  DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+} from '../../config/constants.js'
 
 type AuditLogRow = {
   id: string
@@ -146,6 +153,7 @@ export function computeRowHash(
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
   query(filters?: AuditLogFilters, limit?: number, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }>
+  getTopTalkers(limit?: number, windowMinutes?: number, now?: Date): Promise<TopTalkersReport>
   getAll(): Promise<AuditLogEntry[]>
   clear(): Promise<void>
 }
@@ -332,6 +340,61 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     }
   }
 
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const totalResult = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*)::int AS total FROM audit_logs WHERE occurred_at >= $1 AND occurred_at <= $2`,
+      [windowStart.toISOString(), windowEnd.toISOString()],
+    )
+    const totalRequests = Number(totalResult.rows[0]?.total ?? 0)
+
+    const topResult = await this.db.query<{
+      tenant_id: string
+      request_count: string | number
+      last_request_at: Date | string
+    }>(
+      `
+      SELECT
+        tenant_id,
+        COUNT(*)::int AS request_count,
+        MAX(occurred_at) AS last_request_at
+      FROM audit_logs
+      WHERE occurred_at >= $1 AND occurred_at <= $2
+      GROUP BY tenant_id
+      ORDER BY request_count DESC, tenant_id ASC
+      LIMIT $3
+      `,
+      [windowStart.toISOString(), windowEnd.toISOString(), effectiveLimit],
+    )
+
+    const topTalkers: TopTalkerEntry[] = topResult.rows.map((row) => {
+      const count = Number(row.request_count)
+      const pct = totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0
+      const lastAt = row.last_request_at ? new Date(row.last_request_at).toISOString() : undefined
+      return {
+        tenantId: row.tenant_id,
+        requestCount: count,
+        percentage: pct,
+        lastRequestAt: lastAt,
+      }
+    })
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers,
+    }
+  }
+
   async getAll(): Promise<AuditLogEntry[]> {
     const result = await this.query(undefined, 1000000, undefined)
     return result.logs
@@ -475,6 +538,54 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       logs,
       hasNextPage,
       nextCursor,
+    }
+  }
+
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const matching = this.logs.filter((log) => {
+      const t = new Date(log.timestamp).getTime()
+      return t >= windowStart.getTime() && t <= windowEnd.getTime()
+    })
+
+    const totalRequests = matching.length
+    const tenantMap = new Map<string, { count: number; lastAt: string }>()
+
+    for (const log of matching) {
+      const existing = tenantMap.get(log.tenantId)
+      if (existing) {
+        existing.count++
+        if (log.timestamp > existing.lastAt) {
+          existing.lastAt = log.timestamp
+        }
+      } else {
+        tenantMap.set(log.tenantId, { count: 1, lastAt: log.timestamp })
+      }
+    }
+
+    const sorted = Array.from(tenantMap.entries())
+      .map(([tenantId, { count, lastAt }]) => ({
+        tenantId,
+        requestCount: count,
+        percentage: totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0,
+        lastRequestAt: lastAt,
+      }))
+      .sort((a, b) => b.requestCount - a.requestCount || a.tenantId.localeCompare(b.tenantId))
+      .slice(0, effectiveLimit)
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers: sorted,
     }
   }
 

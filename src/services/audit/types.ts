@@ -143,3 +143,25 @@ export interface ChainViolation {
   actualRowHash: string | null
   type: 'prev_hash_mismatch' | 'row_hash_mismatch' | 'missing_row' | 'deleted_row'
 }
+
+/**
+ * Single tenant request count entry in top talkers report
+ */
+export interface TopTalkerEntry {
+  tenantId: string
+  requestCount: number
+  percentage: number
+  lastRequestAt?: string
+}
+
+/**
+ * Top talkers report aggregated over a time window (default 1 hour)
+ */
+export interface TopTalkersReport {
+  windowStart: string
+  windowEnd: string
+  windowMinutes: number
+  totalRequests: number
+  topTalkers: TopTalkerEntry[]
+}
+

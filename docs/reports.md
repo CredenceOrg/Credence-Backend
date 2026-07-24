@@ -27,17 +27,52 @@ GET  /api/reports/download/:key
                                Otherwise → 401
 ```
 
-## Endpoints
+### `GET /api/reports/top-talkers`
+
+Get top N tenants by request count in the access log over the last hour (or configured aggregate window).
+
+**Auth:** Enterprise API key (`X-API-Key` header)
+
+**Query Parameters:**
+- `limit` (number, default: 10, max: 100) — Number of top tenants to return.
+- `windowMinutes` (number, default: 60, max: 1440) — Time window for aggregation in minutes.
+
+**Response (200):**
+```json
+{
+  "success": true,
+  "data": {
+    "windowStart": "2026-07-24T17:45:00.000Z",
+    "windowEnd": "2026-07-24T18:45:00.000Z",
+    "windowMinutes": 60,
+    "totalRequests": 1250,
+    "topTalkers": [
+      {
+        "tenantId": "tenant-corp-a",
+        "requestCount": 850,
+        "percentage": 68,
+        "lastRequestAt": "2026-07-24T18:44:12.000Z"
+      },
+      {
+        "tenantId": "tenant-fintech-b",
+        "requestCount": 400,
+        "percentage": 32,
+        "lastRequestAt": "2026-07-24T18:43:55.000Z"
+      }
+    ]
+  }
+}
+```
 
 ### `POST /api/reports`
 
-Start a report generation job.
+Start a report generation job. Supported report types: `trust_score_summary`, `bond_audit`, `attestation_export`, `top_talkers`.
 
 **Auth:** Enterprise API key (`X-API-Key` header)
 
 **Body:**
 ```json
-{ "type": "trust_score_summary" }
+{ "type": "top_talkers" }
 ```
 
 **Response (202):**

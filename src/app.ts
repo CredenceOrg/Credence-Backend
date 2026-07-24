@@ -169,7 +169,7 @@ const analyticsThresholdSeconds = Number(process.env.ANALYTICS_STALENESS_SECONDS
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
-import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
+import reportRouter from "./routes/report.js";
 
 const app = express();
 
@@ -309,6 +309,8 @@ const analyticsService = process.env.DATABASE_URL
 app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 
 app.use("/api/payouts", createPayoutsRouter());
+
+app.use("/api/reports", reportRouter);
 
 app.use(errorHandler);
 

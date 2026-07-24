@@ -239,6 +239,17 @@ export class AuditLogService {
 
     return redacted
   }
+
+  /**
+   * Get top N talker tenants by request count in the last window (default: 1 hour).
+   */
+  async getTopTalkers(
+    limit?: number,
+    windowMinutes?: number,
+    now?: Date,
+  ) {
+    return this.repository.getTopTalkers(limit, windowMinutes, now)
+  }
 }
 
 function createRepository(): AuditLogRepository {
@@ -269,4 +280,7 @@ export type {
   AuditLogInput,
   AuditLogFilters,
   ChainVerificationResult,
+  TopTalkerEntry,
+  TopTalkersReport,
 } from './types.js'
+

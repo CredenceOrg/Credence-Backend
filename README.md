@@ -161,6 +161,8 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | POST   | `/api/attestations`          | Create attestation                          |
 | GET    | `/api/verification/:address` | Verification proof (stub)                   |
 | GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
+| GET    | `/api/reports/top-talkers`   | Top N tenants by request count in last hour |
+
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
 

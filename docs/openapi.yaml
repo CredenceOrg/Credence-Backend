@@ -1187,15 +1187,18 @@ components:
                 trust_score_summary: trust_score_summary
                 bond_audit: bond_audit
                 attestation_export: attestation_export
+                top_talkers: top_talkers
             type: enum
             enum:
               trust_score_summary: trust_score_summary
               bond_audit: bond_audit
               attestation_export: attestation_export
+              top_talkers: top_talkers
             options:
               - trust_score_summary
               - bond_audit
               - attestation_export
+              - top_talkers
         catchall:
           def:
             type: never
@@ -3235,177 +3238,6 @@ components:
             type: never
           type: never
       type: object
-    listRateLimitOverridesResponseSchema:
-      def:
-        type: object
-        shape:
-          success:
-            def:
-              type: boolean
-            type: boolean
-          data:
-            def:
-              type: array
-              element:
-                def:
-                  type: object
-                  shape:
-                    id:
-                      def:
-                        type: optional
-                        innerType:
-                          def:
-                            type: number
-                            checks: []
-                          type: number
-                          minValue: null
-                          maxValue: null
-                          isInt: false
-                          isFinite: true
-                          format: null
-                      type: optional
-                    tenantId:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                    rateLimit:
-                      def:
-                        type: number
-                        checks: []
-                      type: number
-                      minValue: null
-                      maxValue: null
-                      isInt: false
-                      isFinite: true
-                      format: null
-                    windowSize:
-                      def:
-                        type: number
-                        checks: []
-                      type: number
-                      minValue: null
-                      maxValue: null
-                      isInt: false
-                      isFinite: true
-                      format: null
-                    reason:
-                      def:
-                        type: optional
-                        innerType:
-                          def:
-                            type: string
-                          type: string
-                          format: null
-                          minLength: null
-                          maxLength: null
-                      type: optional
-                    createdAt:
-                      def:
-                        type: optional
-                        innerType:
-                          def:
-                            type: string
-                          type: string
-                          format: null
-                          minLength: null
-                          maxLength: null
-                      type: optional
-                    updatedAt:
-                      def:
-                        type: optional
-                        innerType:
-                          def:
-                            type: string
-                          type: string
-                          format: null
-                          minLength: null
-                          maxLength: null
-                      type: optional
-                type: object
-            type: array
-            element:
-              def:
-                type: object
-                shape:
-                  id:
-                    def:
-                      type: optional
-                      innerType:
-                        def:
-                          type: number
-                          checks: []
-                        type: number
-                        minValue: null
-                        maxValue: null
-                        isInt: false
-                        isFinite: true
-                        format: null
-                    type: optional
-                  tenantId:
-                    def:
-                      type: string
-                    type: string
-                    format: null
-                    minLength: null
-                    maxLength: null
-                  rateLimit:
-                    def:
-                      type: number
-                      checks: []
-                    type: number
-                    minValue: null
-                    maxValue: null
-                    isInt: false
-                    isFinite: true
-                    format: null
-                  windowSize:
-                    def:
-                      type: number
-                      checks: []
-                    type: number
-                    minValue: null
-                    maxValue: null
-                    isInt: false
-                    isFinite: true
-                    format: null
-                  reason:
-                    def:
-                      type: optional
-                      innerType:
-                        def:
-                          type: string
-                        type: string
-                        format: null
-                        minLength: null
-                        maxLength: null
-                    type: optional
-                  createdAt:
-                    def:
-                      type: optional
-                      innerType:
-                        def:
-                          type: string
-                        type: string
-                        format: null
-                        minLength: null
-                        maxLength: null
-                    type: optional
-                  updatedAt:
-                    def:
-                      type: optional
-                      innerType:
-                        def:
-                          type: string
-                        type: string
-                        format: null
-                        minLength: null
-                        maxLength: null
-                    type: optional
-              type: object
-      type: object
     overrideResponseEnvelopeSchema:
       def:
         type: object
@@ -3682,85 +3514,6 @@ components:
             minLength: 1
             maxLength: null
       type: object
-    rateLimitOverrideSchema:
-      def:
-        type: object
-        shape:
-          id:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: number
-                  checks: []
-                type: number
-                minValue: null
-                maxValue: null
-                isInt: false
-                isFinite: true
-                format: null
-            type: optional
-          tenantId:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-          rateLimit:
-            def:
-              type: number
-              checks: []
-            type: number
-            minValue: null
-            maxValue: null
-            isInt: false
-            isFinite: true
-            format: null
-          windowSize:
-            def:
-              type: number
-              checks: []
-            type: number
-            minValue: null
-            maxValue: null
-            isInt: false
-            isFinite: true
-            format: null
-          reason:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          createdAt:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          updatedAt:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-      type: object
     reconciliationFindingSchema:
       def:
         type: object
@@ -3946,33 +3699,6 @@ components:
             minLength: null
             maxLength: null
       type: object
-    redirectTargetSchema:
-      def:
-        type: string
-        checks:
-          - {}
-          - def:
-              type: custom
-              check: custom
-            type: custom
-      type: string
-      format: null
-      minLength: 1
-      maxLength: null
-    removeRateLimitOverrideBodySchema:
-      def:
-        type: object
-        shape:
-          reason:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 3
-            maxLength: null
-      type: object
     reportJobParamsSchema:
       def:
         type: object
@@ -3994,15 +3720,18 @@ components:
           trust_score_summary: trust_score_summary
           bond_audit: bond_audit
           attestation_export: attestation_export
+          top_talkers: top_talkers
       type: enum
       enum:
         trust_score_summary: trust_score_summary
         bond_audit: bond_audit
         attestation_export: attestation_export
+        top_talkers: top_talkers
       options:
         - trust_score_summary
         - bond_audit
         - attestation_export
+        - top_talkers
     resolveDisputeBodySchema:
       def:
         type: object
@@ -4085,161 +3814,6 @@ components:
             def:
               type: boolean
             type: boolean
-      type: object
-    setRateLimitOverrideBodySchema:
-      def:
-        type: object
-        shape:
-          tenantId:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 1
-            maxLength: null
-          rateLimit:
-            def:
-              type: number
-              checks:
-                - def:
-                    type: number
-                    check: number_format
-                    abort: false
-                    format: safeint
-                  type: number
-                  minValue: -9007199254740991
-                  maxValue: 9007199254740991
-                  isInt: true
-                  isFinite: true
-                  format: safeint
-                - {}
-            type: number
-            minValue: 1
-            maxValue: 9007199254740991
-            isInt: true
-            isFinite: true
-            format: safeint
-          windowSize:
-            def:
-              type: number
-              checks:
-                - def:
-                    type: number
-                    check: number_format
-                    abort: false
-                    format: safeint
-                  type: number
-                  minValue: -9007199254740991
-                  maxValue: 9007199254740991
-                  isInt: true
-                  isFinite: true
-                  format: safeint
-                - {}
-            type: number
-            minValue: 1
-            maxValue: 9007199254740991
-            isInt: true
-            isFinite: true
-            format: safeint
-          reason:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 3
-            maxLength: null
-      type: object
-    setRateLimitOverrideResponseSchema:
-      def:
-        type: object
-        shape:
-          success:
-            def:
-              type: boolean
-            type: boolean
-          data:
-            def:
-              type: object
-              shape:
-                id:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: number
-                        checks: []
-                      type: number
-                      minValue: null
-                      maxValue: null
-                      isInt: false
-                      isFinite: true
-                      format: null
-                  type: optional
-                tenantId:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                rateLimit:
-                  def:
-                    type: number
-                    checks: []
-                  type: number
-                  minValue: null
-                  maxValue: null
-                  isInt: false
-                  isFinite: true
-                  format: null
-                windowSize:
-                  def:
-                    type: number
-                    checks: []
-                  type: number
-                  minValue: null
-                  maxValue: null
-                  isInt: false
-                  isFinite: true
-                  format: null
-                reason:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                createdAt:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                updatedAt:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-            type: object
       type: object
     setTenantRolloutBodySchema:
       def:
@@ -5751,6 +5325,248 @@ components:
                   format: datetime
                   minLength: null
                   maxLength: null
+            type: object
+      type: object
+    topTalkerEntrySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          requestCount:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          percentage:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          lastRequestAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    topTalkersQuerySchema:
+      def:
+        type: object
+        shape:
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          windowMinutes:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 1440
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    topTalkersResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                windowStart:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowEnd:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowMinutes:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                totalRequests:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                topTalkers:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: object
+                        shape:
+                          tenantId:
+                            def:
+                              type: string
+                            type: string
+                            format: null
+                            minLength: null
+                            maxLength: null
+                          requestCount:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          percentage:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          lastRequestAt:
+                            def:
+                              type: optional
+                              innerType:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                            type: optional
+                      type: object
+                  type: array
+                  element:
+                    def:
+                      type: object
+                      shape:
+                        tenantId:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        requestCount:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        percentage:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        lastRequestAt:
+                          def:
+                            type: optional
+                            innerType:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                          type: optional
+                    type: object
             type: object
       type: object
     transactionsHistoryQuerySchema:
@@ -8758,86 +8574,33 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/FlagErrorResponse"
-  /api/admin/rate-limits/overrides:
+  /api/reports/top-talkers:
     get:
-      summary: List tenant rate-limit overrides
-      description: Lists all active tenant rate-limit overrides.
+      summary: Top talkers report
+      description: Returns the Top N tenants by request count in the access log over
+        the last hour (or specified windowMinutes).
       tags:
-        - Admin
-        - Rate Limits
+        - Reports
       security:
         - bearerAuth: []
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1440
+          required: false
+          name: windowMinutes
+          in: query
       responses:
         "200":
-          description: List of rate-limit overrides
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                  data:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: number
-                        tenantId:
-                          type: string
-                        rateLimit:
-                          type: number
-                        windowSize:
-                          type: number
-                        reason:
-                          type: string
-                        createdAt:
-                          type: string
-                        updatedAt:
-                          type: string
-                      required:
-                        - tenantId
-                        - rateLimit
-                        - windowSize
-                required:
-                  - success
-                  - data
-    post:
-      summary: Set tenant rate-limit override
-      description: Sets or updates a per-tenant rate-limit override. Mandates an audit
-        trail entry.
-      tags:
-        - Admin
-        - Rate Limits
-      security:
-        - bearerAuth: []
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                tenantId:
-                  type: string
-                  minLength: 1
-                rateLimit:
-                  type: integer
-                  minimum: 1
-                windowSize:
-                  type: integer
-                  minimum: 1
-                reason:
-                  type: string
-                  minLength: 3
-              required:
-                - tenantId
-                - rateLimit
-                - windowSize
-                - reason
-      responses:
-        "201":
-          description: Rate-limit override created or updated
+          description: Top talkers report generated successfully
           content:
             application/json:
               schema:
@@ -8848,29 +8611,42 @@ paths:
                   data:
                     type: object
                     properties:
-                      id:
+                      windowStart:
+                        type: string
+                      windowEnd:
+                        type: string
+                      windowMinutes:
                         type: number
-                      tenantId:
-                        type: string
-                      rateLimit:
+                      totalRequests:
                         type: number
-                      windowSize:
-                        type: number
-                      reason:
-                        type: string
-                      createdAt:
-                        type: string
-                      updatedAt:
-                        type: string
+                      topTalkers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            tenantId:
+                              type: string
+                            requestCount:
+                              type: number
+                            percentage:
+                              type: number
+                            lastRequestAt:
+                              type: string
+                          required:
+                            - tenantId
+                            - requestCount
+                            - percentage
                     required:
-                      - tenantId
-                      - rateLimit
-                      - windowSize
+                      - windowStart
+                      - windowEnd
+                      - windowMinutes
+                      - totalRequests
+                      - topTalkers
                 required:
                   - success
                   - data
-        "400":
-          description: Validation failure (missing reason, invalid limit, or bad inputs)
+        "401":
+          description: Missing or invalid bearer token
           content:
             application/json:
               schema:
@@ -8878,65 +8654,8 @@ paths:
                 properties:
                   error:
                     type: string
-                required:
-                  - error
-  /api/admin/rate-limits/overrides/{tenantId}:
-    delete:
-      summary: Remove tenant rate-limit override
-      description: Removes a per-tenant rate-limit override. Mandates an audit trail entry.
-      tags:
-        - Admin
-        - Rate Limits
-      security:
-        - bearerAuth: []
-      parameters:
-        - schema:
-            type: string
-          required: true
-          name: tenantId
-          in: path
-      requestBody:
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                reason:
-                  type: string
-                  minLength: 3
-              required:
-                - reason
-      responses:
-        "200":
-          description: Rate-limit override removed successfully
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  success:
-                    type: boolean
-                required:
-                  - success
-        "400":
-          description: Missing reason
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
+                  message:
                     type: string
                 required:
                   - error
-        "404":
-          description: Override not found
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                required:
-                  - error
+                  - message
