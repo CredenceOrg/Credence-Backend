@@ -3,6 +3,7 @@ import { LRUCache } from 'lru-cache'
 import { executeCacheOperation, createMetricsAdapter } from '../lib/timeoutExecutor.js'
 import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.js'
 import { logger } from '../utils/logger.js'
+import { singleflight } from '../lib/singleflight.js'
 
 export type RedisClient = RedisClientType
 
@@ -377,6 +378,55 @@ export class CacheService {
         error: error instanceof Error ? error.message : 'Unknown error' 
       }
     }
+  }
+
+  /**
+   * Get a value from cache or fetch it from origin — with cache-stampede
+   * protection via SingleFlight deduplication.
+   *
+   * When multiple concurrent callers request the same (namespace, key) and a
+   * cache miss occurs, only **one** origin call is made.  All other callers
+   * transparently wait for the same result.
+   *
+   * The origin fetch is double-checked: after acquiring the singleflight slot
+   * the method re-checks the cache in case another call already populated it,
+   * avoiding redundant origin calls on the tail-end of a race.
+   *
+   * @param namespace - Cache namespace (e.g., 'settlement', 'attestation')
+   * @param key       - Cache key within namespace
+   * @param fetchFn   - Origin fetch function, called on cache miss
+   * @param ttl       - Time to live in seconds for the cached value
+   * @returns The cached or freshly-fetched value
+   */
+  async getOrFetch<T>(
+    namespace: string,
+    key: string,
+    fetchFn: () => Promise<T>,
+    ttl: number,
+  ): Promise<T> {
+    // Fast path — L1 / L2 hit.
+    const cached = await this.get<T>(namespace, key)
+    if (cached !== null) return cached
+
+    // SingleFlight key scoped to the (namespace, key) pair.
+    const sfKey = `cache:${namespace}:${key}`
+
+    return singleflight.do<T>(sfKey, async () => {
+      // Double-check cache after acquiring the singleflight slot.
+      const rechecked = await this.get<T>(namespace, key)
+      if (rechecked !== null) return rechecked
+
+      const fresh = await fetchFn()
+      // Fire-and-forget the cache set — a failure here should not bubble up
+      // to callers (the value is still returned).
+      this.set(namespace, key, fresh, ttl).catch((err) => {
+        logger.error(
+          `getOrFetch: failed to cache namespace=${namespace} key=${key}:`,
+          err,
+        )
+      })
+      return fresh
+    })
   }
 
   /**

@@ -3,6 +3,7 @@
  */
 
 export { cache, redisConnection, CacheService, RedisConnection } from './redis.js';
+export { singleflight } from '../lib/singleflight.js';
 export {
   invalidateCache,
   invalidateMultiple,

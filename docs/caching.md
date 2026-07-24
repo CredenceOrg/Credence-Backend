@@ -66,6 +66,41 @@ Retrieve a cached value. Automatically parses JSON strings.
 
 **Returns:** Parsed value or `null` if not found
 
+#### `getOrFetch<T>(namespace: string, key: string, fetchFn: () => Promise<T>, ttl: number): Promise<T>`
+
+Read-through cache with **cache-stampede protection** via SingleFlight
+coalescing.  When multiple concurrent callers miss the cache for the same
+(namespace, key), only **one** origin call is made; all others transparently
+wait for the same result.
+
+**Parameters:**
+- `namespace` - Cache namespace
+- `key` - Key within namespace
+- `fetchFn` - Origin fetch function called on cache miss
+- `ttl` - Time-to-live in seconds for the cached value
+
+**Stampede-protection details:**
+1. Fast path: checks the cache — if hit, returns immediately.
+2. Acquires a SingleFlight slot keyed to `(namespace, key)`.
+3. Double-checks the cache after acquiring the slot (another caller may have
+   populated it while we waited).
+4. Calls `fetchFn` only if still a miss; stores the result in cache.
+5. All waiters share the same resolved value (or error).
+
+**Returns:** The cached or freshly-fetched value.
+
+**Example:**
+```ts
+import { cache } from '../cache/redis.js'
+
+const bond = await cache.getOrFetch(
+  'bond',
+  'id:42',
+  () => repository.findById(42),
+  300,
+)
+```
+
 #### `set<T>(namespace: string, key: string, value: T, ttl?: number): Promise<boolean>`
 
 Store a value in cache. Automatically JSON-serializes objects.
@@ -239,6 +274,52 @@ Key metrics to monitor:
 - **TLS encryption** - Enable Redis TLS for sensitive data
 - **Key naming** - Avoid sensitive data in cache keys
 - **Data sanitization** - Validate data before caching
+
+## Cache Stampede Protection (SingleFlight)
+
+A **cache stampede** (thundering herd) occurs when many concurrent requests
+miss the cache for the same key simultaneously, each triggering an expensive
+origin call. The `getOrFetch` method uses the `SingleFlight` pattern to
+prevent this.
+
+### How it Works
+
+The `SingleFlight` class (`src/lib/singleflight.ts`) guarantees that for a
+given deduplication key, only **one** async function executes at a time.
+If a second caller arrives while the first is still in-flight, it
+piggybacks on the same promise instead of starting a duplicate call.
+
+```
+Request A ──→ cache miss ──→ acquires slot ──→ fetchFn() ──→ all get result
+Request B ──→ cache miss ──→ waits on A  ──────────────────→ all get result
+Request C ──→ cache miss ──→ waits on A  ──────────────────→ all get result
+                                                          (only 1 origin call)
+```
+
+### Double-Check Pattern
+
+Inside the SingleFlight slot, `getOrFetch` re-checks the cache before
+calling the origin (`fetchFn`). This handles the edge case where two
+concurrent callers both miss the cache, but a previous SingleFlight
+call already populated it by the time the waiter acquires the slot.
+
+### When to Use
+
+- Expensive or slow origin calls (DB queries, external API calls, complex
+  computations)
+- High-read, low-write data accessed by multiple concurrent handlers
+- Any cache hot path where a miss triggers a noticeable load spike
+
+The `SingleFlight` primitive can also be used standalone for any
+problem that needs request coalescing:
+
+```ts
+import { singleflight } from '../lib/singleflight.js'
+
+const result = await singleflight.do('my-operation-key', async () => {
+  return await expensiveWork()
+})
+```
 
 ## Best Practices
 
