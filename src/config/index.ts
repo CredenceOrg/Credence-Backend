@@ -390,6 +390,20 @@ export const envSchema = z.object({
 
   // Metrics endpoint CIDR whitelist (comma-separated IPv4 CIDRs)
   METRICS_ALLOWED_CIDRS: z.string().optional(),
+
+  // Idempotency middleware
+  /** TTL in seconds for idempotency keys (default: 86400 = 24 hours). */
+  IDEMPOTENCY_TTL_SECONDS: z
+    .string()
+    .default('86400')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(604800)), // 1 s to 7 days
+  /** Interval in ms between idempotency key sweeper runs (default: 3600000 = 1 hour). */
+  IDEMPOTENCY_SWEEPER_INTERVAL_MS: z
+    .string()
+    .default('3600000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)), // minimum 1 minute
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -525,6 +539,12 @@ export interface Config {
     defaultLowCreditThreshold: number
   }
   metricsAllowedCidrs: string[] | undefined
+  idempotency: {
+    /** TTL in seconds for HTTP idempotency keys. Default: 86400 (24 h). */
+    ttlSeconds: number
+    /** Interval in ms between sweeper cleanup runs. Default: 3600000 (1 h). */
+    sweeperIntervalMs: number
+  }
 }
 
 function parseCostWeights(raw: string): Record<string, number> {
@@ -715,6 +735,10 @@ function mapEnvToConfig(env: Env): Config {
     metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
       ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)
       : undefined,
+    idempotency: {
+      ttlSeconds: env.IDEMPOTENCY_TTL_SECONDS,
+      sweeperIntervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
+    },
   }
 
   if (env.HORIZON_URL) {

@@ -29,6 +29,7 @@ import { logger } from './utils/logger.js'
 // Outbox imports
 import { OutboxJob } from "./jobs/outbox.js";
 import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
+import { IdempotencyKeySweeper } from "./jobs/idempotencyKeySweeper.js";
 
 app.use("/api/admin", createAdminRouter());
 app.use("/api/governance", governanceRouter);
@@ -45,6 +46,7 @@ let shutdownManager: GracefulShutdownManager | null = null;
 let wss: ReturnType<typeof createWsSubscriptionServer> | null = null;
 let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
 let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
+let idempotencyKeySweeper: IdempotencyKeySweeper | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -212,6 +214,19 @@ if (process.env.NODE_ENV !== "test") {
       }
     }
 
+    // Start Idempotency Key sweeper
+    try {
+      idempotencyKeySweeper = new IdempotencyKeySweeper(pool, {
+        intervalMs: config.idempotency.sweeperIntervalMs,
+        logger: logger.info,
+      });
+      idempotencyKeySweeper.start();
+      logger.info("[Main] Idempotency Key Sweeper started");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      logger.error(`Failed to start Idempotency Key Sweeper: ${message}`, error);
+    }
+
     // Start cache invalidation bus
     try {
       invalidationBus = getInvalidationBus();
@@ -235,6 +250,10 @@ if (process.env.NODE_ENV !== "test") {
         if (requestSnapshotsSweeper) {
           logger.info("[Main] Stopping Request Snapshots Sweeper");
           requestSnapshotsSweeper.stop();
+        }
+        if (idempotencyKeySweeper) {
+          logger.info("[Main] Stopping Idempotency Key Sweeper");
+          idempotencyKeySweeper.stop();
         }
         return originalShutdown(signal ?? "SIGTERM");
       };

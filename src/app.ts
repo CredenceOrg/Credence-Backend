@@ -34,6 +34,8 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
+import { idempotencyMiddleware } from "./middleware/idempotency.js";
+import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
 
 const app = express();
 
@@ -95,6 +97,23 @@ const healthProbes = createDefaultProbes();
 app.use("/api/health", createHealthRouter({ ...healthProbes, isReady }));
 
 app.use("/api", rateLimitMiddleware);
+
+// ── Idempotency middleware ────────────────────────────────────────────────────
+// Must run after body parsing (jsonBodyParser) and before route handlers so the
+// full request body is available when computing the payload hash.
+try {
+  const idempotencyConfig = validateConfig(process.env).idempotency
+  const idempotencyRepo = new IdempotencyRepository(pool)
+  app.use(
+    '/api',
+    idempotencyMiddleware(idempotencyRepo, {
+      expiresInSeconds: idempotencyConfig.ttlSeconds,
+    }),
+  )
+} catch {
+  // If config is invalid, idempotency middleware is safely skipped
+}
+// ─────────────────────────────────────────────────────────────────────────────
 
 try {
   const config = validateConfig(process.env)
