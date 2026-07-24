@@ -461,6 +461,7 @@ Each entry contains immutable `who/what/when/resource` fields:
 | `REVOKE_API_KEY` | API key revoked |
 | `CREATE_API_KEY` | New API key created |
 | `DELETE_USER` | User deleted |
+| `RELOAD_CONFIG` | Live configuration reloaded |
 
 ---
 
@@ -565,6 +566,43 @@ curl -X POST "${BASE_URL}/keys/revoke" \
   -H "Authorization: ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"userId": "verifier-user-1", "apiKey": "<VERIFIER_API_KEY_RAW>"}'
+
+### Reload Config
+
+**POST** `/api/admin/reload-config`
+
+Trigger a live reload of the validated config. This endpoint re-reads the secrets from the vault (`.env`), validates them, and applies them to the current runtime configuration without restarting the application.
+
+*Note: The older endpoint `POST /api/admin/refresh-secrets` is deprecated and acts as an alias to `/reload-config` for backwards compatibility.*
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/reload-config' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Returns a `ConfigValidationError` if the vault secrets fail schema validation. The current config remains untouched.
+- **401 Unauthorized** - Missing or invalid Bearer token.
+- **403 Forbidden** - User does not have the admin role.
+
+#### Audit Logging
+
+This action is logged with:
+- **Action**: `RELOAD_CONFIG`
+- **Details**: `{ "action": "reload-config" }`
+
+---
 
 ### Migrations Dry-Run
 

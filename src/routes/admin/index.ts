@@ -131,11 +131,7 @@ export function createAdminRouter(): Router {
     }
   });
 
-  /**
-   * POST /api/admin/refresh-secrets
-   * Reloads secrets from the vault (.env) without a restart.
-   */
-  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  const handleReloadConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -169,10 +165,10 @@ export function createAdminRouter(): Router {
         user.tenantId,
         user.id,
         user.email,
-        AuditAction.UPDATE_SETTINGS,
+        AuditAction.RELOAD_CONFIG,
         'system',
         undefined,
-        { action: 'refresh-secrets' },
+        { action: 'reload-config' },
         undefined,
         undefined,
         req.ip,
@@ -183,7 +179,20 @@ export function createAdminRouter(): Router {
     } catch (err) {
       next(err);
     }
-  });
+  };
+
+  /**
+   * POST /api/admin/reload-config
+   * Triggering a live reload of the validated config; audit-logged.
+   */
+  router.post('/reload-config', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   * @deprecated Use /reload-config instead.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, handleReloadConfig);
 
   /**
    * POST /api/admin/keys/revoke

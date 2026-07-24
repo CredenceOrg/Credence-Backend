@@ -809,6 +809,24 @@ registry.registerPath({
   },
 });
 
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/reload-config',
+  summary: 'Reload configuration',
+  description: 'Triggering a live reload of the validated config from the vault.',
+  tags: ['Admin'],
+  security: bearerAuth,
+  responses: {
+    200: {
+      description: 'Reload successful',
+      content: { 'application/json': { schema: z.object({ success: z.literal(true) }) } },
+    },
+    400: {
+      description: 'Config validation failed',
+      content: { 'application/json': { schema: z.object({ error: z.literal('ConfigValidationError'), message: z.string(), issues: z.array(z.any()) }) } },
+    },
+  },
+});
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
 const document = generator.generateDocument({
