@@ -8,4 +8,5 @@ export const READ_ONLY_HEADER = 'x-read-only'
 /** Default replay safety setting for handler side effects. */
 export const DEFAULT_REPLAY_SAFE = false
 
-
+/** Header used by clients to advertise their version, echoed back for debugging */
+export const HEADER_CLIENT_VERSION = 'X-Client-Version'

@@ -15,6 +15,16 @@
 
 ---
 
+## Client Versioning
+
+To aid debugging client deployments, you may optionally provide an `X-Client-Version` header in your requests. If provided, the API will echo this exact value back in the `X-Client-Version` response header, confirming what the API observed.
+
+```
+X-Client-Version: frontend-v1.2.3
+```
+
+---
+
 ## Authentication
 
 All endpoints are publicly readable. Supply an `X-API-Key` header to unlock
