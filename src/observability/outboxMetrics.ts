@@ -19,6 +19,8 @@ let _failedCounter: any | undefined = undefined
 let _pendingGauge: any | undefined = undefined
 let _leaseRenewCounter: any | undefined = undefined
 let _quarantineCounter: any | undefined = undefined
+let _leaderAcquiredCounter: any | undefined = undefined
+let _leaderLostCounter: any | undefined = undefined
 
 function getMetric(name: string, type: 'Counter' | 'Gauge', help: string, labelNames: string[] = []) {
     const prom = tryLoadPromClient()
@@ -91,6 +93,24 @@ export function incrementOutboxQuarantine(reason: string = 'unknown') {
     }
 }
 
+export function incrementOutboxLeaderAcquired() {
+    if (!_leaderAcquiredCounter) {
+        _leaderAcquiredCounter = getMetric('outbox_leader_acquired_total', 'Counter', 'Total number of times this instance acquired outbox leadership')
+    }
+    if (_leaderAcquiredCounter) {
+        try { _leaderAcquiredCounter.inc(1) } catch {}
+    }
+}
+
+export function incrementOutboxLeaderLost() {
+    if (!_leaderLostCounter) {
+        _leaderLostCounter = getMetric('outbox_leader_lost_total', 'Counter', 'Total number of times this instance lost outbox leadership')
+    }
+    if (_leaderLostCounter) {
+        try { _leaderLostCounter.inc(1) } catch {}
+    }
+}
+
 export function _resetOutboxMetricsCacheForTests(): void {
     const prom = tryLoadPromClient()
     if (prom) {
@@ -103,4 +123,6 @@ export function _resetOutboxMetricsCacheForTests(): void {
     _pendingGauge = undefined
     _leaseRenewCounter = undefined
     _quarantineCounter = undefined
+    _leaderAcquiredCounter = undefined
+    _leaderLostCounter = undefined
 }

@@ -181,7 +181,13 @@ if (process.env.NODE_ENV !== "test") {
     // Start Outbox Publisher job if enabled
     if (config.outbox.enabled) {
       try {
-        outboxJob = new OutboxJob(pool);
+        outboxJob = new OutboxJob(pool, {
+          leaderLease: {
+            enabled: config.outbox.leaderLease.enabled,
+            retryIntervalMs: config.outbox.leaderLease.retryIntervalMs,
+            heartbeatIntervalMs: config.outbox.leaderLease.heartbeatIntervalMs,
+          },
+        });
         await outboxJob.start();
         logger.info("[Main] Outbox Publisher started");
       } catch (error) {

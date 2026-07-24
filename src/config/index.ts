@@ -163,6 +163,22 @@ export const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().min(60000)),
 
+  // Outbox worker leadership lease (advisory-lock based)
+  OUTBOX_LEADER_LEASE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val) => val === 'true'),
+  OUTBOX_LEADER_LEASE_RETRY_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(60000)),
+  OUTBOX_LEADER_LEASE_HEARTBEAT_MS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(60000)),
+
   // Request snapshots retention
   REQUEST_SNAPSHOT_RETENTION_DAYS: z
     .string()
@@ -450,6 +466,11 @@ export interface Config {
     publishedRetentionDays: number
     failedRetentionDays: number
     cleanupIntervalMs: number
+    leaderLease: {
+      enabled: boolean
+      retryIntervalMs: number
+      heartbeatIntervalMs: number
+    }
   }
   requestSnapshots: {
     retentionDays: number
@@ -643,6 +664,11 @@ function mapEnvToConfig(env: Env): Config {
       publishedRetentionDays: env.OUTBOX_PUBLISHED_RETENTION_DAYS,
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
+      leaderLease: {
+        enabled: env.OUTBOX_LEADER_LEASE_ENABLED,
+        retryIntervalMs: env.OUTBOX_LEADER_LEASE_RETRY_MS,
+        heartbeatIntervalMs: env.OUTBOX_LEADER_LEASE_HEARTBEAT_MS,
+      },
     },
     requestSnapshots: {
       retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,
