@@ -2,6 +2,7 @@
 
 - OpenAPI spec: [`docs/openapi.yaml`](openapi.yaml)
 - Postman collection: [`docs/credence.postman_collection.json`](credence.postman_collection.json)
+- Pagination contract: [`docs/PAGINATION_CONTRACT.md`](PAGINATION_CONTRACT.md) — cursor format, page-size limits, and ordering guarantees
 
 ---
 
