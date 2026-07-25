@@ -595,6 +595,7 @@ For security policies, reporting, and architecture documentation:
 - **Rate Limiting Support & Operations**: See [docs/rate-limiting.md](docs/rate-limiting.md) for details on default tier rate limits, environment configuration, troubleshooting, and support FAQs.
 - **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
 - **Secret-Rotation Posture**: See [docs/SECRETS.md](docs/SECRETS.md) for where secrets live, rotation cadence, and blast radius of each credential type.
+- **Webhook Signature Operator Guide**: See [docs/WEBHOOK_SIGNING.md](docs/WEBHOOK_SIGNING.md) for HMAC-SHA256 signature generation, verification, replay tolerance, 24-hour secret rotation grace period, Express middleware, and troubleshooting runbook.
 
 ## Testing
 
