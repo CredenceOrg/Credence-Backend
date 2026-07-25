@@ -57,6 +57,7 @@ import { compressionMiddleware, compressionMetricsMiddleware } from './middlewar
 import { metricsMiddleware, register } from './middleware/metrics.js'
 import { createMembersRouter } from './routes/admin/member.ts'
 import { clientVersionEchoMiddleware } from './middleware/clientVersionEcho.js'
+import { requestAttemptEchoMiddleware } from './middleware/requestAttemptEcho.js'
 
 const app = express()
 
@@ -65,6 +66,7 @@ app.use(requestIdMiddleware)
 
 // Debugging echo
 app.use(clientVersionEchoMiddleware)
+app.use(requestAttemptEchoMiddleware)
 
 // Metrics endpoint for Prometheus
 app.get('/metrics', async (_req, res) => {

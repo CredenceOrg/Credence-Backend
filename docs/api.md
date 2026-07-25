@@ -23,6 +23,14 @@ To aid debugging client deployments, you may optionally provide an `X-Client-Ver
 X-Client-Version: frontend-v1.2.3
 ```
 
+## Retry Attempt Echo
+
+To help clients debug their retry loops, you may optionally provide an `x-request-attempt` header in your requests. If provided, the API will echo this exact value back in the `x-request-attempt` response header, confirming what attempt number the server observed.
+
+```
+x-request-attempt: 3
+```
+
 ---
 
 ## Authentication
