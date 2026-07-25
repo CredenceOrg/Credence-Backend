@@ -80,6 +80,8 @@ if (signature !== request.headers["x-webhook-signature"]) {
 }
 ```
 
+For full operator guidance on signature verification, replay window tolerances, 24-hour secret rotation grace periods, Express middleware usage, and failure troubleshooting, see **[WEBHOOK_SIGNING.md](WEBHOOK_SIGNING.md)**.
+
 ## Mutual TLS (mTLS) Support
 
 For enterprise subscribers requiring mutual TLS authentication, webhooks can be configured with client certificates and server certificate pinning.
