@@ -26,6 +26,7 @@
     "migrate:dev": "npm run build && npm run migrate",
     "migrate:dry-run": "npm run build && tsx scripts/migrate-dry-run.ts",
     "migrate:lint": "tsx src/migrations/linter.ts check",
+    "migrate:lint:ci": "tsx scripts/migration-lint-ci.ts",
     "migrate:preflight": "tsx src/migrations/linter.ts pre-flight",
     "migrate:template": "tsx src/migrations/linter.ts template",
     "migrate:safety": "tsx src/migrations/linter.ts check --strict",
