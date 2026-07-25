@@ -61,7 +61,7 @@ describe('validateConfig – valid environments', () => {
   })
 
   it('supports production NODE_ENV', () => {
-    const config = validateConfig(validEnv({ NODE_ENV: 'production' }))
+    const config = validateConfig(validEnv({ NODE_ENV: 'production', CORS_ORIGIN: 'https://app.credence.io' }))
     expect(config.nodeEnv).toBe('production')
   })
 
@@ -110,6 +110,17 @@ describe('validateConfig – valid environments', () => {
     expect(config.outboundHttp.retry.defaults.maxDelayMs).toBe(2000)
     expect(config.outboundHttp.retry.defaults.backoffMultiplier).toBe(2)
     expect(config.outboundHttp.retry.defaults.jitterStrategy).toBe('none')
+  })
+
+  it('defaults DB_POOL_IDLE_TIMEOUT_MS to 300 000 ms (5 minutes) when unset', () => {
+    // Ensures idle connections are evicted after 5 min by default (#724)
+    const config = validateConfig(validEnv())
+    expect(config.db.pool.idleTimeoutMillis).toBe(300_000)
+  })
+
+  it('accepts a custom DB_POOL_IDLE_TIMEOUT_MS value', () => {
+    const config = validateConfig(validEnv({ DB_POOL_IDLE_TIMEOUT_MS: '60000' }))
+    expect(config.db.pool.idleTimeoutMillis).toBe(60_000)
   })
 
   it('supports provider-specific outbound retry overrides', () => {
@@ -248,6 +259,12 @@ describe('validateConfig – invalid values', () => {
   it('rejects invalid HORIZON_URL when provided', () => {
     expect(() =>
       validateConfig(validEnv({ HORIZON_URL: 'not-a-url' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects wildcard CORS origin (*) when NODE_ENV is production', () => {
+    expect(() =>
+      validateConfig(validEnv({ NODE_ENV: 'production', CORS_ORIGIN: '*' })),
     ).toThrow(ConfigValidationError)
   })
 })

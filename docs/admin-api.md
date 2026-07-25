@@ -23,7 +23,7 @@ Authorization: Bearer <admin-api-key>
 Admin users must authenticate using their API key as a Bearer token:
 
 ```bash
-Authorization: Bearer admin-key-12345
+Authorization: Bearer <ADMIN_API_KEY_RAW>
 ```
 
 ### Authorization
@@ -76,7 +76,7 @@ List all users with pagination and optional filtering.
 
 ```bash
 curl -X GET 'http://localhost:3000/api/admin/users?limit=10&offset=0&role=verifier' \
-  -H "Authorization: Bearer admin-key-12345"
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
 ```
 
 #### Example Response (200 OK)
@@ -90,7 +90,7 @@ curl -X GET 'http://localhost:3000/api/admin/users?limit=10&offset=0&role=verifi
         "id": "verifier-user-1",
         "email": "verifier@credence.org",
         "role": "verifier",
-        "apiKey": "verifier-key-67890",
+        "apiKey": "<VERIFIER_API_KEY_RAW>",
         "createdAt": "2025-01-25T10:00:00.000Z",
         "lastActivity": "2026-02-25T12:30:45.123Z",
         "active": true
@@ -137,7 +137,7 @@ Assign or change a user's role. The user's previous role is replaced with the ne
 
 ```bash
 curl -X POST http://localhost:3000/api/admin/roles/assign \
-  -H "Authorization: Bearer admin-key-12345" \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "verifier-user-1",
@@ -155,7 +155,7 @@ curl -X POST http://localhost:3000/api/admin/roles/assign \
     "id": "verifier-user-1",
     "email": "verifier@credence.org",
     "role": "admin",
-    "apiKey": "verifier-key-67890",
+    "apiKey": "<VERIFIER_API_KEY_RAW>",
     "createdAt": "2025-01-25T10:00:00.000Z",
     "lastActivity": "2026-02-25T12:30:45.123Z",
     "active": true
@@ -204,11 +204,11 @@ Revoke an API key for a user and issue a new replacement key. The old key is inv
 
 ```bash
 curl -X POST http://localhost:3000/api/admin/keys/revoke \
-  -H "Authorization: Bearer admin-key-12345" \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
   -H "Content-Type: application/json" \
   -d '{
     "userId": "verifier-user-1",
-    "apiKey": "verifier-key-67890"
+    "apiKey": "<VERIFIER_API_KEY_RAW>"
   }'
 ```
 
@@ -243,6 +243,138 @@ This action is logged with:
 
 ---
 
+### POST /api/admin/replay-event
+
+Replay a single failed inbound event by id (passed in request body). Audit-logged.
+
+**Scope**: `admin:write`
+
+**Request body**:
+
+```json
+{
+  "id": "evt-uuid"
+}
+```
+
+**Example Request**:
+
+```bash
+curl -X POST http://localhost:3000/api/admin/replay-event \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"id":"evt-uuid"}'
+```
+
+**Example Response (200 OK)**
+
+```json
+{
+  "success": true,
+  "message": "Event successfully replayed"
+}
+```
+
+**Permissions**: Requires `admin` role.
+
+**Errors**: Returns 400 for validation errors (missing id, invalid fields), 404 if the event does not exist, 500 if replay fails.
+
+---
+
+### Replay Horizon Ledger Range
+
+**POST** `/api/admin/events/replay-range`
+
+Replay raw Horizon operations between two ledger sequence numbers (inclusive). This endpoint performs a best-effort mapping of operations to internal replay handlers (`bond_creation`, `withdrawal`, `attestation`) and invokes those handlers to re-process historical events. Use with caution; the operation is admin-gated and audit-logged.
+
+#### Request Body
+
+```json
+{
+  "fromLedger": 123456,
+  "toLedger": 123460
+}
+```
+
+#### Example Request
+
+```bash
+curl -X POST http://localhost:3000/api/admin/events/replay-range \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"fromLedger":123456,"toLedger":123460}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "data": {
+    "success": true,
+    "processed": 10,
+    "errors": 0
+  }
+}
+```
+
+#### Notes
+
+- The endpoint validates that `fromLedger <= toLedger` and that both are non-negative integers.
+- Processing is best-effort: operations that cannot be mapped to a known handler are skipped; handler failures are captured to the failed-events queue for later inspection.
+- All replay attempts are recorded in the audit log with action `REPLAY_LEDGER_RANGE`.
+
+
+### Issue Impersonation Token
+
+**POST** `/api/admin/impersonate`
+
+Issue a short-lived impersonation token for support/debug purposes. The token is persisted in the database and survives application restarts.
+
+#### Request Body
+
+```json
+{
+  "targetUserId": "user-uuid",
+  "reason": "Debugging customer issue #123",
+  "ttlSeconds": 900
+}
+```
+
+#### Request Parameters
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `targetUserId` | string | Yes | ID of the target user to impersonate |
+| `reason` | string | Yes | Mandatory justification for the audit trail |
+| `ttlSeconds` | number | No | Token lifetime in seconds (default: 900, max: 3600) |
+
+#### Example Response (201 Created)
+
+```json
+{
+  "success": true,
+  "data": {
+    "tokenId": "random-hex-string",
+    "targetUserId": "user-uuid",
+    "targetUserEmail": "user@example.com",
+    "expiresAt": "2026-02-25T12:45:00.000Z",
+    "ttlSeconds": 900
+  }
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Missing reason or user ID, or target user not found.
+- **403 Forbidden** - User does not have admin role.
+
+#### Lifecycle & Revocation
+
+Tokens automatically expire after their TTL. A background job permanently sweeps expired tokens from the database. Active tokens can be revoked early via **POST** `/api/admin/impersonate/:tokenId/revoke` (persisted as `revoked=true`).
+
+---
+
 ### Get Audit Logs
 
 **GET** `/api/admin/audit-logs`
@@ -269,7 +401,7 @@ Retrieve audit logs of admin actions with pagination and filtering.
 
 ```bash
 curl -X GET 'http://localhost:3000/api/admin/audit-logs?action=ASSIGN_ROLE&limit=20&offset=0' \
-  -H "Authorization: Bearer admin-key-12345"
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
 ```
 
 #### Example Response (200 OK)
@@ -367,6 +499,7 @@ Each entry contains immutable `who/what/when/resource` fields:
 | `REVOKE_API_KEY` | API key revoked |
 | `CREATE_API_KEY` | New API key created |
 | `DELETE_USER` | User deleted |
+| `RELOAD_CONFIG` | Live configuration reloaded |
 
 ---
 
@@ -453,7 +586,7 @@ The admin API includes comprehensive test coverage:
 
 ```bash
 #!/bin/bash
-ADMIN_TOKEN="Bearer admin-key-12345"
+ADMIN_TOKEN="Bearer <ADMIN_API_KEY_RAW>"
 BASE_URL="http://localhost:3000/api/admin"
 
 # 1. List all verifiers
@@ -470,16 +603,97 @@ curl -X POST "${BASE_URL}/roles/assign" \
 curl -X POST "${BASE_URL}/keys/revoke" \
   -H "Authorization: ${ADMIN_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"userId": "verifier-user-1", "apiKey": "verifier-key-67890"}'
+  -d '{"userId": "verifier-user-1", "apiKey": "<VERIFIER_API_KEY_RAW>"}'
 
-# 4. Review audit logs
-curl -X GET "${BASE_URL}/audit-logs?adminId=admin-user-1" \
-  -H "Authorization: ${ADMIN_TOKEN}"
+### Reload Config
+
+**POST** `/api/admin/reload-config`
+
+Trigger a live reload of the validated config. This endpoint re-reads the secrets from the vault (`.env`), validates them, and applies them to the current runtime configuration without restarting the application.
+
+*Note: The older endpoint `POST /api/admin/refresh-secrets` is deprecated and acts as an alias to `/reload-config` for backwards compatibility.*
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/reload-config' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Returns a `ConfigValidationError` if the vault secrets fail schema validation. The current config remains untouched.
+- **401 Unauthorized** - Missing or invalid Bearer token.
+- **403 Forbidden** - User does not have the admin role.
+
+#### Audit Logging
+
+This action is logged with:
+- **Action**: `RELOAD_CONFIG`
+- **Details**: `{ "action": "reload-config" }`
+
+---
+
+### Migrations Dry-Run
+
+**GET / POST** `/api/admin/migrations/dry-run`
+
+Previews the SQL statements that would be executed by the next pending database migration (`up`) without running them against the database. Useful for operators and engineers reviewing pending schema changes.
+
+#### Parameters (Query for GET, JSON Body for POST)
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `count` | number | No | Number of pending migrations to preview |
+| `file` | string | No | Specific migration filename to preview |
+| `skipPreflight` | boolean / string (`"true"`/`"false"`) | No | Skip preflight guardrail checks |
+
+#### Example Request (GET)
+
+```bash
+curl -X GET 'http://localhost:3000/api/admin/migrations/dry-run?count=1' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
+```
+
+#### Example Request (POST)
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/migrations/dry-run' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"count": 1, "skipPreflight": true}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "data": {
+    "applied": [
+      "001_initial_schema.ts"
+    ],
+    "sql": [
+      "CREATE TABLE IF NOT EXISTS identities (...);"
+    ],
+    "sqlText": "CREATE TABLE IF NOT EXISTS identities (...);",
+    "count": 1
+  }
+}
 ```
 
 ---
 
 ## Troubleshooting
+
 
 ### Common Issues
 

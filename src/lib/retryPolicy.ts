@@ -1,4 +1,4 @@
-export type RetryJitterStrategy = 'none' | 'full' | 'equal'
+export type RetryJitterStrategy = 'none' | 'full' | 'equal' | 'decorrelated'
 
 export interface RetryPolicy {
   maxAttempts: number
@@ -93,6 +93,7 @@ export function getBackoffDelayMs(
   policy: RetryPolicy,
   attempt: number,
   randomFn: () => number = Math.random,
+  previousDelayMs?: number,
 ): number {
   const boundedAttempt = Math.max(1, Math.floor(attempt))
   const exponentialDelay =
@@ -106,6 +107,12 @@ export function getBackoffDelayMs(
   if (policy.jitterStrategy === 'equal') {
     const half = cappedDelay / 2
     return Math.floor(half + randomFn() * half)
+  }
+
+  if (policy.jitterStrategy === 'decorrelated') {
+    const prev = previousDelayMs ?? policy.baseDelayMs
+    const delay = Math.floor(policy.baseDelayMs + randomFn() * (prev * 3 - policy.baseDelayMs))
+    return Math.min(cappedDelay, delay)
   }
 
   return Math.floor(cappedDelay)

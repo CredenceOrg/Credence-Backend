@@ -1,18 +1,7 @@
-/**
- * DataRetentionJob
- *
- * Enforces org-level data retention by pruning records that exceed their TTL
- * from each configured entity table.  The job supports:
- *
- *   - Per-entity configurable TTL (0 = keep forever)
- *   - Dry-run mode: logs what *would* be deleted without mutating the DB
- *   - Structured audit output per run (entity, count, dryRun flag)
- *   - Batch limits to avoid locking large tables
- */
-
 import type { RetentionConfig } from '../config/retention.js'
 import { RetentionRepository } from '../repositories/retentionRepository.js'
 import type { Queryable } from '../db/repositories/queryable.js'
+import type { EvidenceStorageService } from '../services/evidence/storage.js'
 
 export interface RetentionEntityAudit {
   entity: string
@@ -39,6 +28,7 @@ export class DataRetentionJob {
     private readonly db: Queryable,
     private readonly config: RetentionConfig,
     logger?: (msg: string) => void,
+    private readonly evidenceService?: EvidenceStorageService,
   ) {
     this.repo = new RetentionRepository(db, config.dryRun)
     this.logger = logger ?? (() => {})
@@ -82,6 +72,10 @@ export class DataRetentionJob {
         () => this.repo.countExpiredOutboxEvents(entities.outboxEvents.ttlDays),
         () => this.repo.deleteExpiredOutboxEvents(entities.outboxEvents.ttlDays, batchLimit),
       ),
+      this.processEvidenceEntity(
+        entities.evidence.ttlDays,
+        batchLimit,
+      ),
     ])
 
     const totalDeleted = audits.reduce((sum, a) => sum + a.deletedCount, 0)
@@ -124,5 +118,69 @@ export class DataRetentionJob {
     }
 
     return { entity: name, expiredCount, deletedCount, ttlDays, dryRun }
+  }
+
+  /**
+   * Evidence is handled specially: instead of a plain SQL DELETE, it performs
+   * crypto-shred (zeroizes the per-row DEK + encrypted blob), writes a signed
+   * proof-of-erasure, and then soft-deletes the metadata row.
+   *
+   * Edge cases handled:
+   *  - legal hold flag → skipped
+   *  - already shredded → idempotent (counted but skipped)
+   *  - dry run → counted but no mutation
+   *  - ttlDays === 0 → skipped
+   */
+  private async processEvidenceEntity(
+    ttlDays: number,
+    batchLimit: number,
+  ): Promise<RetentionEntityAudit> {
+    if (ttlDays === 0) {
+      this.logger(`[retention] evidence — ttlDays=0, skipping`)
+      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays: 0, dryRun: this.config.dryRun }
+    }
+
+    // Count expired evidence (ignoring legal hold, already shredded, already deleted)
+    const { expiredCount } = await this.repo.countExpiredEvidence(ttlDays)
+
+    this.logger(
+      `[retention] evidence — ttlDays=${ttlDays} expiredCount=${expiredCount}${this.config.dryRun ? ' (dry-run)' : ''}`,
+    )
+
+    if (expiredCount === 0) {
+      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays, dryRun: this.config.dryRun }
+    }
+
+    // Dry-run: count but don't shred
+    if (this.config.dryRun || !this.evidenceService) {
+      if (!this.evidenceService) {
+        this.logger('[retention] evidence — no EvidenceStorageService provided, skipping shred')
+      }
+      return { entity: 'evidence', expiredCount, deletedCount: 0, ttlDays, dryRun: this.config.dryRun }
+    }
+
+    // Perform crypto-shred via evidence service
+    const expiredIds = this.evidenceService.getExpiredEvidenceIds(ttlDays)
+    let shreddedCount = 0
+
+    for (const id of expiredIds.slice(0, batchLimit)) {
+      try {
+        const result = await this.evidenceService.cryptoShredEvidence(id, 'RETENTION_JOB')
+        this.logger(`[retention] evidence — crypto-shredded ${id} proof=${result.proofJwt.slice(0, 40)}...`)
+        shreddedCount++
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.logger(`[retention] evidence — failed to shred ${id}: ${message}`)
+      }
+    }
+
+    // Soft-delete the metadata via repository
+    if (shreddedCount > 0) {
+      await this.repo.deleteExpiredEvidence(ttlDays, batchLimit)
+    }
+
+    this.logger(`[retention] evidence — shredded ${shreddedCount} records`)
+
+    return { entity: 'evidence', expiredCount, deletedCount: shreddedCount, ttlDays, dryRun: false }
   }
 }

@@ -3,9 +3,9 @@
  * Ensures cache consistency after attestation score updates.
  */
 
-import { AttestationsRepository, Attestation } from '../db/repositories/attestationsRepository.js'
+import { AttestationsRepository, Attestation, type AttestationPage, type ListAttestationsPageOptions, type CursorPaginationOptions, type AttestationCursorPage } from '../db/repositories/attestationsRepository.js'
 import { cache } from '../cache/redis.js'
-import { invalidateCache, createCacheKey } from '../cache/invalidation.js'
+import { createCacheKey, invalidateCache } from '../cache/invalidation.js'
 
 const ATTESTATION_CACHE_TTL = 300 // 5 minutes
 
@@ -59,6 +59,54 @@ export class AttestationCacheService {
   }
 
   /**
+   * Get one subject-address page with read-through caching.
+   */
+  async getAttestationsBySubjectPage(
+    subjectAddress: string,
+    options: ListAttestationsPageOptions
+  ): Promise<AttestationPage> {
+    const cacheKey = createCacheKey('subject', subjectAddress, 'page', options.offset, options.limit)
+    const cached = await cache.get<AttestationPage>('attestation', cacheKey)
+
+    if (cached) {
+      return {
+        ...cached,
+        attestations: cached.attestations.map(a => ({
+          ...a,
+          createdAt: new Date(a.createdAt)
+        }))
+      }
+    }
+
+    const page = await this.repository.listBySubjectPage(subjectAddress, options)
+    await cache.set('attestation', cacheKey, page, ATTESTATION_CACHE_TTL)
+
+    return page
+  }
+
+  /**
+   * Get one subject-address page with cursor-based pagination.
+   * Cursor-based pagination doesn't cache by offset since cursors are opaque.
+   */
+  async getAttestationsBySubjectPaginated(
+    subjectAddress: string,
+    options: CursorPaginationOptions
+  ): Promise<AttestationCursorPage> {
+    // For cursor-based pagination, we skip caching to avoid invalidation complexity
+    // Cursors are opaque and not tied to page numbers, so caching by cursor would be inefficient
+    const page = await this.repository.listBySubjectPaginated(subjectAddress, options)
+    
+    return {
+      attestations: page.attestations.map(a => ({
+        ...a,
+        createdAt: new Date(a.createdAt)
+      })),
+      hasMore: page.hasMore,
+    }
+  }
+
+
+  /**
    * Get attestations by bond ID with caching.
    */
   async getAttestationsByBond(bondId: number): Promise<Attestation[]> {
@@ -107,13 +155,19 @@ export class AttestationCacheService {
    */
   async createAttestation(input: Parameters<AttestationsRepository['create']>[0]): Promise<Attestation> {
     const attestation = await this.repository.create(input)
-    
-    // Invalidate subject and bond-based caches since lists changed
-    await Promise.all([
-      invalidateCache('attestation', createCacheKey('subject', attestation.subjectAddress)),
-      invalidateCache('attestation', createCacheKey('bond', attestation.bondId))
-    ])
+    await this.invalidateForAttestation(attestation)
     
     return attestation
+  }
+
+  /**
+   * Invalidate all attestation list caches after a write.
+   */
+  async invalidateForAttestation(attestation: Attestation): Promise<void> {
+    await Promise.all([
+      invalidateCache('attestation', createCacheKey('subject', attestation.subjectAddress)),
+      invalidateCache('attestation', createCacheKey('bond', attestation.bondId)),
+      cache.clearNamespace('attestation')
+    ])
   }
 }

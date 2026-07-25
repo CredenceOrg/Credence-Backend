@@ -50,9 +50,27 @@ The transactional outbox pattern solves this by:
 
 ## Components
 
+## Publish lifecycle (authoritative)
+
+> This section is written to match the exact implementation in:
+> - `src/db/outbox/emitter.ts` (emit-in-transaction contract)
+> - `src/db/outbox/repository.ts` (atomic create/claim/mark + backoff + leasing)
+> - `src/db/outbox/publisher.ts` (publisher loop)
+
+### Emit contract (atomicity with business writes)
+
+- `OutboxEventEmitter.emit(db, event)` calls `OutboxRepository.create(db, ...)` using the exact `db: Queryable` passed by the caller.
+
+- `create()` performs a single `INSERT INTO event_outbox ...` with initial `status='pending'`.
+- Because both the business write and the outbox insert use the same `db` client/transaction (`Queryable`), the outbox row is persisted **only if the surrounding transaction commits**.
+
+
 ### 1. Outbox Table (`event_outbox`)
 
+**Source of truth:** `src/db/outbox/schema.ts` + `src/db/outbox/types.ts`
+
 Stores domain events with metadata:
+
 
 - `id`: Unique event identifier
 - `aggregate_type`: Type of aggregate (e.g., "bond", "identity")
@@ -198,23 +216,134 @@ Old events are automatically cleaned up based on retention policy:
 
 Backoff and dead-letter
 
-- When a publish attempt fails, the repository increments `retry_count` and sets `next_attempt_at` to implement exponential backoff. The formula is:
+- When a publish attempt fails, the publisher calls `OutboxRepository.markFailed(eventId, errorMessage)`.
 
-  next_attempt_at = NOW() + 2^(retry_count + 1) seconds
+- `markFailed()` always increments `retry_count` and sets:
+  - `error_message = <last error>`
+  - `consumer_id = NULL` and `lease_expires_at = NULL` (event is no longer owned)
+  - `next_attempt_at = NULL` initially
 
-  (e.g., first retry waits 2s, next 4s, then 8s, etc.)
+- If the failure does **not** exhaust retries (`retryCount < max_retries` in the code path), it then sets backoff in two steps:
 
-- When `retry_count + 1 >= max_retries`, the event transitions to `dead_letter` (terminal state) and `processed_at` is set.
+  - `delaySeconds = Math.pow(2, retryCount)`
+  - `next_attempt_at = NOW() + (delaySeconds || ' seconds')::interval`
 
-- Claiming (`claimEvents`) will only select events whose `next_attempt_at` is NULL or <= NOW(), ensuring not-yet-due events are skipped. Ordering per-aggregate is preserved among due events.
+- If retries are exhausted (`retry_count + 1 >= max_retries` in the SQL CASE), the row transitions to the terminal state:
+  - `status = 'dead_letter'`
+  - `processed_at = NOW()`
+  - and the event remains in `dead_letter` until cleanup.
 
-Metrics
+- Claiming (`OutboxRepository.claimEvents`) will only select rows whose backoff window is open:
+  - `next_attempt_at IS NULL OR next_attempt_at <= NOW()`
 
-- When an event reaches `dead_letter`, the publisher emits a Prometheus counter `outbox_dead_letter_total{error_code}` if `prom-client` is available.
+- Crash recovery via leasing:
+  - rows in `status='processing'` are reclaimable when `lease_expires_at IS NULL OR lease_expires_at < NOW()`.
 
-This prevents unbounded table growth while maintaining audit trail for recent events.
+- Ordering:
+  - within a publisher batch, `OutboxPublisher` groups claimed events by `aggregateType:aggregateId` and processes each aggregate group sequentially.
+
+## Publisher loop (lease → publish → ack/fail)
+
+### State machine (exact status values)
+
+```mermaid
+stateDiagram-v2
+  [*] --> pending
+  pending --> processing: claimEvents()
+  processing --> published: publish ok → markPublished()
+  processing --> pending: publish failed & retries remain → markFailed()
+  pending --> processing: next_attempt_at <= NOW() (re-claimed)
+  processing --> dead_letter: publish failed & retries exhausted → markFailed()
+  dead_letter --> [*]: cleanup
+```
+
+### Lease acquisition and claim
+
+- The publisher uses a *consumer lease*:
+  - `consumer_id` is set when claiming.
+  - `lease_expires_at = NOW() + leaseSeconds`.
+- Claim is crash-safe:
+  - rows with `status='processing'` are reclaimable when `lease_expires_at IS NULL OR lease_expires_at < NOW()`.
+
+### Backoff / retry eligibility
+
+- Retrying is controlled by `next_attempt_at`:
+  - claim selects rows where `next_attempt_at IS NULL OR next_attempt_at <= NOW()`.
+- On failure, `OutboxRepository.markFailed()` clears ownership/lease and re-schedules via `next_attempt_at` (or moves to `dead_letter` when exhausted).
+
+### Sequence diagram (emit → claim → publish → ack/fail)
+
+```mermaid
+sequenceDiagram
+  participant B as Business transaction
+  participant E as OutboxEventEmitter
+  participant R as OutboxRepository
+  participant P as OutboxPublisher
+  participant W as WebhookEventPublisher
+  participant S as WebhookService
+
+  B->>E: emit(dbTx, event)
+  E->>R: create(dbTx, {status: pending, ...})
+  R-->>E: outbox id
+  E-->>B: id
+  B-->>B: COMMIT
+
+  loop publisher poll
+    P->>R: claimEvents(pool, consumerId, batchSize, leaseSeconds)
+    R-->>P: claimed events (status=processing, consumer_id, lease_expires_at)
+
+    P->>W: publish(event)
+    W->>S: emit(webhookEventType, payload)
+    alt publish success
+      S-->>W: ok
+      W-->>P: ok
+      P->>R: markPublished(event.id)
+      R-->>P: status=published, processed_at=NOW()
+    else publish failure
+      S-->>W: error
+      P->>R: markFailed(event.id, errorMessage)
+      R-->>P: status=pending (with next_attempt_at) OR dead_letter (processed_at=NOW())
+    end
+  end
+```
+
+## Metrics (exact)
+
+
+The publisher conditionally emits these Prometheus metrics (only if `prom-client` is available):
+
+- `outbox_dead_letter_total{error_code}`
+  - incremented when `markFailed()` moves the row to `dead_letter`
+  - `error_code` is derived from the first whitespace-delimited token of `errorMessage`, normalized to `[A-Z0-9_]` and truncated to 50 chars.
+
+- `outbox_published_total{aggregate_type}`
+  - incremented after `repository.markPublished()`.
+
+- `outbox_failed_total{aggregate_type}`
+  - incremented on any publish exception (before `markFailed()`).
+
+- `outbox_pending_gauge`
+  - set by `OutboxPublisher.scrapeMetrics()` from `repository.getStats().pending`.
+
+- `outbox_lease_renew_total`
+  - incremented when `renewLease()` successfully renews leases.
+
+- `outbox_quarantine_total{reason}`
+  - incremented when the publisher routes a “poison pill” event to outbox quarantine (reasons are the exact string union: `malformed_json | schema_invalid | oversized_payload | unknown_event_type`).
+
+
+## DLQ and quarantine notes
+
+- Outbox terminal failure is represented by `event_outbox.status = 'dead_letter'`.
+- The outbox publisher also has a separate **quarantine** mechanism (`outbox_quarantine`) for “poison pill” events that cannot be published due to:
+  - `malformed_json`
+  - `schema_invalid`
+  - `oversized_payload`
+  - `unknown_event_type`
+- Webhook delivery failures are stored in the webhook DLQ table `webhook_dlq` via `src/services/webhooks/postgresDlqStore.ts`.
 
 ## Monitoring
+
 
 Get outbox statistics:
 

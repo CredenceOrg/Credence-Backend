@@ -6,7 +6,7 @@ import { createMembersRouter } from '../../src/routes/admin/member.js'
 // ---- Mock middleware ----
 vi.mock('../../src/middleware/auth.ts', () => ({
   requireUserAuth: (req: Request, _res: Response, next: NextFunction) => {
-    (req as any).user = { id: 'admin-1', email: 'admin@test.com' }
+    (req as any).user = { id: 'admin-1', email: 'admin@test.com', tenantId: 'tenant-1' }
     next()
   },
   requireAdminRole: (_req: Request, _res: Response, next: NextFunction) => next(),
@@ -22,7 +22,7 @@ const mockService = {
 }
 
 vi.mock('../../src/services/members/service.ts', () => ({
-  MemberService: vi.fn().mockImplementation(() => mockService),
+  MemberService: vi.fn().mockImplementation(function() { return mockService }),
 }))
 
 // ---- Mock pagination ----
@@ -82,6 +82,7 @@ describe('Members Router', () => {
     expect(res.status).toBe(200)
     expect(res.body.success).toBe(true)
     expect(mockService.listMembers).toHaveBeenCalledWith(
+      'tenant-1',
       'admin-1',
       'admin@test.com',
       'org-1',
@@ -91,11 +92,11 @@ describe('Members Router', () => {
   })
 
   it('should return 400 for invalid pagination', async () => {
-    const { parsePaginationParams } = await import('../../src/lib/pagination.ts')
+    const { parsePaginationParams, PaginationValidationError } = await import('../../src/lib/pagination.ts')
     ;(parsePaginationParams as any).mockImplementationOnce(() => {
-      throw new (class extends Error {
-        details = {}
-      })()
+      const err = new PaginationValidationError('Invalid')
+      err.details = {} as any
+      throw err
     })
 
     const res = await request(setup()).get('/api/admin/orgs/org-1/members')
@@ -144,6 +145,15 @@ describe('Members Router', () => {
     expect(res.status).toBe(400)
   })
 
+  it('should return 400 for unknown fields in invite request', async () => {
+    const res = await request(setup())
+      .post('/api/admin/orgs/org-1/members')
+      .send({ userId: 'u1', email: 'a@test.com', role: 'admin', maliciousField: 'attack' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
+  })
+
   it('should return 409 if member already exists', async () => {
     mockService.inviteMember.mockRejectedValue(
       new Error('already active')
@@ -178,6 +188,15 @@ describe('Members Router', () => {
       .send({ role: 'invalid' })
 
     expect(res.status).toBe(400)
+  })
+
+  it('should return 400 for unknown fields in update role request', async () => {
+    const res = await request(setup())
+      .patch('/api/admin/orgs/org-1/members/m1')
+      .send({ role: 'admin', maliciousField: 'attack' })
+
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
   it('should return 404 if member not found on update', async () => {
@@ -304,6 +323,7 @@ describe('Members Router', () => {
       .delete('/api/admin/orgs/org-1/members/m1')
 
     expect(mockService.deleteMember).toHaveBeenCalledWith(
+      'tenant-1',
       'admin-1',
       'admin@test.com',
       { memberId: 'm1' }
@@ -320,6 +340,7 @@ describe('Members Router', () => {
       .post('/api/admin/orgs/org-1/members/m1/restore')
 
     expect(mockService.restoreMember).toHaveBeenCalledWith(
+      'tenant-1',
       'admin-1',
       'admin@test.com',
       { memberId: 'm1' }

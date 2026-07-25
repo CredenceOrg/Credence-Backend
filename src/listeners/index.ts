@@ -1,3 +1,5 @@
+import { horizonWithdrawalListener } from './horizonWithdrawalEvents.js'
+
 export {
   IdentityStateSync,
   createIdentityStateSync,
@@ -24,3 +26,7 @@ export {
   type ValidationSuccess,
   type ValidationFailure,
 } from './messageValidator.js'
+
+export async function stop(): Promise<void> {
+  await horizonWithdrawalListener.stop()
+}

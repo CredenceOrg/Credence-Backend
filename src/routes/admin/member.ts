@@ -14,7 +14,7 @@
  *  POST   /api/admin/orgs/:orgId/members/:memberId/restore  Restore a deleted member
  */
 
-import { Router, Request, Response } from 'express'
+import { Router, Request, Response, NextFunction } from 'express'
 import {
   AuthenticatedRequest,
   requireUserAuth,
@@ -25,6 +25,13 @@ import {
   buildPaginationMeta,
   PaginationValidationError,
 } from '../../lib/pagination.js'
+import { validate } from '../../middleware/validate.js'
+import {
+  inviteMemberBodySchema,
+  updateMemberRoleBodySchema,
+  type InviteMemberBody,
+  type UpdateMemberRoleBody,
+} from '../../schemas/index.js'
 import { pool } from '../../db/pool.js'
 import { auditLogService } from '../../services/audit/index.js'
 import type { MemberRole } from '../../services/members/types.js'
@@ -38,7 +45,7 @@ function createMemberService(): MemberService {
 }
 
 export function createMembersRouter(): Router {
-  const router = Router() 
+  const router = Router({ mergeParams: true }) 
   const memberService = createMemberService()
 
   // ── GET /api/orgs/:orgId/members ────────────────────────────────────
@@ -55,10 +62,10 @@ export function createMembersRouter(): Router {
    * @example
    * ```bash
    * curl -X GET 'http://localhost:3000/api/admin/orgs/org-1/members?limit=20' \
-   *   -H "Authorization: Bearer admin-key-12345"
+   *   -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
    * ```
    */
-  router.get('/', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
+  router.get('/', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const { orgId } = req.params
@@ -98,10 +105,7 @@ export function createMembersRouter(): Router {
         },
       })
     } catch (err) {
-      res.status(500).json({
-        error: 'InternalError',
-        message: err instanceof Error ? err.message : 'Unknown error',
-      })
+      next(err)
     }
   })
 
@@ -119,28 +123,22 @@ export function createMembersRouter(): Router {
    * @example
    * ```bash
    * curl -X POST http://localhost:3000/api/admin/orgs/org-1/members \
-   *   -H "Authorization: Bearer admin-key-12345" \
+   *   -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
    *   -H "Content-Type: application/json" \
    *   -d '{"userId":"user-99","email":"alice@example.com","role":"member"}'
    * ```
    */
-  router.post('/', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
-    try {
-      const authReq = req as AuthenticatedRequest
-      const { orgId } = req.params
-      const { userId, email, role } = req.body as {
-        userId?: string
-        email?: string
-        role?: string
-      }
+  router.post(
+    '/',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: inviteMemberBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const { orgId } = req.params
+        const { userId, email, role } = req.validated!.body as InviteMemberBody
 
-      if (!userId || !email) {
-        res.status(400).json({
-          error: 'InvalidRequest',
-          message: 'Missing required fields: userId, email',
-        })
-        return
-      }
 
       if (role && !VALID_MEMBER_ROLES.includes(role as MemberRole)) {
         res.status(400).json({
@@ -174,19 +172,17 @@ export function createMembersRouter(): Router {
    *
    * @body {string} role - New role: 'owner' | 'admin' | 'member'
    */
-  router.patch('/:memberId', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
-    try {
-      const authReq = req as AuthenticatedRequest
-      const { memberId } = req.params
-      const { role } = req.body as { role?: string }
+  router.patch(
+    '/:memberId',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: updateMemberRoleBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const { memberId } = req.params
+        const { role } = req.validated!.body as UpdateMemberRoleBody
 
-      if (!role || !VALID_MEMBER_ROLES.includes(role as MemberRole)) {
-        res.status(400).json({
-          error: 'InvalidRequest',
-          message: `Invalid or missing role. Must be one of: ${VALID_MEMBER_ROLES.join(', ')}`,
-        })
-        return
-      }
 
       const result = await memberService.updateMemberRole(
         authReq.user!.tenantId,
@@ -214,7 +210,7 @@ export function createMembersRouter(): Router {
    * are set.  The member can be restored via the restore endpoint.
    * After deletion the same user can be re-invited (new row, new membership).
    */
-  router.delete('/:memberId', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
+  router.delete('/:memberId', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const { memberId } = req.params
@@ -245,7 +241,7 @@ export function createMembersRouter(): Router {
    * (org, user) pair — use the existing membership instead.
    * Returns 404 if the member ID is unknown or the member was never deleted.
    */
-  router.post('/:memberId/restore', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
+  router.post('/:memberId/restore', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const { memberId } = req.params

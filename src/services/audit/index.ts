@@ -4,18 +4,41 @@ import {
   PostgresAuditLogsRepository,
   type AuditLogRepository,
 } from '../../db/repositories/auditLogsRepository.js'
-import type { AuditLogEntry, AuditLogFilters, AuditLogInput, AuditStatus } from './types.js'
+import {
+  InMemoryAuditChainVerificationRepository,
+  PostgresAuditChainVerificationRepository,
+  type AuditChainVerificationRepository,
+} from '../../db/repositories/auditChainVerificationRepository.js'
+import { toChainVerificationState } from './chainStatus.js'
+import type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogFilters,
+  AuditLogInput,
+  AuditStatus,
+  ChainVerificationResult,
+} from './types.js'
 import { AuditAction } from './types.js'
 
 /**
- * Audit log service for tracking admin actions
- * In production, this would write to a database or centralized logging system
+ * Audit log service for tracking admin actions.
+ *
+ * All entries are hash-chained: each row stores the SHA-256 of the preceding row
+ * so that any tampering (mutation or deletion) is detectable by walking the chain.
+ *
+ * In production, this would write to a database or centralized logging system.
  */
 export class AuditLogService {
-  constructor(private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository()) {}
+  constructor(
+    private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository(),
+    private readonly chainStatusRepository: AuditChainVerificationRepository = new InMemoryAuditChainVerificationRepository(),
+  ) {}
 
   /**
-   * Log an admin action
+   * Log an admin action.
+   *
+   * The underlying repository computes the hash chain (prev_hash + row_hash)
+   * inside the same transaction as the INSERT, so the chain is always consistent.
    * 
    * @param tenantId - Tenant ID for multi-tenant isolation (required)
    * @param adminId - ID of the admin performing the action
@@ -27,7 +50,7 @@ export class AuditLogService {
    * @param status - Whether the action succeeded or failed
    * @param errorMessage - Error message if action failed
    * @param ipAddress - IP address of the requester
-   * @returns The created audit log entry
+   * @returns The created audit log entry (including prevHash and rowHash)
    */
   async logAction(
     inputOrTenantId: AuditLogInput | string,
@@ -40,6 +63,7 @@ export class AuditLogService {
     status?: AuditStatus,
     errorMessage?: string,
     ipAddress?: string,
+    requestId?: string,
   ): Promise<AuditLogEntry> {
     if (typeof inputOrTenantId !== 'string') {
       return this.repository.append(inputOrTenantId)
@@ -68,6 +92,7 @@ export class AuditLogService {
       status,
       errorMessage,
       ipAddress,
+      requestId,
     })
   }
 
@@ -78,17 +103,17 @@ export class AuditLogService {
    * 
    * @param filters - Optional filters for action, adminId, targetUserId, etc.
    * @param limit - Maximum number of logs to return (default: 100)
-   * @param offset - Pagination offset (default: 0)
+   * @param cursor - Pagination cursor
    * @param options - Additional options for tenant scoping
-   * @returns Array of matching audit log entries and total count
+   * @returns Array of matching audit log entries and pagination metadata
    */
   async getLogs(
     tenantId: string | undefined,
     filters: AuditLogFilters = {},
     limit = 100,
-    offset = 0,
+    cursor?: string,
     options?: { allowSuperScope?: boolean }
-  ): Promise<{ logs: AuditLogEntry[]; total: number }> {
+  ): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
     // SECURITY: Enforce tenant scoping - deny by default
     if (!tenantId && !options?.allowSuperScope) {
       throw new Error(
@@ -97,7 +122,7 @@ export class AuditLogService {
     }
 
     const effectiveTenantId = options?.allowSuperScope ? (filters.tenantId || tenantId) : tenantId
-    return this.repository.query({ ...filters, tenantId: effectiveTenantId }, limit, offset)
+    return this.repository.query({ ...filters, tenantId: effectiveTenantId }, limit, cursor)
   }
 
   /**
@@ -113,6 +138,27 @@ export class AuditLogService {
    */
   async clearLogs(): Promise<void> {
     await this.repository.clear()
+  }
+
+  /**
+   * Persist the audit chain verifier's last run result for operator visibility.
+   */
+  async saveChainVerificationStatus(result: ChainVerificationResult): Promise<AuditChainVerificationState> {
+    return this.chainStatusRepository.saveStatus(toChainVerificationState(result))
+  }
+
+  /**
+   * Read the durable last-run verifier state (null when the verifier has never run).
+   */
+  async getChainVerificationStatus(): Promise<AuditChainVerificationState | null> {
+    return this.chainStatusRepository.getStatus()
+  }
+
+  /**
+   * Reset persisted verifier state (for testing).
+   */
+  async clearChainVerificationStatus(): Promise<void> {
+    await this.chainStatusRepository.clear()
   }
 
   /**
@@ -145,7 +191,7 @@ export class AuditLogService {
     const startMs = startDate.getTime()
     const endMs = endDate.getTime()
 
-    const { logs } = await this.getLogs(tenantId, {}, Number.MAX_SAFE_INTEGER, 0, options)
+    const { logs } = await this.getLogs(tenantId, {}, Number.MAX_SAFE_INTEGER, undefined, options)
     for (const log of logs) {
       const logTime = new Date(log.timestamp).getTime()
       
@@ -193,6 +239,17 @@ export class AuditLogService {
 
     return redacted
   }
+
+  /**
+   * Get top N talker tenants by request count in the last window (default: 1 hour).
+   */
+  async getTopTalkers(
+    limit?: number,
+    windowMinutes?: number,
+    now?: Date,
+  ) {
+    return this.repository.getTopTalkers(limit, windowMinutes, now)
+  }
 }
 
 function createRepository(): AuditLogRepository {
@@ -204,8 +261,26 @@ function createRepository(): AuditLogRepository {
   return new PostgresAuditLogsRepository(pool)
 }
 
+function createChainStatusRepository(): AuditChainVerificationRepository {
+  const shouldUsePostgres = process.env.AUDIT_LOG_BACKEND === 'postgres'
+  if (!shouldUsePostgres) {
+    return new InMemoryAuditChainVerificationRepository()
+  }
+
+  return new PostgresAuditChainVerificationRepository(pool)
+}
+
 // Create a singleton instance
-export const auditLogService = new AuditLogService(createRepository())
+export const auditLogService = new AuditLogService(createRepository(), createChainStatusRepository())
 
 export { AuditAction } from './types.js'
-export type { AuditLogEntry, AuditLogInput, AuditLogFilters } from './types.js'
+export type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogInput,
+  AuditLogFilters,
+  ChainVerificationResult,
+  TopTalkerEntry,
+  TopTalkersReport,
+} from './types.js'
+

@@ -50,6 +50,7 @@ export class MemberService {
     adminId: string,
     adminEmail: string,
     request: InviteMemberRequest,
+    requestId?: string
   ): Promise<InviteMemberResponse> {
     const { orgId, userId, email, role = 'member' } = request
 
@@ -63,6 +64,8 @@ export class MemberService {
         { orgId, role },
         'failure',
         'Member already active in this organisation',
+        undefined,
+        requestId
       )
       throw new Error('Member is already active in this organisation')
     }
@@ -76,6 +79,9 @@ export class MemberService {
       userId, email,
       { orgId, role: member.role, memberId: member.id },
       'success',
+      undefined,
+      undefined,
+      requestId
     )
 
     return {

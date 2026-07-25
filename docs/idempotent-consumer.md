@@ -321,3 +321,4 @@ Tests verify:
 - [Caching](caching.md) - Redis caching layer
 - [Observability](observability.md) - Metrics and tracing
 - [Migration Safety](MIGRATION_SAFETY.md) - Safe migrations
+- [Horizon Listener](horizon-listener.md) - Horizon event listener with validation

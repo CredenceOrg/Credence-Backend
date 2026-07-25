@@ -6,6 +6,7 @@
  */
 
 import { TimeoutReasonCode, ServiceType } from '../lib/timeouts.js'
+import { logger } from '../utils/logger.js'
 
 /**
  * Timeout event metadata for observability.
@@ -101,27 +102,32 @@ export class ConsoleTimeoutMetrics implements TimeoutMetricsCollector {
   onTimeout(event: TimeoutEvent): void {
     this.events.timeouts.push(event)
     
-    console.error(`🔴 TIMEOUT [${event.serviceType}] ${event.operation}`)
-    console.error(`   Reason: ${event.reasonCode}`)
-    console.error(`   Duration: ${event.actualDurationMs}ms / ${event.timeoutMs}ms`)
-    console.error(`   Timestamp: ${event.timestamp.toISOString()}`)
-    if (event.context) {
-      console.error(`   Context:`, event.context)
-    }
-    console.error('')
+    logger.error({
+      type: 'timeout',
+      serviceType: event.serviceType,
+      operation: event.operation,
+      reasonCode: event.reasonCode,
+      duration: event.actualDurationMs,
+      timeout: event.timeoutMs,
+      timestamp: event.timestamp.toISOString(),
+      context: event.context,
+    })
   }
 
   onSlowOperation(event: SlowOperationEvent): void {
     this.events.slowOps.push(event)
     
-    console.warn(`🟡 SLOW [${event.serviceType}] ${event.operation}`)
-    console.warn(`   Reason: ${event.reasonCode}`)
-    console.warn(`   Duration: ${event.actualDurationMs}ms / ${event.timeoutMs}ms (${event.percentageOfTimeout.toFixed(1)}%)`)
-    console.warn(`   Timestamp: ${event.timestamp.toISOString()}`)
-    if (event.context) {
-      console.warn(`   Context:`, event.context)
-    }
-    console.warn('')
+    logger.warn({
+      type: 'slow_operation',
+      serviceType: event.serviceType,
+      operation: event.operation,
+      reasonCode: event.reasonCode,
+      duration: event.actualDurationMs,
+      timeout: event.timeoutMs,
+      percentage: event.percentageOfTimeout.toFixed(1),
+      timestamp: event.timestamp.toISOString(),
+      context: event.context,
+    })
   }
 
   onSuccess(event: SuccessEvent): void {
@@ -129,11 +135,15 @@ export class ConsoleTimeoutMetrics implements TimeoutMetricsCollector {
     
     // Only log successful operations that are close to timeout
     if (event.actualDurationMs > event.timeoutMs * 0.7) {
-      console.info(`🟠 NEAR_TIMEOUT [${event.serviceType}] ${event.operation}`)
-      console.info(`   Reason: ${event.reasonCode}`)
-      console.info(`   Duration: ${event.actualDurationMs}ms / ${event.timeoutMs}ms`)
-      console.info(`   Timestamp: ${event.timestamp.toISOString()}`)
-      console.info('')
+      logger.info({
+        type: 'near_timeout',
+        serviceType: event.serviceType,
+        operation: event.operation,
+        reasonCode: event.reasonCode,
+        duration: event.actualDurationMs,
+        timeout: event.timeoutMs,
+        timestamp: event.timestamp.toISOString(),
+      })
     }
   }
 
@@ -226,17 +236,35 @@ export class ProductionTimeoutMetrics implements TimeoutMetricsCollector {
   onTimeout(event: TimeoutEvent): void {
     // In production, this would emit metrics to your monitoring system
     // Example: prometheusCounter.inc({ service_type: event.serviceType, reason_code: event.reasonCode })
-    console.debug(`[${this.prefix}] timeout: ${event.serviceType} ${event.operation} (${event.reasonCode})`)
+    logger.debug({
+      prefix: this.prefix,
+      type: 'timeout',
+      serviceType: event.serviceType,
+      operation: event.operation,
+      reasonCode: event.reasonCode,
+    })
   }
 
   onSlowOperation(event: SlowOperationEvent): void {
     // In production, this would emit metrics to your monitoring system
-    console.debug(`[${this.prefix}] slow: ${event.serviceType} ${event.operation} (${event.reasonCode})`)
+    logger.debug({
+      prefix: this.prefix,
+      type: 'slow',
+      serviceType: event.serviceType,
+      operation: event.operation,
+      reasonCode: event.reasonCode,
+    })
   }
 
   onSuccess(event: SuccessEvent): void {
     // In production, this would emit metrics to your monitoring system
-    console.debug(`[${this.prefix}] success: ${event.serviceType} ${event.operation} (${event.reasonCode})`)
+    logger.debug({
+      prefix: this.prefix,
+      type: 'success',
+      serviceType: event.serviceType,
+      operation: event.operation,
+      reasonCode: event.reasonCode,
+    })
   }
 }
 

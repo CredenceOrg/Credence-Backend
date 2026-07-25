@@ -1,7 +1,30 @@
 /**
  * Webhook event types for bond lifecycle.
  */
-export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn'
+export type WebhookEventType = 'bond.created' | 'bond.slashed' | 'bond.withdrawn' | 'attestation.added' | 'attestation.revoked' | 'score.updated' | 'credits.low'
+
+/**
+ * Structured payload data for a webhook event.
+ */
+export interface WebhookPayloadData {
+  address: string
+  bondedAmount: string
+  bondStart: number | null
+  bondDuration: number | null
+  active: boolean
+  attestationId?: string
+  verifier?: string
+  weight?: number
+  claim?: string
+  score?: number
+}
+
+/**
+ * Optional emit metadata for webhook events.
+ */
+export interface WebhookEmitOptions {
+  eventId?: string
+}
 
 /**
  * Webhook configuration for a registered endpoint.
@@ -21,12 +44,20 @@ export interface WebhookConfig {
   secretUpdatedAt: Date
   /** Whether this webhook is active. */
   active: boolean
-  /** Previous secret kept alive during safe-rollout grace period. */
-  previousSecret?: string
   /** ISO timestamp when the secret was last rotated. */
   secretRotatedAt?: string
   /** ISO timestamp after which previousSecret is no longer valid. */
   previousSecretExpiresAt?: string
+  /** Optional per-webhook delivery retry attempt cap. */
+  maxAttempts?: number
+  /** Optional per-webhook delivery timeout in milliseconds. */
+  timeoutMs?: number
+  /** Optional mTLS client certificate (PEM) presented to the endpoint. */
+  clientCertPem?: string
+  /** Optional KMS reference for the mTLS client private key. */
+  clientKeyKmsRef?: string
+  /** Optional SHA-256 pin of the expected server certificate. */
+  pinnedServerCertSha256?: string
 }
 
 /**
@@ -43,19 +74,21 @@ export interface WebhookSecretRotationResult {
 /**
  * Webhook payload sent to registered endpoints.
  */
+export type WebhookPayloadDataValue = WebhookPayloadData | unknown[]
+
 export interface WebhookPayload {
   /** Event type. */
   event: WebhookEventType
   /** ISO timestamp when event occurred. */
   timestamp: string
-  /** Event data (identity state). */
-  data: {
-    address: string
-    bondedAmount: string
-    bondStart: number | null
-    bondDuration: number | null
-    active: boolean
-  }
+  /** Event data (identity state or list payload). */
+  data: WebhookPayloadDataValue
+  /** Optional chunking metadata for segmented deliveries. */
+  chunkId?: string
+  chunkIndex?: number
+  totalChunks?: number
+  payloadTruncated?: boolean
+  paginationUrl?: string
 }
 
 /**
@@ -66,6 +99,8 @@ export interface WebhookDeliveryResult {
   webhookId: string
   /** Whether delivery succeeded. */
   success: boolean
+  /** Whether the delivery was skipped because the idempotency record already existed. */
+  skipped?: boolean
   /** HTTP status code if request was made. */
   statusCode?: number
   /** Error message if failed. */
@@ -74,6 +109,8 @@ export interface WebhookDeliveryResult {
   attempts: number
   /** First 500 chars of response body on failure. */
   responseBodySnippet?: string
+  /** Error code for mTLS-specific failures. */
+  errorCode?: string
 }
 
 /**
@@ -104,9 +141,17 @@ export interface DlqStore {
 }
 
 /**
+ * Store for persistent webhook delivery idempotency records.
+ */
+export interface WebhookDeliveryIdempotencyStore {
+  reserveWebhookDelivery(subscriberId: string, eventId: string, idempotencyKey: string): Promise<boolean>
+  clearWebhookDeliveryAttempt(subscriberId: string, eventId: string): Promise<void>
+}
+
+/**
  * Store for webhook configurations.
  */
-export interface WebhookStore {
+export interface WebhookStore extends WebhookDeliveryIdempotencyStore {
   /** Get all active webhooks subscribed to an event type. */
   getByEvent(event: WebhookEventType): Promise<WebhookConfig[]>
   /** Get webhook by ID. */

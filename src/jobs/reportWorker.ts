@@ -2,7 +2,7 @@ import { ReportJobStatus } from './types.js'
 import { ReportRepository } from '../db/repositories/reportRepository.js'
 import { ReportStorageService } from '../services/reportStorage.js'
 import { invalidateCache } from '../cache/invalidation.js'
-import { pool } from '../db/pool.js'
+import { workerPool } from '../db/pool.js'
 
 /**
  * Report worker that generates report artifacts as a streaming AsyncIterable
@@ -48,14 +48,27 @@ export class ReportWorker {
    * report in memory.
    */
   private async *generateReportStream(jobId: string, type: string): AsyncIterable<Buffer> {
-    yield Buffer.from(`Report ID: ${jobId}\nType: ${type}\nGenerated: ${new Date().toISOString()}\n`, 'utf-8')
+    yield Buffer.from(`Report ID: ${jobId}\nType: ${type}\nGenerated: ${new Date().toISOString()}\n\n`, 'utf-8')
 
-    await new Promise((resolve) => setTimeout(resolve, 500))
+    if (type === 'top_talkers') {
+      const { auditLogService } = await import('../services/audit/index.js')
+      const report = await auditLogService.getTopTalkers(10, 60)
+      yield Buffer.from(`Top Talkers Report (Last ${report.windowMinutes} Minutes)\n`, 'utf-8')
+      yield Buffer.from(`Window: ${report.windowStart} to ${report.windowEnd}\n`, 'utf-8')
+      yield Buffer.from(`Total Requests: ${report.totalRequests}\n\n`, 'utf-8')
+      yield Buffer.from(`Rank | Tenant ID | Request Count | Share (%)\n`, 'utf-8')
+      yield Buffer.from(`-----|-----------|---------------|----------\n`, 'utf-8')
+      for (let idx = 0; idx < report.topTalkers.length; idx++) {
+        const entry = report.topTalkers[idx]
+        yield Buffer.from(`${idx + 1} | ${entry.tenantId} | ${entry.requestCount} | ${entry.percentage}%\n`, 'utf-8')
+      }
+      yield Buffer.from('\n--- End of Report ---\n', 'utf-8')
+      return
+    }
 
+    await new Promise((resolve) => setTimeout(resolve, 100))
     yield Buffer.from('--- Page 2 ---\nSummary data placeholder\n', 'utf-8')
-
-    await new Promise((resolve) => setTimeout(resolve, 500))
-
+    await new Promise((resolve) => setTimeout(resolve, 100))
     yield Buffer.from('--- End of Report ---\n', 'utf-8')
   }
 
@@ -84,7 +97,7 @@ export class ReportWorker {
  * Factory: creates a ReportWorker wired to the default pool and storage.
  */
 export function createReportWorker(storage?: ReportStorageService): ReportWorker {
-  const repo = new ReportRepository(pool)
+  const repo = new ReportRepository(workerPool)
   const svc = storage ?? new ReportStorageService()
   return new ReportWorker(repo, svc)
 }

@@ -45,6 +45,14 @@ Edit `k8s/configmap.yaml` or override at apply time:
 | `DATABASE_URL` | `postgresql://credence:CHANGEME@postgres:5432/credence` | PostgreSQL connection string |
 | `REDIS_URL` | `redis://redis:6379` | Redis connection string |
 | `LOG_LEVEL` | `info` | Application log level |
+| `SHUTDOWN_GRACE_PERIOD_MS` | `30000` | Time in milliseconds to wait for graceful shutdown before forcing exit |
+| `RATE_LIMIT_ENABLED` | `true` | Enable or disable rate limiting |
+| `RATE_LIMIT_WINDOW_SEC` | `60` | Fixed-window size in seconds |
+| `RATE_LIMIT_MAX_FREE` | `100` | Max requests per window for Free tier |
+| `RATE_LIMIT_MAX_PRO` | `1000` | Max requests per window for Pro tier |
+| `RATE_LIMIT_MAX_ENTERPRISE` | `10000` | Max requests per window for Enterprise tier |
+| `RATE_LIMIT_FAIL_OPEN` | `false` | Fail-open behavior on Redis failure |
+
 
 ### Secret (`credence-backend-secret`)
 
@@ -66,17 +74,19 @@ The deployment uses the existing health endpoints:
 | Probe | Endpoint | Purpose |
 |---|---|---|
 | **Liveness** | `GET /api/health/live` | Restart pod if process hangs |
-| **Readiness** | `GET /api/health/ready` | Remove from Service if dependencies are down |
+| **Readiness** | `GET /api/health/ready` | Remove from Service if dependencies are down or during shutdown |
 | **Startup** | `GET /api/health/live` | Allow time for container startup |
 
-Readiness now includes deep subsystem checks and returns a per-check JSON body:
+## Graceful Shutdown
 
-- `postgres`: validates PostgreSQL connectivity via the shared pool.
-- `redis`: validates Redis availability via the shared Redis connection manager.
-- `horizonListener`: validates listener running state and heartbeat staleness.
-- `outboxPublisher`: validates publisher running state and lease heartbeat staleness.
+The application now handles `SIGTERM` and `SIGINT` by:
 
-Pods are marked not-ready when any of the above checks return `down`.
+- stopping the HTTP server from accepting new requests
+- marking readiness false so Kubernetes stops routing traffic
+- stopping listeners and workers
+- waiting up to `SHUTDOWN_GRACE_PERIOD_MS` before force exiting
+
+Make sure `terminationGracePeriodSeconds` in `k8s/deployment.yaml` exceeds `SHUTDOWN_GRACE_PERIOD_MS` so pods can shut down cleanly.
 
 ## Scaling
 
@@ -139,6 +149,8 @@ kubectl set image deployment/credence-backend \
   credence-backend=ghcr.io/credenceorg/credence-backend:v1.2.3 \
   -n credence
 ```
+
+For the full cutover sequence — health-gate thresholds, how to tell a stalled rollout from a healthy one, and how/when to trigger a rollback — see [docs/deployment-cutover.md](deployment-cutover.md).
 
 ## Teardown
 

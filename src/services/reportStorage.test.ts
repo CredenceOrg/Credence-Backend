@@ -91,6 +91,46 @@ describe('ReportStorageService', () => {
       expect(data).toBeNull()
     })
 
+    it('rejects a signature with a one-byte mutation (constant-time compare validation)', async () => {
+      const key = storage.makeKey('t1', 'j1-byte')
+      async function* stream() {
+        yield Buffer.from('data', 'utf-8')
+      }
+      await storage.uploadStream(key, stream())
+
+      const { url } = storage.generateSignedUrl(key)
+      const urlObj = new URL(url)
+      const expires = parseInt(urlObj.searchParams.get('expires')!, 10)
+      const signature = urlObj.searchParams.get('signature')!
+
+      // Flip the last character of the hex signature
+      const lastChar = signature[signature.length - 1]
+      const mutatedChar = lastChar === 'a' ? 'b' : 'a'
+      const mutatedSignature = signature.slice(0, -1) + mutatedChar
+
+      const data = storage.verifyAndRetrieve(key, expires, mutatedSignature)
+      expect(data).toBeNull()
+    })
+
+    it('rejects a tampered key (using signature for a different key)', async () => {
+      const keyA = storage.makeKey('t1', 'job-a')
+      const keyB = storage.makeKey('t1', 'job-b')
+      
+      async function* stream() { yield Buffer.from('data-a', 'utf-8') }
+      await storage.uploadStream(keyA, stream())
+      await storage.uploadStream(keyB, stream())
+
+      // generate URL for keyA
+      const { url } = storage.generateSignedUrl(keyA)
+      const urlObj = new URL(url)
+      const expires = parseInt(urlObj.searchParams.get('expires')!, 10)
+      const signature = urlObj.searchParams.get('signature')!
+
+      // attempt to retrieve keyB using keyA's signature and expires
+      const data = storage.verifyAndRetrieve(keyB, expires, signature)
+      expect(data).toBeNull()
+    })
+
     it('returns null for a missing artifact', async () => {
       const key = storage.makeKey('t1', 'missing')
       const { url } = storage.generateSignedUrl(key)

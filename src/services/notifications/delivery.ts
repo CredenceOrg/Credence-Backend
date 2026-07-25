@@ -1,201 +1,233 @@
 import type {
+  DeliveryOptions,
   EmailNotification,
   EmailProvider,
   NotificationDeliveryResult,
-  DeliveryOptions,
+  NotificationDlqAttempt,
+  NotificationDlqStore,
   NotificationStore,
-  SendAttempt,
 } from './types.js'
 import { createHash } from 'crypto'
+import {
+  NOTIFICATION_DELIVERY_JOB_TYPE,
+  buildNotificationDeliveryJobKey,
+  type AsyncJob,
+  type IdempotentJobResult,
+} from '../../jobs/notificationIdempotency.js'
+import { buildNotificationDlqEntry } from './dlq.js'
+import { NotificationProviderHealthTracker } from './health.js'
+import {
+  recordNotificationDlq,
+  recordNotificationFailover,
+  recordNotificationProviderAttempt,
+  recordNotificationProviderSuccess,
+} from './promMetrics.js'
 
 /**
- * Generate an idempotency key for a notification dispatch attempt group.
- * Same attemptGroup will always produce the same key.
+ * Generate an idempotency key for a notification provider attempt.
  */
-function generateIdempotencyKey(
-  notificationId: string,
-  attemptGroup: number
-): string {
+function generateIdempotencyKey(notificationId: string, attemptGroup: number): string {
   const key = `${notificationId}:${attemptGroup}`
   return createHash('sha256').update(key).digest('hex')
 }
 
+interface DeliveryErrorClassification {
+  message: string
+  retryable: boolean
+  transient: boolean
+  ambiguous: boolean
+  statusCode?: number
+}
+
+interface NotificationStoreWithJobExecutor extends NotificationStore {
+  executeIdempotentJob<T>(
+    jobKey: string,
+    jobType: string,
+    job: AsyncJob<T>,
+    expiresInSeconds?: number
+  ): Promise<IdempotentJobResult<T>>
+}
+
+export interface IdempotentEmailDeliveryDependencies {
+  /** Optional DLQ store for exhausted or ambiguous deliveries. */
+  dlqStore?: NotificationDlqStore
+  /** Shared provider health tracker across notification sends. */
+  healthTracker?: NotificationProviderHealthTracker
+  /** Injectable sleep helper for tests. */
+  sleep?: (delayMs: number) => Promise<void>
+  /** Injectable random source for deterministic jitter in tests. */
+  random?: () => number
+}
+
+function isStoreWithJobExecutor(
+  store: NotificationStore
+): store is NotificationStoreWithJobExecutor {
+  return typeof (store as NotificationStoreWithJobExecutor).executeIdempotentJob === 'function'
+}
+
+function classifyDeliveryError(error: unknown): DeliveryErrorClassification {
+  const message = error instanceof Error ? error.message : 'Unknown error'
+  const normalized = message.toLowerCase()
+  const statusMatch = message.match(/\b([45]\d{2})\b/)
+  const statusCode = statusMatch ? Number(statusMatch[1]) : undefined
+
+  if (
+    normalized.includes('timeout') ||
+    normalized.includes('timed out') ||
+    normalized.includes('abort')
+  ) {
+    return {
+      message,
+      retryable: false,
+      transient: true,
+      ambiguous: true,
+      statusCode,
+    }
+  }
+
+  if (
+    normalized.includes('5xx') ||
+    (statusCode !== undefined && statusCode >= 500) ||
+    normalized.includes('fetch failed') ||
+    normalized.includes('econnreset') ||
+    normalized.includes('econnrefused') ||
+    normalized.includes('enotfound') ||
+    normalized.includes('eai_again')
+  ) {
+    return {
+      message,
+      retryable: true,
+      transient: true,
+      ambiguous: false,
+      statusCode,
+    }
+  }
+
+  return {
+    message,
+    retryable: false,
+    transient: false,
+    ambiguous: false,
+    statusCode,
+  }
+}
+
 /**
- * Idempotent email delivery service.
- *
- * Prevents duplicate sends by:
- * 1. Persisting send marker BEFORE provider call
- * 2. Using idempotency keys to track attempt groups
- * 3. Deduplicating on retry of same attempt group
- * 4. Reconciling provider responses for unknown outcomes
+ * Idempotent email delivery service with provider failover, retry/backoff, and DLQ routing.
  */
 export class IdempotentEmailDeliveryService {
+  private readonly providers: EmailProvider[]
+  private readonly dlqStore?: NotificationDlqStore
+  private readonly healthTracker: NotificationProviderHealthTracker
+  private readonly sleep: (delayMs: number) => Promise<void>
+  private readonly random: () => number
+
   constructor(
     private readonly store: NotificationStore,
-    private readonly provider: EmailProvider
-  ) {}
+    providers: EmailProvider | EmailProvider[],
+    dependencies: IdempotentEmailDeliveryDependencies = {}
+  ) {
+    this.providers = Array.isArray(providers) ? providers : [providers]
+    this.dlqStore = dependencies.dlqStore
+    this.healthTracker =
+      dependencies.healthTracker ?? new NotificationProviderHealthTracker()
+    this.sleep =
+      dependencies.sleep ??
+      (async (delayMs: number) => {
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+      })
+    this.random = dependencies.random ?? (() => Math.random())
+  }
 
   /**
-   * Deliver a notification with idempotency protection and retries.
-   *
-   * The send marker is persisted BEFORE the provider call, ensuring
-   * that even if the provider fails or times out after accepting the
-   * message, retries will be deduplicated.
+   * Deliver a notification with idempotency protection and bounded failover.
    */
   async deliver(
     notification: EmailNotification,
     options: DeliveryOptions = {}
   ): Promise<NotificationDeliveryResult> {
-    const {
-      maxRetries = 3,
-      initialDelay = 1000,
-      backoffMultiplier = 2,
-      timeout = 5000,
-    } = options
+    if (!isStoreWithJobExecutor(this.store)) {
+      return this.executeDelivery(notification, options)
+    }
 
-    let attemptGroup = 1
-    let lastAttempt: SendAttempt | null = null
+    let terminalFailure: NotificationDeliveryResult | null = null
 
-    // Get the last attempt to determine if we're retrying
-    const existingAttempt = await this.store.getLastSendAttempt(notification.id)
-    if (existingAttempt?.status === 'sent') {
-      // Already sent successfully
-      return {
-        notificationId: notification.id,
-        success: true,
-        deduped: true,
-        statusCode: 200,
-        providerResponseId: existingAttempt.providerResponseId,
-        attempts: 1,
-        idempotencyKey: existingAttempt.idempotencyKey,
+    try {
+      const result = await this.store.executeIdempotentJob(
+        buildNotificationDeliveryJobKey(notification.id),
+        NOTIFICATION_DELIVERY_JOB_TYPE,
+        {
+          run: async () => {
+            const deliveryResult = await this.executeDelivery(notification, options)
+            if (!deliveryResult.success) {
+              terminalFailure = deliveryResult
+              throw new Error(`notification delivery failed: ${notification.id}`)
+            }
+            return deliveryResult
+          },
+        }
+      )
+
+      if (result.alreadyProcessed && result.result) {
+        return {
+          ...result.result,
+          deduped: true,
+        }
       }
-    }
 
-    // For retries of unknown/timeout outcomes, increment attempt group
-    if (existingAttempt && existingAttempt.status === 'pending') {
-      attemptGroup = existingAttempt.attemptGroup + 1
-    }
+      if (!result.result) {
+        throw new Error(`Notification delivery returned no result for ${notification.id}`)
+      }
 
-    for (let attemptNumber = 1; attemptNumber <= maxRetries + 1; attemptNumber++) {
-      const idempotencyKey = generateIdempotencyKey(notification.id, attemptGroup)
+      return result.result
+    } catch (error) {
+      if (terminalFailure) {
+        return terminalFailure
+      }
 
-      // Check if this idempotency key was already sent
-      const existingSend = await this.store.getSendByIdempotencyKey(idempotencyKey)
-      if (existingSend && existingSend.status === 'sent') {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      const sentAttempt = await this.store.getLastSendAttempt(notification.id)
+
+      if (sentAttempt?.status === 'sent') {
         return {
           notificationId: notification.id,
           success: true,
           deduped: true,
           statusCode: 200,
-          providerResponseId: existingSend.providerResponseId,
-          attempts: attemptNumber,
-          idempotencyKey,
+          providerResponseId: sentAttempt.providerResponseId,
+          attempts: 1,
+          idempotencyKey: sentAttempt.idempotencyKey,
+          provider: sentAttempt.provider,
         }
       }
 
-      // Create send attempt record BEFORE provider call
-      // This persists the marker early to prevent duplicate sends
-      lastAttempt = await this.store.createSendAttempt({
-        notificationId: notification.id,
-        idempotencyKey,
-        attemptGroup,
-        attemptNumber,
-        provider: this.provider.name,
-        status: 'pending',
-        attemptedAt: new Date(),
-      })
-
-      try {
-        // Call provider with timeout handling
-        const response = await this.provider.send(notification, { timeout })
-
-        // Update attempt as sent with provider response ID
-        await this.store.updateSendAttempt(lastAttempt.id, {
-          status: 'sent',
-          sentAt: new Date(),
-          providerResponseId: response.id,
-        })
-
+      if (errorMessage.includes('already pending')) {
         return {
           notificationId: notification.id,
-          success: true,
-          deduped: false,
-          statusCode: response.statusCode,
-          providerResponseId: response.id,
-          attempts: attemptNumber,
-          idempotencyKey,
-        }
-      } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : 'Unknown error'
-
-        // Check if this is a retryable error
-        const isRetryable =
-          errorMessage.includes('timeout') ||
-          errorMessage.includes('5xx') ||
-          errorMessage.includes('503') ||
-          errorMessage.includes('502') ||
-          errorMessage.includes('500')
-
-        if (attemptNumber === maxRetries + 1 || !isRetryable) {
-          // Final attempt or non-retryable error
-          await this.store.updateSendAttempt(lastAttempt.id, {
-            status: 'failed',
-            errorMessage,
-          })
-
-          return {
-            notificationId: notification.id,
-            success: false,
-            deduped: false,
-            error: errorMessage,
-            attempts: attemptNumber,
-            idempotencyKey,
-          }
-        }
-
-        // Mark as failed but will retry with new attempt group
-        await this.store.updateSendAttempt(lastAttempt.id, {
-          status: 'failed',
-          errorMessage,
-        })
-
-        // Exponential backoff
-        const delay = initialDelay * Math.pow(backoffMultiplier, attemptNumber - 1)
-        await new Promise(resolve => setTimeout(resolve, delay))
-
-        // Increment attempt group for unknown/timeout outcomes
-        if (errorMessage.includes('timeout') || !errorMessage.includes('5xx')) {
-          attemptGroup++
+          success: false,
+          deduped: true,
+          error: errorMessage,
+          attempts: 0,
+          idempotencyKey: buildNotificationDeliveryJobKey(notification.id),
         }
       }
-    }
 
-    // Should not reach here, but handle gracefully
-    return {
-      notificationId: notification.id,
-      success: false,
-      deduped: false,
-      error: 'Max retries exceeded',
-      attempts: maxRetries + 1,
-      idempotencyKey: generateIdempotencyKey(notification.id, attemptGroup),
+      throw error
     }
   }
 
   /**
    * Reconcile a notification send with provider response.
-   * Useful when you have a provider message ID but need to
-   * reconcile the send status.
    */
   async reconcileSend(
     notificationId: string,
     providerResponseId: string,
     statusCode: number
   ): Promise<void> {
-    // Find the most recent pending or failed attempt
     const attempt = await this.store.getLastSendAttempt(notificationId)
+    const providerName = this.providers[0]?.name ?? 'unknown'
 
     if (!attempt) {
-      // Create a reconciliation record
       const idempotencyKey = generateIdempotencyKey(notificationId, 1)
       const status = statusCode >= 200 && statusCode < 300 ? 'sent' : 'failed'
       const errorMessage = status === 'failed' ? `Provider returned ${statusCode}` : undefined
@@ -205,7 +237,7 @@ export class IdempotentEmailDeliveryService {
         idempotencyKey,
         attemptGroup: 1,
         attemptNumber: 1,
-        provider: this.provider.name,
+        provider: providerName,
         status,
         providerResponseId,
         errorMessage,
@@ -214,18 +246,237 @@ export class IdempotentEmailDeliveryService {
       return
     }
 
-    // Update existing attempt
     if (statusCode >= 200 && statusCode < 300) {
       await this.store.updateSendAttempt(attempt.id, {
         status: 'sent',
         providerResponseId,
         sentAt: new Date(),
       })
-    } else if (statusCode >= 400 && statusCode < 500) {
+      this.healthTracker.recordSuccess(attempt.provider)
+      return
+    }
+
+    if (statusCode >= 400 && statusCode < 500) {
       await this.store.updateSendAttempt(attempt.id, {
         status: 'failed',
         errorMessage: `Provider returned ${statusCode}`,
       })
+    }
+  }
+
+  private async executeDelivery(
+    notification: EmailNotification,
+    options: DeliveryOptions
+  ): Promise<NotificationDeliveryResult> {
+    const {
+      maxRetries = 3,
+      maxAttempts = maxRetries + 1,
+      initialDelay = 1000,
+      backoffMultiplier = 2,
+      jitterFactor = 0.2,
+      timeout = 5000,
+    } = options
+
+    if (this.providers.length === 0) {
+      throw new Error('No email providers configured')
+    }
+
+    const existingAttempt = await this.store.getLastSendAttempt(notification.id)
+    if (existingAttempt?.status === 'sent') {
+      return {
+        notificationId: notification.id,
+        success: true,
+        deduped: true,
+        statusCode: 200,
+        providerResponseId: existingAttempt.providerResponseId,
+        attempts: 1,
+        idempotencyKey: existingAttempt.idempotencyKey,
+        provider: existingAttempt.provider,
+      }
+    }
+
+    let attemptGroup = (existingAttempt?.attemptGroup ?? 0) + 1
+    let attempts = 0
+    let cycle = 0
+    const failures: NotificationDlqAttempt[] = []
+
+    while (attempts < maxAttempts) {
+      const orderedProviders = this.healthTracker.orderProviders(this.providers)
+
+      for (
+        let providerIndex = 0;
+        providerIndex < orderedProviders.length && attempts < maxAttempts;
+        providerIndex++
+      ) {
+        const provider = orderedProviders[providerIndex]
+        const attemptNumber = attempts + 1
+        const idempotencyKey = generateIdempotencyKey(notification.id, attemptGroup++)
+
+        const existingSend = await this.store.getSendByIdempotencyKey(idempotencyKey)
+        if (existingSend?.status === 'sent') {
+          return {
+            notificationId: notification.id,
+            success: true,
+            deduped: true,
+            statusCode: 200,
+            providerResponseId: existingSend.providerResponseId,
+            attempts: attemptNumber,
+            idempotencyKey,
+            provider: existingSend.provider,
+          }
+        }
+
+        const sendAttempt = await this.store.createSendAttempt({
+          notificationId: notification.id,
+          idempotencyKey,
+          attemptGroup: attemptGroup - 1,
+          attemptNumber,
+          provider: provider.name,
+          status: 'pending',
+          attemptedAt: new Date(),
+        })
+
+        try {
+          const response = await provider.send(notification, {
+            timeout,
+            idempotencyKey,
+            attemptNumber,
+          })
+
+          await this.store.updateSendAttempt(sendAttempt.id, {
+            status: 'sent',
+            sentAt: new Date(),
+            providerResponseId: response.id,
+          })
+
+          this.healthTracker.recordSuccess(provider.name)
+          recordNotificationProviderAttempt(provider.name, 'success')
+          recordNotificationProviderSuccess(provider.name)
+
+          return {
+            notificationId: notification.id,
+            success: true,
+            deduped: false,
+            statusCode: response.statusCode,
+            providerResponseId: response.id,
+            attempts: attemptNumber,
+            idempotencyKey,
+            provider: provider.name,
+          }
+        } catch (error) {
+          attempts = attemptNumber
+          const classification = classifyDeliveryError(error)
+          const failure: NotificationDlqAttempt = {
+            provider: provider.name,
+            attemptNumber,
+            idempotencyKey,
+            error: classification.message,
+            statusCode: classification.statusCode,
+            transient: classification.transient,
+            ambiguous: classification.ambiguous,
+          }
+          failures.push(failure)
+
+          await this.store.updateSendAttempt(sendAttempt.id, {
+            status: 'failed',
+            errorMessage: classification.message,
+          })
+
+          this.healthTracker.recordFailure(provider.name, classification.transient)
+          recordNotificationProviderAttempt(
+            provider.name,
+            classification.ambiguous
+              ? 'ambiguous_failure'
+              : classification.retryable
+                ? 'retryable_failure'
+                : 'permanent_failure'
+          )
+
+          if (classification.ambiguous) {
+            return this.routeToDlq(
+              notification,
+              orderedProviders,
+              failures,
+              classification.message,
+              attemptNumber,
+              idempotencyKey,
+              provider.name
+            )
+          }
+
+          const nextProvider = orderedProviders[providerIndex + 1]
+          if (classification.retryable && nextProvider && attempts < maxAttempts) {
+            recordNotificationFailover(provider.name, nextProvider.name)
+            continue
+          }
+
+          if (!classification.retryable || attempts >= maxAttempts) {
+            return this.routeToDlq(
+              notification,
+              orderedProviders,
+              failures,
+              classification.message,
+              attemptNumber,
+              idempotencyKey,
+              provider.name
+            )
+          }
+        }
+      }
+
+      if (attempts >= maxAttempts || failures.length === 0) {
+        break
+      }
+
+      cycle++
+      const baseDelay = initialDelay * Math.pow(backoffMultiplier, cycle - 1)
+      const jitterOffset = baseDelay * jitterFactor * this.random()
+      await this.sleep(Math.round(baseDelay + jitterOffset))
+    }
+
+    const lastFailure = failures[failures.length - 1]
+    return {
+      notificationId: notification.id,
+      success: false,
+      deduped: false,
+      error: lastFailure?.error ?? 'Max attempts exceeded',
+      attempts,
+      idempotencyKey:
+        lastFailure?.idempotencyKey ??
+        generateIdempotencyKey(notification.id, attemptGroup),
+      provider: lastFailure?.provider,
+    }
+  }
+
+  private async routeToDlq(
+    notification: EmailNotification,
+    orderedProviders: EmailProvider[],
+    failures: NotificationDlqAttempt[],
+    failureReason: string,
+    attempts: number,
+    idempotencyKey: string,
+    provider: string
+  ): Promise<NotificationDeliveryResult> {
+    if (this.dlqStore) {
+      const entry = buildNotificationDlqEntry({
+        notification,
+        providers: orderedProviders.map(candidate => candidate.name),
+        attempts: failures,
+        failureReason,
+      })
+      await this.dlqStore.push(entry)
+    }
+
+    recordNotificationDlq(failureReason)
+
+    return {
+      notificationId: notification.id,
+      success: false,
+      deduped: false,
+      error: failureReason,
+      attempts,
+      idempotencyKey,
+      provider,
     }
   }
 }
@@ -235,10 +486,11 @@ export class IdempotentEmailDeliveryService {
  */
 export async function deliverNotification(
   notification: EmailNotification,
-  provider: EmailProvider,
+  provider: EmailProvider | EmailProvider[],
   store: NotificationStore,
-  options?: DeliveryOptions
+  options?: DeliveryOptions,
+  dependencies?: IdempotentEmailDeliveryDependencies
 ): Promise<NotificationDeliveryResult> {
-  const service = new IdempotentEmailDeliveryService(store, provider)
+  const service = new IdempotentEmailDeliveryService(store, provider, dependencies)
   return service.deliver(notification, options)
 }

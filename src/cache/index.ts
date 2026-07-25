@@ -2,7 +2,8 @@
  * Cache module exports
  */
 
-export { cache, redisConnection, CacheService, RedisConnection } from './redis.js'
+export { cache, redisConnection, CacheService, RedisConnection } from './redis.js';
+export { singleflight } from '../lib/singleflight.js';
 export {
   invalidateCache,
   invalidateMultiple,
@@ -10,4 +11,10 @@ export {
   withCacheInvalidation,
   createCacheKey,
   type InvalidationOptions
-} from './invalidation.js'
+} from './invalidation.js';
+export {
+  InvalidationBus,
+  getInvalidationBus,
+  resetInvalidationBus,
+  type InvalidationEvent
+} from './invalidationBus.js';

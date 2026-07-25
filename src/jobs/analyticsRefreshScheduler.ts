@@ -76,6 +76,14 @@ export class AnalyticsRefreshScheduler {
     return this.intervalId !== null
   }
 
+  /**
+   * Check if a worker invocation is currently executing.
+   * Used by the shutdown coordinator to wait for in-flight work to drain.
+   */
+  isJobRunning(): boolean {
+    return this.isRunning
+  }
+
   getStatus(): SchedulerStatus {
     return {
       active: this.isActive(),

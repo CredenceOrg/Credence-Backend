@@ -19,7 +19,13 @@ vi.mock('@stellar/stellar-sdk', () => {
     }
   }
 
-  return { Horizon: { Server: ServerMock } }
+  return {
+    Horizon: { Server: ServerMock },
+    StrKey: {
+      isValidEd25519PublicKey: (account: string) => typeof account === 'string' && account.startsWith('G'),
+      isValidMuxedAccount: () => false,
+    },
+  }
 })
 
 vi.mock('../services/identityService', () => ({
@@ -37,18 +43,18 @@ describe('Horizon Bond Creation Listener', () => {
   })
 
   it('subscribes without throwing', () => {
-    expect(() => subscribeBondCreationEvents(vi.fn())).not.toThrow()
+    expect(() => subscribeBondCreationEvents({ captureFailure: vi.fn() })).not.toThrow()
     expect(streamState.onmessage).toBeTypeOf('function')
   })
 
   it('accepts an undefined callback', () => {
-    expect(() => subscribeBondCreationEvents(undefined)).not.toThrow()
+    expect(() => subscribeBondCreationEvents({ captureFailure: vi.fn() }, undefined)).not.toThrow()
     expect(streamState.onmessage).toBeTypeOf('function')
   })
 
   it('parses and upserts create_bond events', async () => {
     const onEvent = vi.fn()
-    subscribeBondCreationEvents(onEvent)
+    subscribeBondCreationEvents({ captureFailure: vi.fn() }, onEvent)
 
     await streamState.onmessage?.({
       type: 'create_bond',
@@ -60,16 +66,16 @@ describe('Horizon Bond Creation Listener', () => {
     })
 
     expect(upsertIdentity).toHaveBeenCalledWith({ id: 'GABC...' })
-    expect(upsertBond).toHaveBeenCalledWith({ id: 'bond123', amount: '1000', duration: '365' })
+    expect(upsertBond).toHaveBeenCalledWith({ id: 'bond123', address: 'GABC...', amount: '1000', duration: '365' })
     expect(onEvent).toHaveBeenCalledWith({
       identity: { id: 'GABC...' },
-      bond: { id: 'bond123', amount: '1000', duration: '365' },
+      bond: { id: 'bond123', address: 'GABC...', amount: '1000', duration: '365' },
     })
   })
 
   it('ignores non-bond events', async () => {
     const onEvent = vi.fn()
-    subscribeBondCreationEvents(onEvent)
+    subscribeBondCreationEvents({ captureFailure: vi.fn() }, onEvent)
 
     await streamState.onmessage?.({
       type: 'payment',
@@ -83,7 +89,7 @@ describe('Horizon Bond Creation Listener', () => {
   })
 
   it('handles duplicate create_bond events consistently', async () => {
-    subscribeBondCreationEvents(vi.fn())
+    subscribeBondCreationEvents({ captureFailure: vi.fn() }, vi.fn())
 
     const event = {
       type: 'create_bond',

@@ -1,12 +1,15 @@
-# Tenant-Level Rate Limiting Implementation
+# TODO
 
-## Steps
+- [x] Read authoritative outbox lifecycle states/transitions from code (types/schema/emitter/repository/publisher)
+- [x] Read webhook DLQ store implementation for cross-linking (postgresDlqStore)
 
-- [x] Step 1: Add rate limit configuration to `src/config/index.ts`
-- [x] Step 2: Rewrite `src/middleware/rateLimit.ts` with safe defaults, tier-based limits, tenant extraction, fail-open behavior, and clear headers
-- [x] Step 3: Fix missing imports in `src/app.ts` and apply rate limit middleware to API routes
-- [x] Step 4: Create `tests/routes/rateLimit.test.ts` with tenant isolation, tier, header, 429, and fail-open tests
-- [x] Step 5: Code review and verification completed (runtime testing deferred due to missing Node toolchain in environment)
-
-
+- [ ] Update `src/db/outbox/README.md` with:
+  - [ ] Emit-in-transaction contract
+  - [ ] Publisher leasing/claim loop
+  - [ ] Retry/backoff logic + exact formula used
+  - [ ] DLQ routing on exhaustion (outbox `dead_letter`) and cross-link webhook `webhook_dlq`
+  - [ ] Mermaid sequence diagram (emit → claim/lease → publish → ack/markPublished OR markFailed → dead_letter)
+  - [ ] State diagram with exact status names
+  - [ ] Metrics list with exact metric names/labels
+- [ ] Run `npm run lint` and `npm run build`
 

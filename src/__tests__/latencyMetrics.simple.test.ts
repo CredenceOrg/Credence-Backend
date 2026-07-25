@@ -1,16 +1,17 @@
-import { describe, it, expect } from 'vitest'
-
-// Test route normalization logic directly without importing the full module
-function normalizeRoute(path: string, routePath?: string): string {
-  if (routePath) return routePath
-  
-  return path
-    .replace(/\/0x[a-fA-F0-9]+/g, '/:address')
-    .replace(/\/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/gi, '/:id')
-    .replace(/\/\d+/g, '/:id')
-}
+import { describe, it, expect, beforeEach } from 'vitest'
+import { 
+  normalizeRoute, 
+  httpRequestDurationHistogram, 
+  httpRequestStatusTotal,
+  HTTP_LATENCY_BUCKETS_S,
+} from '../observability/latencyMetrics.js'
 
 describe('latencyMetrics - route normalization', () => {
+  beforeEach(() => {
+    httpRequestDurationHistogram.reset()
+    httpRequestStatusTotal.reset()
+  })
+
   describe('normalizeRoute', () => {
     it('uses Express route path when available', () => {
       const result = normalizeRoute('/api/trust/0x123abc', '/api/trust/:address')
@@ -20,6 +21,11 @@ describe('latencyMetrics - route normalization', () => {
     it('normalizes hex addresses in path', () => {
       const result = normalizeRoute('/api/trust/0x123abc')
       expect(result).toBe('/api/trust/:address')
+    })
+
+    it('normalizes Stellar G-addresses in path', () => {
+      const result = normalizeRoute('/api/bond/GABC7IXPV3YWQXKQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQZQXQ')
+      expect(result).toBe('/api/bond/:address')
     })
 
     it('normalizes UUIDs in path', () => {
@@ -73,6 +79,68 @@ describe('latencyMetrics - route normalization', () => {
       const unique = new Set(normalized)
       
       expect(unique.size).toBe(1) // All normalize to /api/trust/:address
+    })
+  })
+
+  describe('SLA Metrics - Histograms and Counters', () => {
+    it('records latency in the correct buckets', async () => {
+      httpRequestDurationHistogram.observe({
+        method: 'GET',
+        route: '/api/trust/:address',
+        status_class: '2xx'
+      }, 0.200)
+
+      const result = await httpRequestDurationHistogram.get()
+      // 0.200 s falls exactly on the 200 ms SLO fence-post bucket (le=0.2)
+      const bucket02 = result.values.find(v => v.labels.le === 0.2 && v.labels.route === '/api/trust/:address')
+      // 0.200 s does NOT fall in any smaller bucket (le=0.1 is the next one down)
+      const bucket01 = result.values.find(v => v.labels.le === 0.1 && v.labels.route === '/api/trust/:address')
+
+      expect(bucket02?.value).toBe(1)
+      expect(bucket01?.value).toBe(0)
+    })
+
+    it('tracks status class counts', async () => {
+      httpRequestStatusTotal.inc({ method: 'GET', route: '/api/test', status_class: '2xx' })
+      httpRequestStatusTotal.inc({ method: 'GET', route: '/api/test', status_class: '4xx' })
+      
+      const result = await httpRequestStatusTotal.get()
+      const count2xx = result.values.find(v => v.labels.status_class === '2xx' && v.labels.route === '/api/test')
+      const count4xx = result.values.find(v => v.labels.status_class === '4xx' && v.labels.route === '/api/test')
+
+      expect(count2xx?.value).toBe(1)
+      expect(count4xx?.value).toBe(1)
+    })
+  })
+
+  describe('HTTP_LATENCY_BUCKETS_S — SLO alignment', () => {
+    it('contains exact 200 ms fence-post (cache SLO target)', () => {
+      expect(HTTP_LATENCY_BUCKETS_S).toContain(0.2)
+    })
+
+    it('contains exact 500 ms fence-post (queue SLO target)', () => {
+      expect(HTTP_LATENCY_BUCKETS_S).toContain(0.5)
+    })
+
+    it('contains exact 1000 ms fence-post (database SLO target / p99 alert threshold)', () => {
+      expect(HTTP_LATENCY_BUCKETS_S).toContain(1)
+    })
+
+    it('is sorted in ascending order', () => {
+      const sorted = [...HTTP_LATENCY_BUCKETS_S].sort((a, b) => a - b)
+      expect(HTTP_LATENCY_BUCKETS_S).toEqual(sorted)
+    })
+
+    it('matches the buckets registered on the histogram', async () => {
+      // Observe a value so prom-client emits bucket lines for this label set.
+      httpRequestDurationHistogram.observe({ method: 'GET', route: '/test', status_class: '2xx' }, 0)
+      const metrics = await httpRequestDurationHistogram.get()
+      const finiteBounds = [...new Set(
+        metrics.values
+          .map(v => v.labels.le)
+          .filter((le): le is number => typeof le === 'number' && isFinite(le)),
+      )].sort((a, b) => a - b)
+      expect(finiteBounds).toEqual(HTTP_LATENCY_BUCKETS_S)
     })
   })
 })

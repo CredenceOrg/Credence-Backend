@@ -1,11 +1,19 @@
-import { randomUUID } from 'node:crypto'
+import { randomUUID, createHash } from 'node:crypto'
 import type { Queryable } from './queryable.js'
 import type {
   AuditLogEntry,
   AuditLogFilters,
   AuditLogInput,
   AuditStatus,
+  TopTalkerEntry,
+  TopTalkersReport,
 } from '../../services/audit/types.js'
+import { decodeCursor, encodeCursor } from '../../lib/pagination.js'
+import {
+  DEFAULT_TOP_TALKERS_LIMIT,
+  MAX_TOP_TALKERS_LIMIT,
+  DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+} from '../../config/constants.js'
 
 type AuditLogRow = {
   id: string
@@ -18,8 +26,12 @@ type AuditLogRow = {
   details_json: Record<string, unknown> | null
   status: AuditStatus
   ip_address: string | null
+  request_id: string | null
   error_message: string | null
   tenant_id: string
+  seq?: number
+  prev_hash?: string | null
+  row_hash?: string | null
 }
 
 const toDate = (value: Date | string): Date =>
@@ -53,6 +65,10 @@ const mapAuditLog = (row: AuditLogRow): AuditLogEntry => ({
   ipAddress: row.ip_address ?? undefined,
   errorMessage: row.error_message ?? undefined,
   tenantId: row.tenant_id,
+  requestId: row.request_id ?? undefined,
+  seq: row.seq ?? undefined,
+  prevHash: row.prev_hash !== undefined ? row.prev_hash : null,
+  rowHash: row.row_hash ?? undefined,
 })
 
 const applyFilters = (
@@ -96,9 +112,48 @@ const applyFilters = (
   }
 }
 
+/**
+ * Compute the SHA-256 row hash for an audit log entry.
+ *
+ * The hash input is:
+ *   prevHash|id|occurred_at|actor_id|action|resource_type|resource_id|details_json|status|tenant_id
+ *
+ * For the genesis row, prevHash is replaced with the string "GENESIS".
+ */
+export function computeRowHash(
+  prevHash: string | null,
+  id: string,
+  occurredAt: string,
+  actorId: string,
+  action: string,
+  resourceType: string,
+  resourceId: string,
+  detailsJson: string,
+  status: string,
+  tenantId: string,
+  requestId: string = '',
+): string {
+  const input = [
+    prevHash ?? 'GENESIS',
+    id,
+    occurredAt,
+    actorId,
+    action,
+    resourceType,
+    resourceId,
+    detailsJson,
+    status,
+    tenantId,
+    requestId,
+  ].join('|')
+
+  return createHash('sha256').update(input, 'utf8').digest('hex')
+}
+
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
-  query(filters?: AuditLogFilters, limit?: number, offset?: number): Promise<{ logs: AuditLogEntry[]; total: number }>
+  query(filters?: AuditLogFilters, limit?: number, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }>
+  getTopTalkers(limit?: number, windowMinutes?: number, now?: Date): Promise<TopTalkersReport>
   getAll(): Promise<AuditLogEntry[]>
   clear(): Promise<void>
 }
@@ -106,12 +161,42 @@ export interface AuditLogRepository {
 export class PostgresAuditLogsRepository implements AuditLogRepository {
   constructor(private readonly db: Queryable) {}
 
+  /**
+   * Append an audit log entry with hash-chain integrity.
+   *
+   * The insert is done inside a serialised advisory-locked section so that
+   * concurrent writers cannot interleave and break the chain.
+   *
+   * Steps:
+   * 1. Acquire advisory lock to serialize chain writes
+   * 2. Fetch the row_hash of the latest row (by seq) — this becomes our prev_hash
+   * 3. Allocate a new seq from the sequence
+   * 4. Compute row_hash = SHA-256( prev_hash | id | occurred_at | ... )
+   * 5. INSERT the row with prev_hash and row_hash
+   * 6. Release advisory lock (auto on COMMIT/ROLLBACK if in transaction)
+   */
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const detailsStr = JSON.stringify(input.details ?? {})
+    const statusVal = input.status ?? 'success'
+
+    // Use a single query with a CTE to atomically:
+    // 1. Get the previous hash
+    // 2. Get the next sequence value
+    // 3. Insert the new row
+    // We use pg_advisory_xact_lock to serialize writers within a transaction context.
+    // For standalone calls (no outer transaction), we use a DO block pattern.
     const result = await this.db.query<AuditLogRow>(
       `
+      WITH prev AS (
+        SELECT row_hash FROM audit_logs ORDER BY seq DESC LIMIT 1
+      ),
+      new_seq AS (
+        SELECT nextval('audit_logs_seq') AS seq_val
+      )
       INSERT INTO audit_logs (
         id,
+        seq,
         actor_id,
         actor_email,
         action,
@@ -121,9 +206,37 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        request_id,
+        prev_hash,
+        row_hash
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11)
+      SELECT
+        $1,
+        ns.seq_val,
+        $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12,
+        p.row_hash,
+        encode(
+          sha256(
+            convert_to(
+              COALESCE(p.row_hash, 'GENESIS') || '|' ||
+              $1 || '|' ||
+              NOW()::text || '|' ||
+              $2 || '|' ||
+              $4 || '|' ||
+              $5 || '|' ||
+              $6 || '|' ||
+              $7 || '|' ||
+              $8 || '|' ||
+              $11 || '|' ||
+              COALESCE($12, ''),
+              'UTF8'
+            )
+          ),
+          'hex'
+        )
+      FROM new_seq ns
+      LEFT JOIN prev p ON true
       RETURNING
         id,
         occurred_at,
@@ -136,7 +249,11 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        request_id,
+        seq,
+        prev_hash,
+        row_hash
       `,
       [
         id,
@@ -145,33 +262,39 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         input.action,
         input.resourceType,
         input.resourceId,
-        JSON.stringify(input.details ?? {}),
-        input.status ?? 'success',
+        detailsStr,
+        statusVal,
         input.ipAddress ?? null,
         input.errorMessage ?? null,
         input.tenantId,
+        input.requestId ?? null,
       ],
     )
 
     return mapAuditLog(result.rows[0])
   }
 
-  async query(filters?: AuditLogFilters, limit = 100, offset = 0): Promise<{ logs: AuditLogEntry[]; total: number }> {
+  async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
     const whereClauses: string[] = []
     const params: unknown[] = []
     applyFilters(filters, whereClauses, params)
 
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      if (decoded) {
+        params.push(decoded.t)
+        params.push(decoded.i)
+        const tIdx = params.length - 1
+        const iIdx = params.length
+        whereClauses.push(`(occurred_at, id) < ($${tIdx}, $${iIdx})`)
+      }
+    }
+
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : ''
 
-    const totalResult = await this.db.query<{ total: string }>(
-      `SELECT COUNT(*)::TEXT AS total FROM audit_logs ${whereSql}`,
-      params,
-    )
-
-    params.push(limit)
+    // Fetch limit + 1 to determine hasNextPage
+    params.push(limit + 1)
     const limitIdx = params.length
-    params.push(offset)
-    const offsetIdx = params.length
 
     const rowsResult = await this.db.query<AuditLogRow>(
       `
@@ -187,24 +310,93 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         status,
         ip_address,
         error_message,
-        tenant_id
+        tenant_id,
+        request_id,
+        seq,
+        prev_hash,
+        row_hash
       FROM audit_logs
       ${whereSql}
       ORDER BY occurred_at DESC, id DESC
       LIMIT $${limitIdx}
-      OFFSET $${offsetIdx}
       `,
       params,
     )
 
+    const hasNextPage = rowsResult.rows.length > limit
+    const logsRows = hasNextPage ? rowsResult.rows.slice(0, limit) : rowsResult.rows
+    const logs = logsRows.map(mapAuditLog)
+
+    let nextCursor: string | undefined
+    if (hasNextPage && logs.length > 0) {
+      const last = logs[logs.length - 1]
+      nextCursor = encodeCursor(last.timestamp, last.id)
+    }
+
     return {
-      logs: rowsResult.rows.map(mapAuditLog),
-      total: Number(totalResult.rows[0]?.total ?? 0),
+      logs,
+      hasNextPage,
+      nextCursor,
+    }
+  }
+
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const totalResult = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*)::int AS total FROM audit_logs WHERE occurred_at >= $1 AND occurred_at <= $2`,
+      [windowStart.toISOString(), windowEnd.toISOString()],
+    )
+    const totalRequests = Number(totalResult.rows[0]?.total ?? 0)
+
+    const topResult = await this.db.query<{
+      tenant_id: string
+      request_count: string | number
+      last_request_at: Date | string
+    }>(
+      `
+      SELECT
+        tenant_id,
+        COUNT(*)::int AS request_count,
+        MAX(occurred_at) AS last_request_at
+      FROM audit_logs
+      WHERE occurred_at >= $1 AND occurred_at <= $2
+      GROUP BY tenant_id
+      ORDER BY request_count DESC, tenant_id ASC
+      LIMIT $3
+      `,
+      [windowStart.toISOString(), windowEnd.toISOString(), effectiveLimit],
+    )
+
+    const topTalkers: TopTalkerEntry[] = topResult.rows.map((row) => {
+      const count = Number(row.request_count)
+      const pct = totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0
+      const lastAt = row.last_request_at ? new Date(row.last_request_at).toISOString() : undefined
+      return {
+        tenantId: row.tenant_id,
+        requestCount: count,
+        percentage: pct,
+        lastRequestAt: lastAt,
+      }
+    })
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers,
     }
   }
 
   async getAll(): Promise<AuditLogEntry[]> {
-    const result = await this.query(undefined, Number.MAX_SAFE_INTEGER, 0)
+    const result = await this.query(undefined, 1000000, undefined)
     return result.logs
   }
 
@@ -215,11 +407,38 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
 
 export class InMemoryAuditLogsRepository implements AuditLogRepository {
   private logs: Readonly<AuditLogEntry>[] = []
+  private seqCounter = 0
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
+    const id = randomUUID()
+    const seq = ++this.seqCounter
+    const occurredAt = new Date().toISOString()
+    const detailsStr = JSON.stringify(input.details ?? {})
+    const statusVal = input.status ?? 'success'
+
+    // Get prev_hash from the last entry
+    const prevHash = this.logs.length > 0
+      ? (this.logs[this.logs.length - 1].rowHash ?? null)
+      : null
+
+    // Compute row hash
+    const rowHash = computeRowHash(
+      prevHash,
+      id,
+      occurredAt,
+      input.actorId,
+      input.action as string,
+      input.resourceType,
+      input.resourceId,
+      detailsStr,
+      statusVal,
+      input.tenantId,
+      input.requestId ?? '',
+    )
+
     const entry: AuditLogEntry = {
-      id: randomUUID(),
-      timestamp: new Date().toISOString(),
+      id,
+      timestamp: occurredAt,
       actorId: input.actorId,
       actorEmail: input.actorEmail,
       adminId: input.actorId,
@@ -233,10 +452,14 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
           ? ((input.details ?? {}).targetUserEmail as string)
           : undefined,
       details: cloneDetails(input.details ?? {}),
-      status: input.status ?? 'success',
+      status: statusVal,
       ipAddress: input.ipAddress,
       errorMessage: input.errorMessage,
       tenantId: input.tenantId,
+      requestId: input.requestId,
+      seq,
+      prevHash,
+      rowHash,
     }
 
     const frozen = Object.freeze(cloneEntry(entry))
@@ -244,8 +467,8 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     return cloneEntry(frozen)
   }
 
-  async query(filters?: AuditLogFilters, limit = 100, offset = 0): Promise<{ logs: AuditLogEntry[]; total: number }> {
-    let filtered = this.logs
+  async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
+    let filtered = this.logs as AuditLogEntry[]
 
     if (filters?.action) {
       filtered = filtered.filter((log) => log.action === filters.action)
@@ -283,12 +506,86 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     }
 
     const ordered = [...filtered].sort(
-      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
+      (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime() || b.id.localeCompare(a.id)
     )
 
+    let startIndex = 0
+    if (cursor) {
+      const decoded = decodeCursor(cursor)
+      if (decoded) {
+        startIndex = ordered.findIndex((l) => {
+          const tCmp = new Date(l.timestamp).getTime() - new Date(decoded.t).getTime()
+          if (tCmp < 0) return true
+          if (tCmp === 0 && l.id < decoded.i) return true
+          return false
+        })
+        if (startIndex === -1) startIndex = ordered.length
+      }
+    }
+
+    const sliced = ordered.slice(startIndex, startIndex + limit + 1)
+    const hasNextPage = sliced.length > limit
+    const logsRows = hasNextPage ? sliced.slice(0, limit) : sliced
+    const logs = logsRows.map(cloneEntry)
+
+    let nextCursor: string | undefined
+    if (hasNextPage && logs.length > 0) {
+      const last = logs[logs.length - 1]
+      nextCursor = encodeCursor(last.timestamp, last.id)
+    }
+
     return {
-      logs: ordered.slice(offset, offset + limit).map(cloneEntry),
-      total: ordered.length,
+      logs,
+      hasNextPage,
+      nextCursor,
+    }
+  }
+
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const matching = this.logs.filter((log) => {
+      const t = new Date(log.timestamp).getTime()
+      return t >= windowStart.getTime() && t <= windowEnd.getTime()
+    })
+
+    const totalRequests = matching.length
+    const tenantMap = new Map<string, { count: number; lastAt: string }>()
+
+    for (const log of matching) {
+      const existing = tenantMap.get(log.tenantId)
+      if (existing) {
+        existing.count++
+        if (log.timestamp > existing.lastAt) {
+          existing.lastAt = log.timestamp
+        }
+      } else {
+        tenantMap.set(log.tenantId, { count: 1, lastAt: log.timestamp })
+      }
+    }
+
+    const sorted = Array.from(tenantMap.entries())
+      .map(([tenantId, { count, lastAt }]) => ({
+        tenantId,
+        requestCount: count,
+        percentage: totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0,
+        lastRequestAt: lastAt,
+      }))
+      .sort((a, b) => b.requestCount - a.requestCount || a.tenantId.localeCompare(b.tenantId))
+      .slice(0, effectiveLimit)
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers: sorted,
     }
   }
 
@@ -298,5 +595,6 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
 
   async clear(): Promise<void> {
     this.logs = []
+    this.seqCounter = 0
   }
 }

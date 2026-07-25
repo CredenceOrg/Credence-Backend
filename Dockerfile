@@ -24,10 +24,15 @@ RUN npm ci --omit=dev
 # Copy compiled output from builder
 COPY --from=builder /app/dist/ dist/
 
+# Copy entrypoint script and make executable
+COPY entrypoint.sh ./
+RUN chmod +x entrypoint.sh
+
 # Non-root user for security
 RUN addgroup -S credence && adduser -S credence -G credence
 USER credence
 
 EXPOSE 3000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["node", "dist/index.js"]

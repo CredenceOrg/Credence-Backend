@@ -3,6 +3,7 @@ import { AuthenticatedRequest, requireUserAuth, requireAdminRole } from '../midd
 import { WebhookRotationService, WebhookNotFoundError } from '../services/webhooks/rotationService.js'
 import type { WebhookStore } from '../services/webhooks/types.js'
 import type { AuditLogService } from '../services/audit/index.js'
+import { getTenantId, setTenantId } from '../utils/tenantContext.js'
 
 /**
  * Create the webhook management router.
@@ -40,12 +41,19 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
     requireUserAuth,
     requireAdminRole,
     async (req: Request, res: Response): Promise<void> => {
-      const { webhookId } = req.params
-      const authReq = req as AuthenticatedRequest
-      const actor = authReq.user!
-      const ipAddress = req.ip ?? req.socket.remoteAddress
+      // Set tenant context from request header
+      const tenantId = req.headers['x-tenant-id'] as string || 'default-tenant'
+      const originalTenant = getTenantId()
+      if (!originalTenant) {
+        setTenantId(tenantId)
+      }
 
       try {
+        const { webhookId } = req.params
+        const authReq = req as AuthenticatedRequest
+        const actor = authReq.user!
+        const ipAddress = req.ip ?? req.socket.remoteAddress
+
         const result = await rotationService.rotateSecret(
           webhookId,
           actor.id,
@@ -71,6 +79,11 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
           error: 'InternalError',
           message,
         })
+      } finally {
+        // Restore original tenant context
+        if (!originalTenant) {
+          setTenantId(null)
+        }
       }
     },
   )

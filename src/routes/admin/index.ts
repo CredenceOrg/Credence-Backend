@@ -5,12 +5,16 @@ import {
   requireAdminRole,
   UserRole,
 } from "../../middleware/auth.js";
+import erasureProofRouter from './erasureProof.js'
+import auditChainStatusRouter from './auditChainStatus.js'
+import settlementReconciliationRouter from './settlementReconciliation.js'
+import migrationsRouter from './migrations.js'
 import {
   buildPaginationMeta,
   parsePaginationParams,
 } from "../../lib/pagination.js";
 import { AdminService } from "../../services/admin/index.js";
-import { auditLogService } from "../../services/audit/index.js";
+import { auditLogService, AuditAction } from "../../services/audit/index.js";
 import { impersonationService } from "../../services/impersonation/index.js";
 import { AppError, ErrorCode, ValidationError } from "../../lib/errors.js";
 import type {
@@ -19,11 +23,26 @@ import type {
 } from "../../services/admin/types.js";
 import type { IssueImpersonationTokenRequest } from "../../services/impersonation/types.js";
 import { ReplayService } from "../../services/replayService.js";
+import { withReplaySnapshot } from "../../db/transaction.js";
+import { RequestSnapshotsRepository } from "../../db/repositories/requestSnapshotsRepository.js";
 import { FailedInboundEventsRepository } from "../../db/repositories/failedInboundEventsRepository.js";
 import { registerAllReplayHandlers } from "../../services/replayHandlers.js";
 import { IdentityRepository } from "../../db/repositories/identityRepository.js";
 import { BondsRepository } from "../../db/repositories/bondsRepository.js";
 import { pool } from "../../db/pool.js";
+import { validate } from '../../middleware/validate.js'
+import {
+  assignRoleBodySchema,
+  revokeApiKeyBodySchema,
+  issueImpersonationTokenBodySchema,
+  replayEventBodySchema,
+} from '../../schemas/admin.js'
+import type { ReplayEventBody } from '../../schemas/admin.js'
+import { z } from 'zod'
+import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
+import { validateConfig, ConfigValidationError } from "../../config/index.js";
+import fs from "fs";
+import dotenv from "dotenv";
 
 /**
  * Create the admin router with role and user management endpoints
@@ -43,6 +62,8 @@ export function createAdminRouter(): Router {
   // Register handlers
   registerAllReplayHandlers(replayService, identityRepo, bondsRepo);
 
+  router.use(preventAdminCrawling);
+
   /**
    * GET /api/admin/users
    */
@@ -50,6 +71,7 @@ export function createAdminRouter(): Router {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
 
       const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
 
@@ -69,6 +91,7 @@ export function createAdminRouter(): Router {
         user.email,
         { page, limit, offset },
         filters,
+        requestId
       );
 
       res.status(200).json({
@@ -86,21 +109,18 @@ export function createAdminRouter(): Router {
   /**
    * POST /api/admin/roles/assign
    */
-  router.post('/roles/assign', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  router.post('/roles/assign', requireUserAuth, requireAdminRole, validate({ body: assignRoleBodySchema }), async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
       const assignRequest = req.body as AssignRoleRequest
-
-      // Validate request body
-      if (!assignRequest.userId || !assignRequest.role) {
-        throw new ValidationError('Missing required fields: userId, role')
-      }
 
       const result = await adminService.assignRole(
         user.id,
         user.email,
         assignRequest,
+        requestId
       );
 
       res.status(200).json({
@@ -113,24 +133,84 @@ export function createAdminRouter(): Router {
     }
   });
 
-  /**
-   * POST /api/admin/keys/revoke
-   */
-  router.post('/keys/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  const handleReloadConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
-      const revokeRequest = req.body as RevokeApiKeyRequest
+      const requestId = (req as any).requestId
 
-      // Validate request body
-      if (!revokeRequest.userId || !revokeRequest.apiKey) {
-        throw new ValidationError('Missing required fields: userId, apiKey')
+      const envPath = process.cwd() + '/.env';
+      let parsed = {};
+      if (fs.existsSync(envPath)) {
+        parsed = dotenv.parse(fs.readFileSync(envPath));
       }
+      
+      const candidateEnv = { ...process.env, ...parsed };
+      
+      try {
+        validateConfig(candidateEnv as any);
+      } catch (err: any) {
+        if (err instanceof ConfigValidationError) {
+          res.status(400).json({ error: 'ConfigValidationError', message: 'Vault secrets validation failed', issues: err.issues });
+          return;
+        }
+        throw err;
+      }
+      
+      // Apply the validated config to process.env
+      for (const [k, v] of Object.entries(parsed)) {
+        process.env[k] = v as string;
+      }
+
+      // Audit log the action
+      void auditLogService.logAction(
+        user.tenantId,
+        user.id,
+        user.email,
+        AuditAction.RELOAD_CONFIG,
+        'system',
+        undefined,
+        { action: 'reload-config' },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      );
+
+      res.status(200).json({ success: true });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  /**
+   * POST /api/admin/reload-config
+   * Triggering a live reload of the validated config; audit-logged.
+   */
+  router.post('/reload-config', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   * @deprecated Use /reload-config instead.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/keys/revoke
+   */
+  router.post('/keys/revoke', requireUserAuth, requireAdminRole, validate({ body: revokeApiKeyBodySchema }), async (req: Request, res: Response, next) => {
+    try {
+      const authReq = req as AuthenticatedRequest
+      const user = authReq.user!
+      const requestId = (req as any).requestId
+      const revokeRequest = req.body as RevokeApiKeyRequest
 
       const result = await adminService.revokeApiKey(
         user.id,
         user.email,
         revokeRequest,
+        requestId
       );
 
       res.status(200).json({
@@ -147,22 +227,19 @@ export function createAdminRouter(): Router {
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate', requireUserAuth, requireAdminRole, validate({ body: issueImpersonationTokenBodySchema }), async (req: Request, res: Response, next) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
+      const requestId = (req as any).requestId
       const body = req.body as Partial<IssueImpersonationTokenRequest>
 
-      if (!body.targetUserId) {
-        res.status(400).json({ error: 'InvalidRequest', message: 'targetUserId is required' })
-        return
-      }
-      if (!body.reason) {
-        res.status(400).json({ error: 'InvalidRequest', message: 'reason is required' })
+      if (!body.targetUserId || !body.reason) {
+        res.status(400).json({ error: 'BadRequest', message: 'targetUserId and reason are required' })
         return
       }
 
-      const issued = impersonationService.issueToken(
+      const issued = await impersonationService.issueToken(
         user.id,
         user.email,
         user.tenantId,
@@ -172,6 +249,7 @@ export function createAdminRouter(): Router {
           ttlSeconds: body.ttlSeconds,
         },
         req.ip,
+        requestId
       );
 
       res.status(201).json({ success: true, data: issued });
@@ -191,9 +269,10 @@ export function createAdminRouter(): Router {
    *
    * Revoke an active impersonation token.
    */
-  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, (req: Request, res: Response, next) => {
+  router.post('/impersonate/:tokenId/revoke', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     const authReq = req as AuthenticatedRequest
     const user = authReq.user!
+    const requestId = (req as any).requestId
     const { tokenId } = req.params
 
     if (!tokenId) {
@@ -202,7 +281,7 @@ export function createAdminRouter(): Router {
     }
 
     try {
-      impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip)
+      await impersonationService.revokeToken(user.id, user.email, user.tenantId, tokenId, req.ip, requestId)
       res.status(200).json({ success: true })
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
@@ -222,7 +301,7 @@ export function createAdminRouter(): Router {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
 
-      const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
+      const { limit, cursor } = parsePaginationParams(req.query as Record<string, unknown>, { defaultLimit: 50 })
 
       // Build filter object from query params
       const filters: any = {}
@@ -236,13 +315,16 @@ export function createAdminRouter(): Router {
       if (req.query.from) filters.from = req.query.from
       if (req.query.to) filters.to = req.query.to
 
-      const result = await adminService.getAuditLogs(user.id, user.email, filters, limit, offset, user)
+      const result = await adminService.getAuditLogs(user.id, user.email, filters, limit, cursor ?? undefined, user)
+
+      // Use buildCursorPaginationMeta from lib/pagination
+      const { buildCursorPaginationMeta } = await import('../../lib/pagination.js')
 
       res.status(200).json({
         success: true,
         data: {
-          ...result,
-          ...buildPaginationMeta(result.total, page, limit),
+          logs: result.logs,
+          ...buildCursorPaginationMeta(result.hasNextPage, limit, result.nextCursor),
         },
       })
     } catch (error) {
@@ -261,6 +343,7 @@ export function createAdminRouter(): Router {
       try {
         const authReq = req as AuthenticatedRequest;
         const user = authReq.user!;
+        const requestId = (req as any).requestId
 
         if (!req.query.startDate || !req.query.endDate) {
           throw new ValidationError(
@@ -299,6 +382,7 @@ export function createAdminRouter(): Router {
         startDate,
         endDate,
         user,
+        requestId
       );
 
       let count = 0;
@@ -312,7 +396,7 @@ export function createAdminRouter(): Router {
         user.email,
         startDate,
         endDate,
-        count,
+        count
       );
       res.end();
     } catch (error) {
@@ -331,10 +415,28 @@ export function createAdminRouter(): Router {
    */
   router.get('/events/failed', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
     try {
+      const authReq = req as AuthenticatedRequest
+      const admin = authReq.user!
+      const requestId = (req as any).requestId
       const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
       const filters: any = {}
       if (req.query.status) filters.status = req.query.status
       if (req.query.type) filters.type = req.query.type
+
+      // Log the list action
+      void auditLogService.logAction(
+        admin.tenantId,
+        admin.id,
+        admin.email,
+        AuditAction.LIST_FAILED_EVENTS,
+        admin.id,
+        undefined,
+        { filters, limit, offset },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      )
 
       const { events, total } = await replayService.listFailedEvents(filters, limit, offset)
       const paginationMeta = buildPaginationMeta(total, page, limit)
@@ -359,20 +461,156 @@ export function createAdminRouter(): Router {
       const authReq = req as AuthenticatedRequest
       const admin = authReq.user!
       const id = req.params.id
+      const requestId = (req as any).requestId
 
       const result = await replayService.replayEvent(
         id,
         admin.id,
         admin.email,
         admin.tenantId,
-        req.ip
+        req.ip,
+        requestId
       )
 
       res.status(200).json(result)
     } catch (error: any) {
-      res.status(400).json({ error: 'ReplayFailed', message: error.message })
+      next(error)
     }
   })
+
+  /**
+   * POST /api/admin/events/replay-range
+   * Replay raw Horizon events between `fromLedger` and `toLedger` (inclusive).
+   */
+  router.post(
+    '/events/replay-range',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: z.object({ fromLedger: z.coerce.number().int().min(0), toLedger: z.coerce.number().int().min(0) }) }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const { fromLedger, toLedger } = req.body as { fromLedger: number; toLedger: number }
+
+        const result = await replayService.replayLedgerRange(
+          fromLedger,
+          toLedger,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip
+        )
+
+        res.status(200).json({ success: true, data: result })
+      } catch (error: any) {
+        res.status(400).json({ error: 'ReplayFailed', message: error.message })
+      }
+    }
+  )
+
+  /**
+   * POST /api/admin/replay-event
+   *
+   * Replay a specific failed inbound event by id (passed in body).
+   * Audit-logged via ReplayService.replayEvent.
+   */
+  router.post(
+    '/replay-event',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: replayEventBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+        const { id } = req.body as ReplayEventBody
+
+        const result = await replayService.replayEvent(
+          id,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip,
+          requestId
+        )
+
+        res.status(200).json(result)
+      } catch (error: any) {
+        next(error)
+      }
+    }
+  )
+
+  /**
+   * POST /api/admin/replay
+   * Replays a request by requestId against captured snapshot and returns diff.
+   */
+  router.post('/replay', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const admin = authReq.user!;
+      const requestId = (req as any).requestId;
+      const { requestId: targetRequestId } = req.body as { requestId: string };
+      if (!targetRequestId) {
+        throw new ValidationError('Missing requestId');
+      }
+
+      // Log the replay request
+      void auditLogService.logAction(
+        admin.tenantId,
+        admin.id,
+        admin.email,
+        AuditAction.REPLAY_REQUEST,
+        targetRequestId,
+        undefined,
+        { requestId: targetRequestId },
+        undefined,
+        undefined,
+        req.ip,
+        requestId
+      );
+
+      const diff = await withReplaySnapshot(pool, async (client, snapshot) => {
+        const identityRepo = new IdentityRepository(client);
+        const bondsRepo = new BondsRepository(client);
+        const currentIdentities = await identityRepo.findAll();
+        const currentBonds = await bondsRepo.findAll();
+        const computeDiff = (current: any, previous: any) => {
+          const diffResult: any = { added: [], removed: [], changed: [] };
+          const currentMap = new Map(current.map((item: any) => [item.id, item]));
+          const prevMap = new Map(previous.map((item: any) => [item.id, item]));
+          for (const [id, cur] of currentMap) {
+            if (!prevMap.has(id)) diffResult.added.push(cur);
+            else if (JSON.stringify(cur) !== JSON.stringify(prevMap.get(id))) diffResult.changed.push({ before: prevMap.get(id), after: cur });
+          }
+          for (const [id, prev] of prevMap) {
+            if (!currentMap.has(id)) diffResult.removed.push(prev);
+          }
+          return diffResult;
+        };
+        const identitiesDiff = computeDiff(currentIdentities, snapshot.identities);
+        const bondsDiff = computeDiff(currentBonds, snapshot.bonds);
+        return { identities: identitiesDiff, bonds: bondsDiff };
+      }, targetRequestId);
+      res.status(200).json({ success: true, data: diff });
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  // Mount erasure-proof sub-routes
+  router.use(erasureProofRouter)
+
+  // Mount audit chain status (read-only verifier state)
+  router.use('/audit', auditChainStatusRouter)
+
+  // Mount settlement reconciliation report (read-only)
+  router.use('/settlement', settlementReconciliationRouter)
+
+  // Mount migrations sub-router (dry-run)
+  router.use('/migrations', migrationsRouter)
 
   return router
 }

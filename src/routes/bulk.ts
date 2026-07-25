@@ -52,7 +52,11 @@ router.post(
       const uniqueAddresses = [...new Set(addresses)]
 
       if (uniqueAddresses.length > BULK_LIMITS.MAX_SYNC_BATCH_SIZE) {
-        const jobId = await verificationService.enqueueBulkVerification(uniqueAddresses)
+        // Compute server-side metadata to prevent clients from influencing
+        // scheduler behavior. Use the API key identifier as `orgId` when
+        // available; fall back to 'unknown'.
+        const orgId = (req as any).apiKey?.key ?? 'unknown'
+        const jobId = await verificationService.enqueueBulkVerification(uniqueAddresses, { orgId, size: uniqueAddresses.length })
         res.status(202).json({
           message: 'Batch verification queued',
           jobId,

@@ -5,13 +5,41 @@
  * ─ POST /:webhookId/rotate-secret — happy path, 404, 401, 403
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import express, { type Express } from 'express'
 
 import { MemoryWebhookStore } from '../../src/services/webhooks/memoryStore.js'
 import { AuditLogService } from '../../src/services/audit/index.js'
 import { createWebhookRouter } from '../../src/routes/webhooks.js'
 import type { WebhookConfig } from '../../src/services/webhooks/types.js'
+import { userRepo } from '../../src/repositories/userRepository.js'
+import { generateApiKey, _resetStore } from '../../src/services/apiKeys.js'
+import type { InMemoryApiKeyRepository } from '../../src/services/apiKeys.js'
+
+// Mock the audit log service to capture entries
+const mockAuditLogs: any[] = []
+vi.mock('../../src/services/audit/index.js', async () => {
+  const actual = await vi.importActual('../../src/services/audit/index.js')
+  return {
+    ...actual,
+    AuditLogService: vi.fn().mockImplementation(function() {
+      return {
+        logAction: vi.fn().mockImplementation(async (entry) => {
+          mockAuditLogs.push(entry)
+        }),
+        getLogs: vi.fn().mockImplementation(async () => {
+          return { logs: mockAuditLogs, total: mockAuditLogs.length }
+        }),
+      }
+    }),
+  }
+})
+
+const makeTokenFor = (id: string, role: 'super-admin' | 'verifier') => {
+  userRepo.upsert({ id, role, email: `${id}@example.test`, tenantId: `tenant-${id}` })
+  const created = generateApiKey(id, 'full')
+  return `Bearer ${created.key}`
+}
 
 // ── Lightweight fetch helper ──────────────────────────────────────────────
 
@@ -56,8 +84,8 @@ async function request(
 
 // ── Test data ─────────────────────────────────────────────────────────────
 
-const ADMIN_BEARER = 'Bearer admin-key-12345'
-const VERIFIER_BEARER = 'Bearer verifier-key-67890'
+let ADMIN_BEARER = ''
+let VERIFIER_BEARER = ''
 
 const SEED_WEBHOOK: WebhookConfig = {
   id: 'wh-test-001',
@@ -73,9 +101,15 @@ describe('Webhook Routes', () => {
   let app: Express
   let store: MemoryWebhookStore
   let audit: AuditLogService
+  
   const BASE = '/api/webhooks'
 
   beforeEach(async () => {
+    // Clear mock logs
+    mockAuditLogs.length = 0
+    
+    _resetStore()
+    userRepo._reset()
     store = new MemoryWebhookStore()
     audit = new AuditLogService()
     app = express()
@@ -83,7 +117,14 @@ describe('Webhook Routes', () => {
     app.use(BASE, createWebhookRouter(store, audit))
 
     await store.set({ ...SEED_WEBHOOK })
+    ADMIN_BEARER = makeTokenFor('admin-1', 'super-admin')
+    VERIFIER_BEARER = makeTokenFor('verifier-1', 'verifier')
   })
+
+  // Helper to mount app with auth repo when needed
+  function withAuth(repo?: InMemoryApiKeyRepository) {
+    return { app, repo }
+  }
 
   // ═══════════════════════════════════════════════════════════════════════
   // POST /:webhookId/rotate-secret
@@ -91,12 +132,12 @@ describe('Webhook Routes', () => {
 
   describe('POST /:webhookId/rotate-secret', () => {
     it('rotates the secret and returns rotation metadata', async () => {
-      const { status, body } = await request(
-        app,
-        'POST',
-        `${BASE}/${SEED_WEBHOOK.id}/rotate-secret`,
-        { headers: { Authorization: ADMIN_BEARER } },
-      )
+  const { status, body } = await request(
+    app,
+    'POST',
+    `${BASE}/${SEED_WEBHOOK.id}/rotate-secret`,
+    { headers: { Authorization: ADMIN_BEARER, 'x-tenant-id': 'test-tenant' } },
+  )
 
       expect(status).toBe(200)
       const data = (body as { success: boolean; data: Record<string, string> }).data
@@ -155,11 +196,13 @@ describe('Webhook Routes', () => {
         headers: { Authorization: ADMIN_BEARER },
       })
 
-      const { logs } = audit.getLogs()
-      expect(logs).toHaveLength(1)
-      expect(logs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
-      expect(logs[0].status).toBe('success')
-      expect(logs[0].targetUserId).toBe(SEED_WEBHOOK.id)
+      // Wait a bit for async operations
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
+      expect(mockAuditLogs).toHaveLength(1)
+      expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(mockAuditLogs[0].status).toBe('success')
+      expect(mockAuditLogs[0].resourceId).toBe(SEED_WEBHOOK.id)
     })
 
     it('two consecutive rotations produce different secrets', async () => {
@@ -198,10 +241,13 @@ describe('Webhook Routes', () => {
         headers: { Authorization: ADMIN_BEARER },
       })
 
-      const { logs } = audit.getLogs()
-      expect(logs).toHaveLength(1)
-      expect(logs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
-      expect(logs[0].status).toBe('failure')
+      // Wait a bit for async operations
+      await new Promise(resolve => setTimeout(resolve, 10))
+      
+      expect(mockAuditLogs).toHaveLength(1)
+      expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(mockAuditLogs[0].status).toBe('failure')
+      expect(mockAuditLogs[0].resourceId).toBe('nonexistent-webhook')
     })
 
     it('returns 401 when no Authorization header is provided', async () => {

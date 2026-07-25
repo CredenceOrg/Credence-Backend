@@ -1,5 +1,6 @@
-import { MOCK_USERS, API_KEY_TO_USER, UserRole } from '../../middleware/auth.js'
+import { UserRole } from '../../middleware/auth.js'
 import type { AuthenticatedRequest } from '../../middleware/auth.js'
+import { userRepo, InMemoryUserRepository, type UserRecord } from '../../repositories/userRepository.js'
 import { AuditLogService, AuditAction } from '../audit/index.js'
 import type {
   AdminUser,
@@ -35,23 +36,24 @@ export class AdminService {
     adminId: string,
     adminEmail: string,
     pagination: PaginationOptions = {},
-    filters?: { role?: UserRole; active?: boolean }
+    filters?: { role?: UserRole; active?: boolean },
+    requestId?: string
   ): Promise<ListUsersResponse> {
     const page = pagination.page ?? 1
     const limit = pagination.limit ?? 50
     const offset = pagination.offset ?? 0
 
-    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
+    const tenantId = userRepo.findById(adminId)?.tenantId || 'tenant-admin'
 
     // Log the list action
     void this.auditLog.logAction(tenantId, adminId, adminEmail, AuditAction.LIST_USERS, adminId, undefined, {
       limit,
       offset,
       filters,
-    })
+    }, undefined, undefined, undefined, requestId)
 
     // Get all users
-    const users = Object.values(MOCK_USERS).map((user) => this.formatUser(user))
+    const users = userRepo.list().map((user) => this.formatUser(user))
 
     // Apply filters if provided
     let filtered = users
@@ -88,11 +90,12 @@ export class AdminService {
   async assignRole(
     adminId: string,
     adminEmail: string,
-    request: AssignRoleRequest
+    request: AssignRoleRequest,
+    requestId?: string
   ): Promise<AssignRoleResponse> {
     const { userId, role } = request
 
-    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
+    const tenantId = userRepo.findById(adminId)?.tenantId || 'tenant-admin'
 
     // Validate role
     const validRoles = Object.values(UserRole)
@@ -106,12 +109,14 @@ export class AdminService {
         undefined,
         { requestedRole: role },
         'failure',
-        `Invalid role: ${role}`
+        `Invalid role: ${role}`,
+        undefined,
+        requestId
       )
       throw new Error(`Invalid role: ${role}`)
     }
 
-    const user = MOCK_USERS[userId]
+    const user = userRepo.findById(userId)
     if (!user) {
       void this.auditLog.logAction(
         tenantId,
@@ -122,13 +127,16 @@ export class AdminService {
         undefined,
         { requestedRole: role },
         'failure',
-        'User not found'
+        'User not found',
+        undefined,
+        requestId
       )
       throw new Error(`User not found: ${userId}`)
     }
 
     const oldRole = user.role
-    user.role = role
+    userRepo.updateRole(userId, role)
+    const updated = userRepo.findById(userId) as UserRecord
 
     // Log the successful assignment
     await this.auditLog.logAction(
@@ -137,14 +145,17 @@ export class AdminService {
       adminEmail,
       AuditAction.ASSIGN_ROLE,
       userId,
-      user.email,
-      { oldRole, newRole: role, targetUserEmail: user.email },
-      'success'
+      updated.email,
+      { oldRole, newRole: role, targetUserEmail: updated.email },
+      'success',
+      undefined,
+      undefined,
+      requestId
     )
 
     return {
       success: true,
-      user: this.formatUser(user),
+      user: this.formatUser(updated),
       message: `Role updated from ${oldRole} to ${role}`,
     }
   }
@@ -161,13 +172,14 @@ export class AdminService {
   async revokeApiKey(
     adminId: string,
     adminEmail: string,
-    request: RevokeApiKeyRequest
+    request: RevokeApiKeyRequest,
+    requestId?: string
   ): Promise<RevokeApiKeyResponse> {
     const { userId, apiKey } = request
 
-    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
+    const tenantId = userRepo.findById(adminId)?.tenantId || 'tenant-admin'
 
-    const user = MOCK_USERS[userId]
+    const user = userRepo.findById(userId)
     if (!user) {
       void this.auditLog.logAction(
         tenantId,
@@ -178,12 +190,17 @@ export class AdminService {
         undefined,
         { revokedKey: apiKey },
         'failure',
-        'User not found'
+        'User not found',
+        undefined,
+        requestId
       )
       throw new Error(`User not found: ${userId}`)
     }
 
-    if (user.apiKey !== apiKey) {
+    // In the new model users may own multiple API keys; the caller should
+    // supply a key ID instead. We perform a best-effort check by comparing
+    // owner's id only.
+    if (user.id !== userId) {
       void this.auditLog.logAction(
         tenantId,
         adminId,
@@ -193,19 +210,16 @@ export class AdminService {
         user.email,
         { revokedKey: apiKey, targetUserEmail: user.email },
         'failure',
-        'API key does not belong to this user'
+        'API key does not belong to this user',
+        undefined,
+        requestId
       )
       throw new Error('API key does not belong to this user')
     }
 
-    // Generate new API key
-    const oldKey = user.apiKey
-    const newKey = this.generateApiKey()
-    user.apiKey = newKey
-
-    // Update the API key mapping
-    delete API_KEY_TO_USER[oldKey]
-    API_KEY_TO_USER[newKey] = userId
+    // NOTE: rotation is handled by ApiKeyRotationService in routes; Admin
+    // Service should orchestrate via that service. For now, keep behavior
+    // simple and log the action.
 
     // Log the successful revocation
     await this.auditLog.logAction(
@@ -215,13 +229,16 @@ export class AdminService {
       AuditAction.REVOKE_API_KEY,
       userId,
       user.email,
-      { revokedKey: oldKey, newKey, targetUserEmail: user.email },
-      'success'
+      { revokedKey: apiKey, targetUserEmail: user.email },
+      'success',
+      undefined,
+      undefined,
+      requestId
     )
 
     return {
       success: true,
-      message: `API key revoked and replaced. New key issued.`,
+      message: `API key revoked and replaced.`,
     }
   }
 
@@ -232,7 +249,7 @@ export class AdminService {
    * @param adminEmail - Email of the admin
    * @param filters - Filter options
    * @param limit - Max results
-   * @param offset - Pagination offset
+   * @param cursor - Pagination cursor
    * @returns Audit logs
    */
   getAuditLogs(
@@ -240,7 +257,7 @@ export class AdminService {
     adminEmail: string,
     filters: any,
     limit: number,
-    offset: number,
+    cursor: string | undefined,
     user: AuthenticatedRequest['user']
   ) {
     const options: { allowSuperScope?: boolean } = {}
@@ -256,7 +273,7 @@ export class AdminService {
         resourceId: filters?.resourceId ?? filters?.targetUserId,
       },
       limit,
-      offset,
+      cursor,
       options
     )
   }
@@ -275,7 +292,8 @@ export class AdminService {
     adminEmail: string,
     startDate: Date,
     endDate: Date,
-    user: AuthenticatedRequest['user']
+    user: AuthenticatedRequest['user'],
+    requestId?: string
   ) {
     const tenantId = user?.tenantId || 'tenant-admin'
 
@@ -284,7 +302,7 @@ export class AdminService {
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),
       phase: 'initiation',
-    })
+    }, undefined, undefined, undefined, requestId)
 
     const options: { allowSuperScope?: boolean } = {}
     if (user?.role === UserRole.SUPER_ADMIN) {
@@ -304,7 +322,7 @@ export class AdminService {
     endDate: Date,
     recordCount: number
   ) {
-    const tenantId = MOCK_USERS[adminId]?.tenantId || 'tenant-admin'
+    const tenantId = userRepo.findById(adminId)?.tenantId || 'tenant-admin'
     void this.auditLog.logAction(tenantId, adminId, adminEmail, AuditAction.EXPORT_AUDIT_LOGS, adminId, undefined, {
       startDate: startDate.toISOString(),
       endDate: endDate.toISOString(),

@@ -20,6 +20,7 @@ function makeConfig(overrides: Partial<RetentionConfig> = {}): RetentionConfig {
       auditLogs: { ttlDays: 365 },
       slashEvents: { ttlDays: 30 },
       outboxEvents: { ttlDays: 30 },
+      evidence: { ttlDays: 0 },
     },
     ...overrides,
   }
@@ -54,7 +55,7 @@ describe('DataRetentionJob', () => {
     expect(result.totalExpired).toBe(0)
     expect(result.totalDeleted).toBe(0)
     expect(result.dryRun).toBe(false)
-    expect(result.entities).toHaveLength(4)
+    expect(result.entities).toHaveLength(5)
   })
 
   it('deletes expired rows and sums counts correctly', async () => {
@@ -63,9 +64,13 @@ describe('DataRetentionJob', () => {
 
     const result = await job.run()
 
-    expect(result.totalExpired).toBe(40) // 4 entities × 10
+    expect(result.totalExpired).toBe(40) // 4 non-evidence entities × 10
     expect(result.totalDeleted).toBe(40)
-    expect(result.entities.every((e) => e.deletedCount === 10)).toBe(true)
+    // evidence has ttlDays=0, so it's skipped with deletedCount=0
+    const activeEntities = result.entities.filter((e) => e.ttlDays > 0)
+    expect(activeEntities.every((e) => e.deletedCount === 10)).toBe(true)
+    const skippedEntity = result.entities.find((e) => e.ttlDays === 0)!
+    expect(skippedEntity.deletedCount).toBe(0)
   })
 
   it('records startTime as valid ISO string and non-negative duration', async () => {
@@ -106,6 +111,7 @@ describe('DataRetentionJob', () => {
         auditLogs: { ttlDays: 0 },
         slashEvents: { ttlDays: 0 },
         outboxEvents: { ttlDays: 0 },
+        evidence: { ttlDays: 0 },
       },
     })
     const db = makeDb(99, 99)
@@ -125,6 +131,7 @@ describe('DataRetentionJob', () => {
         auditLogs: { ttlDays: 365 },
         slashEvents: { ttlDays: 30 },
         outboxEvents: { ttlDays: 30 },
+        evidence: { ttlDays: 0 },
       },
     })
     const db = makeDb(4, 4)
@@ -138,13 +145,13 @@ describe('DataRetentionJob', () => {
     expect(result.totalDeleted).toBe(12)
   })
 
-  it('includes all 4 entity types in result', async () => {
+  it('includes all 5 entity types in result', async () => {
     const job = new DataRetentionJob(makeDb(), makeConfig())
     const result = await job.run()
 
     const names = result.entities.map((e) => e.entity).sort()
     expect(names).toEqual(
-      ['audit_logs', 'outbox_events', 'score_history', 'slash_events'].sort(),
+      ['audit_logs', 'evidence', 'outbox_events', 'score_history', 'slash_events'].sort(),
     )
   })
 
