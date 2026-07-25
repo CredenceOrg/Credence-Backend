@@ -169,6 +169,7 @@ Response: **204 No Content**. Subsequent requests using the revoked key receive 
 - All key operations (create, revoke, rotate) are logged to the audit log.
 - Rate limits are enforced per tier (integration at the infrastructure layer, e.g. via a reverse proxy or Redis-based limiter).
 - The middleware is **deny-by-default**: if a key does not carry the required scope, the request is rejected with `403 Forbidden` before reaching the handler.
+- For complete claim definitions, header specifications, and consumer middleware, see [docs/JWT_CLAIMS.md](JWT_CLAIMS.md).
 
 - **Timing-safe validation**: Keys are validated by hashing the presented key and performing constant-time checks against stored hashes to mitigate timing attacks. Implementations must avoid early-exit string comparisons on raw keys.
 - **No logging of raw keys**: Never log or persist raw API key values in application logs, error messages, or monitoring systems.

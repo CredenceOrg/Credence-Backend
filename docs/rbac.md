@@ -93,3 +93,10 @@ Every denied request emits a structured JSON log line to `console.warn`:
 | `/api/bond/:address` | GET | `requireMinRole('verifier')` |
 | `/api/identity` | POST | `requireMinRole('user')` |
 | `/api/admin/*` | ALL | `requireRole('admin')` |
+
+---
+
+## Related Documentation
+
+* [Canonical JWT Claims Reference](JWT_CLAIMS.md) – JWT role, tenant_id, and scope claim specifications.
+* [API Keys & Scopes](api-keys.md) – Granular API key scope definitions.
