@@ -7,6 +7,27 @@ servers:
   - url: https://api.credence.org/v1
 components:
   schemas:
+    MaintenanceError:
+      type: object
+      description: >
+        Response body returned when the server is in maintenance mode.
+        All write requests (POST, PUT, PATCH, DELETE) return this body with
+        HTTP 503 and a `Retry-After: 60` header.
+      required:
+        - error
+        - message
+        - retryAfter
+      properties:
+        error:
+          type: string
+          example: Service Unavailable
+        message:
+          type: string
+          example: The service is currently undergoing maintenance. Please retry later.
+        retryAfter:
+          type: integer
+          description: Seconds to wait before retrying.
+          example: 60
     addressSchema:
       def:
         type: string
@@ -3861,6 +3882,22 @@ components:
       scheme: bearer
       description: "API key sent as `Authorization: Bearer <key>`"
   parameters: {}
+  responses:
+    MaintenanceResponse:
+      description: >
+        Service is in maintenance mode. All write operations are temporarily
+        unavailable. Retry after the number of seconds indicated in the
+        `Retry-After` response header (60 seconds).
+      headers:
+        Retry-After:
+          description: Number of seconds to wait before retrying the request.
+          schema:
+            type: integer
+            example: 60
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/MaintenanceError"
 paths:
   /api/health:
     get:
@@ -3985,6 +4022,8 @@ paths:
             schema:
               nullable: true
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Trust data
           content:
@@ -4058,6 +4097,8 @@ paths:
                 - value
               additionalProperties: false
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Attestation created
           content:
@@ -4089,6 +4130,8 @@ paths:
             schema:
               nullable: true
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Bulk result
           content:
@@ -4108,6 +4151,8 @@ paths:
             schema:
               nullable: true
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Import result
           content:
@@ -4185,6 +4230,8 @@ paths:
                 - amount
                 - transactionHash
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Payout created
           content:
@@ -4204,6 +4251,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateWalletBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Wallet created
           content:
@@ -4237,6 +4286,8 @@ paths:
             schema:
               $ref: "#/components/schemas/WalletDebitBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Debit successful
           content:
@@ -4304,6 +4355,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateBondBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Bond created or updated
           content:
@@ -4331,6 +4384,8 @@ paths:
             schema:
               $ref: "#/components/schemas/CreateSlashRequestBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Slash request created
           content:
@@ -4458,6 +4513,8 @@ paths:
             schema:
               $ref: "#/components/schemas/SubmitVoteBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Vote recorded
           content:
@@ -4498,6 +4555,8 @@ paths:
             schema:
               $ref: "#/components/schemas/SubmitDisputeBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "201":
           description: Dispute submitted
           content:
@@ -4573,6 +4632,8 @@ paths:
           name: id
           in: path
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Dispute marked under review
           content:
@@ -4617,6 +4678,8 @@ paths:
             schema:
               $ref: "#/components/schemas/ResolveDisputeBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Dispute resolved
           content:
@@ -4662,6 +4725,8 @@ paths:
             schema:
               $ref: "#/components/schemas/DismissDisputeBody"
       responses:
+        "503":
+          $ref: "#/components/responses/MaintenanceResponse"
         "200":
           description: Dispute dismissed
           content:

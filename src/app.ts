@@ -34,6 +34,7 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
+import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
 
 const app = express();
 
@@ -95,6 +96,16 @@ const healthProbes = createDefaultProbes();
 app.use("/api/health", createHealthRouter({ ...healthProbes, isReady }));
 
 app.use("/api", rateLimitMiddleware);
+
+// Maintenance mode: block all write requests with 503 + Retry-After: 60
+// when MAINTENANCE_MODE=true. Read-only requests (GET, HEAD, OPTIONS) still pass
+// through so health checks and monitoring continue to work.
+try {
+  const config = validateConfig(process.env)
+  app.use("/api", createMaintenanceModeMiddleware(() => config.maintenanceMode))
+} catch {
+  // If config validation fails, maintenance mode is safely skipped
+}
 
 try {
   const config = validateConfig(process.env)

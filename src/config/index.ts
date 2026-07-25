@@ -390,6 +390,12 @@ export const envSchema = z.object({
 
   // Metrics endpoint CIDR whitelist (comma-separated IPv4 CIDRs)
   METRICS_ALLOWED_CIDRS: z.string().optional(),
+
+  // Maintenance mode – when true, all write (non-GET/HEAD) requests return 503
+  MAINTENANCE_MODE: z
+    .string()
+    .default('false')
+    .transform((val: string) => val === 'true'),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -525,6 +531,8 @@ export interface Config {
     defaultLowCreditThreshold: number
   }
   metricsAllowedCidrs: string[] | undefined
+  /** When true, all write (non-GET/HEAD) requests return 503 + Retry-After: 60. */
+  maintenanceMode: boolean
 }
 
 function parseCostWeights(raw: string): Record<string, number> {
@@ -715,6 +723,7 @@ function mapEnvToConfig(env: Env): Config {
     metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
       ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)
       : undefined,
+    maintenanceMode: env.MAINTENANCE_MODE,
   }
 
   if (env.HORIZON_URL) {

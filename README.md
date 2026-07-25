@@ -358,6 +358,7 @@ try {
 | `CORS_ORIGIN`                 | No       | `*`           | Allowed CORS origin                                    |
 | `ANALYTICS_REFRESH_CRON`      | No       | `*/5 * * * *` | Refresh cadence for analytics materialized view        |
 | `ANALYTICS_STALENESS_SECONDS` | No       | `300`         | Max acceptable analytics staleness before marked stale |
+| `MAINTENANCE_MODE`            | No       | `false`       | When `true`, blocks all writes with 503 + Retry-After  |
 
 ## Analytics materialized views
 
@@ -540,6 +541,58 @@ For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
 - **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
+
+## Maintenance Mode
+
+Operators can temporarily block all write operations (creating downtime-free maintenance windows) by setting a single environment variable:
+
+```bash
+MAINTENANCE_MODE=true
+```
+
+When enabled:
+
+- All **write requests** (`POST`, `PUT`, `PATCH`, `DELETE`) to `/api/*` return `503 Service Unavailable` with a `Retry-After: 60` header.
+- **Read-only requests** (`GET`, `HEAD`, `OPTIONS`) pass through unchanged — health checks, monitoring, and dashboard queries continue to work.
+- The response body is:
+
+```json
+{
+  "error": "Service Unavailable",
+  "message": "The service is currently undergoing maintenance. Please retry later.",
+  "retryAfter": 60
+}
+```
+
+To disable maintenance mode, set `MAINTENANCE_MODE=false` (or omit the variable; it defaults to `false`).
+
+### Environment variable
+
+| Variable           | Required | Default | Description                                           |
+| ------------------ | -------- | ------- | ----------------------------------------------------- |
+| `MAINTENANCE_MODE` | No       | `false` | When `true`, blocks all writes with 503 + Retry-After |
+
+### Kubernetes / Docker
+
+In a Kubernetes deployment you can flip the flag without a pod restart by updating the `ConfigMap` or `Secret` that supplies `MAINTENANCE_MODE` to the pod environment and triggering a rolling restart:
+
+```bash
+kubectl set env deployment/credence-backend MAINTENANCE_MODE=true
+# ... perform maintenance ...
+kubectl set env deployment/credence-backend MAINTENANCE_MODE=false
+```
+
+In Docker Compose, update the `.env` file and restart the backend service:
+
+```bash
+# Enable
+echo "MAINTENANCE_MODE=true" >> .env
+docker compose restart backend
+
+# Disable
+sed -i 's/MAINTENANCE_MODE=true/MAINTENANCE_MODE=false/' .env
+docker compose restart backend
+```
 
 ## Testing
 
