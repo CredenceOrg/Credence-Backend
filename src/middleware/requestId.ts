@@ -1,6 +1,6 @@
 import { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
-import { tracingContext } from '../utils/logger.js'
+import { tracingContext, createRequestLogger } from '../utils/logger.js'
 
 /**
  * Middleware to handle Request ID, Correlation ID, Trace ID, and context for distributed tracing.
@@ -50,7 +50,43 @@ export const requestIdMiddleware = (
   context.set('tenant', tenantId)
   context.set('actor', actorId)
 
-  tracingContext.run(context, () => {
+  const contextProxy = new Proxy(context, {
+    get(target, prop) {
+      if (prop === 'get') {
+        return (key: string) => {
+          if (key === 'tenant') {
+            const val = target.get('tenant')
+            if (val && val !== 'N/A') return val
+            return (
+              (req.header('x-tenant-id') as string) ||
+              (req as any).user?.tenantId ||
+              'N/A'
+            )
+          }
+          if (key === 'actor') {
+            const val = target.get('actor')
+            if (val && val !== 'N/A') return val
+            return (
+              (req.header('x-actor-id') as string) ||
+              (req as any).user?.id ||
+              'N/A'
+            )
+          }
+          return target.get(key)
+        }
+      }
+      const value = Reflect.get(target, prop)
+      if (typeof value === 'function') {
+        return value.bind(target)
+      }
+      return value
+    }
+  })
+
+  // Attach the logger to req.log
+  req.log = createRequestLogger(contextProxy)
+
+  tracingContext.run(contextProxy, () => {
     next()
   })
 }

@@ -211,6 +211,8 @@ export const oomEventsTotal = new client.Counter({
  * ```
  */
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
+  // Initialize a fresh metrics namespace for each request to avoid leakage
+  (req as any).metrics = {};
   const start = Date.now()
   const hrStart = process.hrtime.bigint()
   

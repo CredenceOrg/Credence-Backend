@@ -114,10 +114,10 @@ export function formatZodErrors(error: ZodError): Array<{ path: string; message:
  */
 export function validate<TParams = any, TQuery = any, TBody = any>(
   options: ValidateOptions,
-): (req: Request, res: Response, next: NextFunction) => void {
+): (req: ValidatedRequest<TParams, TQuery, TBody>, res: Response, next: NextFunction) => void {
   const { params: paramsSchema, query: querySchema, body: bodySchema } = options
 
-  return (req: Request, res: Response, next: NextFunction) => {
+  return (req: ValidatedRequest<TParams, TQuery, TBody>, res: Response, next: NextFunction) => {
     const validated: { params?: any; query?: any; body?: any } = {}
     const errors: Array<{ path: string; message: string; code: string }> = []
 

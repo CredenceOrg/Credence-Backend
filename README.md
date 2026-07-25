@@ -181,6 +181,8 @@ docs/openapi.yaml
 
 Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
 
+For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
+
 ### Postman / Insomnia collection
 
 ```
@@ -578,6 +580,12 @@ To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) wh
 
 For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
 - [Replay & Inspection Guide (Operator)](docs/replay_and_inspection.md)
+
+## Observability & Logging
+
+For observability, request tracing, metrics, and structured logging guidelines:
+- **Structured Logging Policy**: See [docs/LOGGING.md](docs/LOGGING.md) for logs, formats, and conventions.
+- **Request Tracing & Metrics**: See [docs/observability.md](docs/observability.md) for request tracing, PII redaction rules, and the `req.log` request-scoped logger.
 
 ## Security
 

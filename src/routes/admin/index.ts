@@ -35,7 +35,9 @@ import {
   assignRoleBodySchema,
   revokeApiKeyBodySchema,
   issueImpersonationTokenBodySchema,
+  replayEventBodySchema,
 } from '../../schemas/admin.js'
+import type { ReplayEventBody } from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
 import { validateConfig, ConfigValidationError } from "../../config/index.js";
@@ -131,11 +133,7 @@ export function createAdminRouter(): Router {
     }
   });
 
-  /**
-   * POST /api/admin/refresh-secrets
-   * Reloads secrets from the vault (.env) without a restart.
-   */
-  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, async (req: Request, res: Response, next) => {
+  const handleReloadConfig = async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest
       const user = authReq.user!
@@ -169,10 +167,10 @@ export function createAdminRouter(): Router {
         user.tenantId,
         user.id,
         user.email,
-        AuditAction.UPDATE_SETTINGS,
+        AuditAction.RELOAD_CONFIG,
         'system',
         undefined,
-        { action: 'refresh-secrets' },
+        { action: 'reload-config' },
         undefined,
         undefined,
         req.ip,
@@ -183,7 +181,20 @@ export function createAdminRouter(): Router {
     } catch (err) {
       next(err);
     }
-  });
+  };
+
+  /**
+   * POST /api/admin/reload-config
+   * Triggering a live reload of the validated config; audit-logged.
+   */
+  router.post('/reload-config', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   * @deprecated Use /reload-config instead.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, handleReloadConfig);
 
   /**
    * POST /api/admin/keys/revoke
@@ -494,6 +505,40 @@ export function createAdminRouter(): Router {
         res.status(200).json({ success: true, data: result })
       } catch (error: any) {
         res.status(400).json({ error: 'ReplayFailed', message: error.message })
+      }
+    }
+  )
+
+  /**
+   * POST /api/admin/replay-event
+   *
+   * Replay a specific failed inbound event by id (passed in body).
+   * Audit-logged via ReplayService.replayEvent.
+   */
+  router.post(
+    '/replay-event',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: replayEventBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+        const { id } = req.body as ReplayEventBody
+
+        const result = await replayService.replayEvent(
+          id,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip,
+          requestId
+        )
+
+        res.status(200).json(result)
+      } catch (error: any) {
+        next(error)
       }
     }
   )
