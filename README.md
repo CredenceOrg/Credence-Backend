@@ -181,6 +181,8 @@ docs/openapi.yaml
 
 Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
 
+For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
+
 ### Postman / Insomnia collection
 
 ```
