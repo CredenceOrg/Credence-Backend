@@ -11,6 +11,7 @@ import { executeShadowWrite } from './shadowWrite.js'
  * This import documents the intentional alignment between schema and service.
  */
 import type { CreatePayoutInput } from '../schemas/payout.js'
+import { ValidationError } from '../lib/errors.js'
 
 export class SettlementService {
   constructor(private readonly repository: SettlementsRepository) {}
@@ -85,5 +86,72 @@ export class SettlementService {
     )
 
     return settlement
+  }
+
+  /**
+   * Upserts a batch of settlements atomically after validating the entire batch payload.
+   * Ensures that no writes occur if any item in the batch fails validation.
+   */
+  async upsertSettlementBatch(inputs: CreateSettlementInput[]): Promise<Settlement[]> {
+    this.validateBatchInputs(inputs)
+
+    const results = await this.repository.upsertBatch(inputs)
+    const settlements: Settlement[] = []
+
+    for (const res of results) {
+      if (res.isDuplicate) {
+        recordSettlementDuplicate()
+      }
+      const settlement = res.settlement
+      settlements.push(settlement)
+
+      await invalidateCache(
+        'settlement',
+        settlement.transactionHash,
+        settlement,
+        {
+          verify: true,
+          verifyFn: (cached, fresh) => cached.status !== fresh.status,
+        }
+      )
+    }
+
+    return settlements
+  }
+
+  private validateBatchInputs(inputs: CreateSettlementInput[]): void {
+    if (!Array.isArray(inputs)) {
+      throw new ValidationError('Batch settlement inputs must be an array')
+    }
+    for (let i = 0; i < inputs.length; i++) {
+      const item = inputs[i]
+      if (!item || typeof item !== 'object') {
+        throw new ValidationError(`Settlement input at index ${i} must be a valid object`)
+      }
+      if (item.bondId === undefined || item.bondId === null || String(item.bondId).trim() === '') {
+        throw new ValidationError(`Settlement input at index ${i} has invalid bondId: must not be empty`)
+      }
+      if (typeof item.amount !== 'string' || !/^\d+(\.\d{1,18})?$/.test(item.amount)) {
+        throw new ValidationError(
+          `Settlement input at index ${i} has invalid amount: must be a valid non-negative numeric string with at most 18 decimal places`,
+        )
+      }
+      const numAmount = parseFloat(item.amount)
+      if (isNaN(numAmount) || numAmount < 0 || numAmount > 1e18) {
+        throw new ValidationError(`Settlement input at index ${i} has invalid amount: must be between 0 and 1e18`)
+      }
+      if (
+        typeof item.transactionHash !== 'string' ||
+        item.transactionHash.trim().length === 0 ||
+        item.transactionHash.length > 128
+      ) {
+        throw new ValidationError(
+          `Settlement input at index ${i} has invalid transactionHash: must be a string between 1 and 128 characters`,
+        )
+      }
+      if (item.settledAt !== undefined && (!(item.settledAt instanceof Date) || isNaN(item.settledAt.getTime()))) {
+        throw new ValidationError(`Settlement input at index ${i} has invalid settledAt: must be a valid Date object`)
+      }
+    }
   }
 }

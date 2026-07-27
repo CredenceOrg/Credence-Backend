@@ -1,4 +1,5 @@
 import type { SettlementStatus } from '../types/index.js'
+import { ValidationError } from '../lib/errors.js'
 
 /**
  * A single payout item in a batch.
@@ -78,7 +79,48 @@ export class BatchPayoutProcessor {
     this.logger = options.logger ?? (() => {})
   }
 
+  /**
+   * Validates the entire payload before applying any writes (atomic semantics).
+   * Throws a ValidationError immediately if any item in the batch is invalid.
+   */
+  public validatePayload(items: PayoutItem[]): void {
+    if (!Array.isArray(items)) {
+      throw new ValidationError('Batch payout payload must be an array of items')
+    }
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (!item || typeof item !== 'object') {
+        throw new ValidationError(`Item at index ${i} must be a valid payout item object`)
+      }
+      if (item.bondId === undefined || item.bondId === null || String(item.bondId).trim() === '') {
+        throw new ValidationError(`Item at index ${i} has invalid bondId: must not be empty`)
+      }
+      if (typeof item.amount !== 'string' || !/^\d+(\.\d{1,18})?$/.test(item.amount)) {
+        throw new ValidationError(
+          `Item at index ${i} has invalid amount: must be a valid non-negative numeric string with at most 18 decimal places`,
+        )
+      }
+      const numAmount = parseFloat(item.amount)
+      if (isNaN(numAmount) || numAmount < 0 || numAmount > 1e18) {
+        throw new ValidationError(`Item at index ${i} has invalid amount: must be between 0 and 1e18`)
+      }
+      if (
+        typeof item.transactionHash !== 'string' ||
+        item.transactionHash.trim().length === 0 ||
+        item.transactionHash.length > 128
+      ) {
+        throw new ValidationError(
+          `Item at index ${i} has invalid transactionHash: must be a string between 1 and 128 characters`,
+        )
+      }
+      if (item.settledAt !== undefined && (!(item.settledAt instanceof Date) || isNaN(item.settledAt.getTime()))) {
+        throw new ValidationError(`Item at index ${i} has invalid settledAt: must be a valid Date object`)
+      }
+    }
+  }
+
   async process(items: PayoutItem[]): Promise<BatchPayoutResult> {
+    this.validatePayload(items)
     const startTime = new Date().toISOString()
     const startMs = Date.now()
 
