@@ -1,6 +1,9 @@
 /** Header echoed from request to response to help clients debug retry loops. */
 export const HEADER_REQUEST_ATTEMPT = 'x-request-attempt'
 
+/** Header name for correlation ID propagated across services. */
+export const HEADER_CORRELATION_ID = 'x-correlation-id'
+
 /** Maximum tolerated age of the oldest unpublished outbox event before readiness fails. */
 export const OUTBOX_MAX_LAG_SECONDS = 60
 export const OUTBOX_MAX_LAG_MS = OUTBOX_MAX_LAG_SECONDS * 1000
