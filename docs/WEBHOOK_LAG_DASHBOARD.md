@@ -179,11 +179,17 @@ groups:
    `setWebhookQueuedOldestAge(ageSeconds)` once per interval
    (`0` when empty).
 2. At each terminal delivery outcome, call
-   `recordWebhookDeliveryOutcome('success' | 'failure')`.
+   `recordWebhookDeliveryOutcome('success' | 'failure')`
+   (`WebhookService.emit` already does this).
 3. Keep existing `recordJobDeadLetter('webhook', …)` /
    `recordJobTerminalOutcome('webhook', …)` callsites — they own the
    cross-domain view.
 4. Run `npx vitest run src/metrics/webhookLagDashboard.test.ts`.
+5. Smoke-check the scrape surface after a delivery:
+
+```bash
+curl -s http://localhost:3000/metrics | grep -E '^webhook_(queued_oldest_age_seconds|delivery_outcome_total)'
+```
 
 ---
 
