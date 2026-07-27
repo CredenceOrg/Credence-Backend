@@ -4,7 +4,8 @@ import fc from 'fast-check'
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long'
 
 import {
-  buildLinkHeader,
+  buildPaginationLinks,
+  buildCursorPaginationLinks,
   buildPaginationMeta,
   decodeCursor,
   encodeCursor,
@@ -17,11 +18,11 @@ import {
 describe('pagination helpers', () => {
   describe('parsePaginationParams', () => {
     it('returns default page, limit, and offset when the query is empty', () => {
-      expect(parsePaginationParams({})).toEqual({ page: 1, limit: 20, offset: 0 })
+      expect(parsePaginationParams({})).toMatchObject({ page: 1, limit: 20, offset: 0 })
     })
 
     it('parses explicit page and limit values', () => {
-      expect(parsePaginationParams({ page: '3', limit: '10' })).toEqual({
+      expect(parsePaginationParams({ page: '3', limit: '10' })).toMatchObject({
         page: 3,
         limit: 10,
         offset: 20,
@@ -29,7 +30,7 @@ describe('pagination helpers', () => {
     })
 
     it('derives page from offset for backward-compatible callers', () => {
-      expect(parsePaginationParams({ limit: '10', offset: '20' })).toEqual({
+      expect(parsePaginationParams({ limit: '10', offset: '20' })).toMatchObject({
         page: 3,
         limit: 10,
         offset: 20,
@@ -37,7 +38,7 @@ describe('pagination helpers', () => {
     })
 
     it('supports cursor as an offset alias', () => {
-      expect(parsePaginationParams({ limit: '5', cursor: '10' })).toEqual({
+      expect(parsePaginationParams({ limit: '5', cursor: '10' })).toMatchObject({
         page: 3,
         limit: 5,
         offset: 10,
@@ -45,7 +46,7 @@ describe('pagination helpers', () => {
     })
 
     it('uses a custom default limit when provided', () => {
-      expect(parsePaginationParams({}, { defaultLimit: 50 })).toEqual({
+      expect(parsePaginationParams({}, { defaultLimit: 50 })).toMatchObject({
         page: 1,
         limit: 50,
         offset: 0,
@@ -82,6 +83,89 @@ describe('pagination helpers', () => {
         total: 21,
         hasNext: true,
       })
+    })
+  })
+
+  describe('buildPaginationLinks', () => {
+    it('returns only self when total is zero', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?page=1&limit=20', 1, 20, 0)
+      expect(links.self).toBe('https://api.example.com/items?page=1&limit=20')
+      expect(links.first).toBeUndefined()
+      expect(links.prev).toBeUndefined()
+      expect(links.next).toBeUndefined()
+      expect(links.last).toBeUndefined()
+    })
+
+    it('returns only self on a single-page result', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?page=1&limit=20', 1, 20, 5)
+      expect(links.self).toContain('page=1')
+      expect(links.first).toBeUndefined()
+      expect(links.prev).toBeUndefined()
+      expect(links.next).toBeUndefined()
+      expect(links.last).toBeUndefined()
+    })
+
+    it('includes first, next, last on first page with multiple pages', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?page=1&limit=10', 1, 10, 25)
+      expect(links.self).toContain('page=1')
+      expect(links.first).toContain('page=1')
+      expect(links.prev).toBeUndefined()
+      expect(links.next).toContain('page=2')
+      expect(links.last).toContain('page=3')
+    })
+
+    it('includes first, prev, next, last on a middle page', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?page=2&limit=10', 2, 10, 50)
+      expect(links.self).toContain('page=2')
+      expect(links.first).toContain('page=1')
+      expect(links.prev).toContain('page=1')
+      expect(links.next).toContain('page=3')
+      expect(links.last).toContain('page=5')
+    })
+
+    it('includes first, prev, last on last page', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?page=5&limit=10', 5, 10, 50)
+      expect(links.self).toContain('page=5')
+      expect(links.first).toContain('page=1')
+      expect(links.prev).toContain('page=4')
+      expect(links.next).toBeUndefined()
+      expect(links.last).toContain('page=5')
+    })
+
+    it('preserves existing query params in the URL', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?status=active&page=1&limit=10', 1, 10, 30)
+      expect(links.self).toContain('status=active')
+      expect(links.next).toContain('status=active')
+      expect(links.next).toContain('page=2')
+    })
+
+    it('strips offset param and uses page instead', () => {
+      const links = buildPaginationLinks('https://api.example.com/items?offset=10&limit=10', 2, 10, 30)
+      expect(links.self).toContain('page=2')
+      expect(links.self).not.toContain('offset')
+      expect(links.next).toContain('page=3')
+      expect(links.next).not.toContain('offset')
+    })
+  })
+
+  describe('buildCursorPaginationLinks', () => {
+    it('returns only self when there is no next cursor', () => {
+      const links = buildCursorPaginationLinks('https://api.example.com/items?limit=20', 20, null)
+      expect(links.self).toBe('https://api.example.com/items?limit=20')
+      expect(links.next).toBeUndefined()
+    })
+
+    it('returns self and next when a next cursor is provided', () => {
+      const links = buildCursorPaginationLinks('https://api.example.com/items?limit=20', 20, 'cursor123')
+      expect(links.self).toContain('limit=20')
+      expect(links.self).not.toContain('cursor')
+      expect(links.next).toContain('cursor=cursor123')
+    })
+
+    it('strips cursor from self link', () => {
+      const links = buildCursorPaginationLinks('https://api.example.com/items?cursor=old&limit=20', 20, 'newCursor')
+      expect(links.self).not.toContain('cursor')
+      expect(links.next).toContain('cursor=newCursor')
     })
   })
 

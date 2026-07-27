@@ -9,6 +9,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { cache } from '../redis.js'
 import { invalidateCache, createCacheKey } from '../invalidation.js'
 
+// Mock invalidationBus to prevent pool.ts from trying to connect to a real DB
+vi.mock('../invalidationBus.js', () => ({
+  getInvalidationBus: () => ({
+    publish: vi.fn().mockResolvedValue(undefined),
+    start: vi.fn().mockResolvedValue(undefined),
+    stop: vi.fn().mockResolvedValue(undefined),
+    addListener: vi.fn(),
+  }),
+  resetInvalidationBus: vi.fn(),
+  InvalidationBus: vi.fn(),
+}))
+
 // Mock Redis for integration tests
 vi.mock('../redis.js', () => {
   const store = new Map<string, { value: any; ttl?: number; setAt: number }>()

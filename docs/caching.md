@@ -353,5 +353,15 @@ Authorization: Bearer <ADMIN_API_KEY_RAW>
 {"namespace": "attestation", "key": "id:123"}
 ```
 
-For full request/response details and audit logging behavior, see [docs/admin-api.md](admin-api.md#purge-cache).
+For a simpler, namespace-only clear, use the `/reset-cache` endpoint:
+
+```bash
+POST /api/admin/reset-cache
+Content-Type: application/json
+Authorization: Bearer <ADMIN_API_KEY_RAW>
+
+{"namespace": "attestation"}
+```
+
+For full request/response details and audit logging behavior, see [docs/admin-api.md](admin-api.md#purge-cache) and [docs/admin-api.md](admin-api.md#reset-cache).
 

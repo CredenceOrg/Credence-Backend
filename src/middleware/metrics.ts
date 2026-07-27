@@ -12,9 +12,15 @@
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
 import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import { registerPoolMetrics, registerPreparedStatementCacheMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
-import { pool, workerPool } from '../db/pool.js'
+import {
+  pool,
+  workerPool,
+  apiPreparedStatementCache,
+  workerPreparedStatementCache,
+  replicaPreparedStatementCache,
+} from '../db/pool.js'
 
 // Create a Registry to register metrics
 export const register = new client.Registry()
@@ -24,6 +30,13 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register prepared-statement cache size metrics
+registerPreparedStatementCacheMetrics(register, {
+  api: apiPreparedStatementCache,
+  worker: workerPreparedStatementCache,
+  replica: replicaPreparedStatementCache,
+})
 
 // Register downstream RPC latency metrics
 registerRpcLatencyMetrics(register)
@@ -193,6 +206,56 @@ export const webhookDlqSize = new client.Gauge({
   help: 'Number of messages in the webhook dead-letter queue',
   registers: [register]
 })
+
+// ============================================================================
+// JWT Signing-Key Metrics
+// ============================================================================
+
+export const signingKeyRotationsTotal = new client.Counter({
+  name: 'signing_key_rotations_total',
+  help: 'Total number of JWT signing-key rotations',
+  labelNames: ['result'],
+  registers: [register],
+})
+
+export const signingKeyPrunesTotal = new client.Counter({
+  name: 'signing_key_prunes_total',
+  help: 'Total number of retired signing keys garbage-collected after the grace window',
+  registers: [register],
+})
+
+export const jwksRequestsTotal = new client.Counter({
+  name: 'jwks_requests_total',
+  help: 'Total number of /.well-known/jwks.json requests, partitioned by HTTP outcome',
+  labelNames: ['cache', 'status'],
+  registers: [register],
+})
+
+/**
+ * Record a JWT signing-key rotation (`success` or `error`).
+ *
+ * Called from both the admin rotate route and the background
+ * KeyRotationScheduler.
+ */
+export function recordSigningKeyRotation(result: 'success' | 'error'): void {
+  signingKeyRotationsTotal.inc({ result })
+}
+
+/**
+ * Record the number of retired keys pruned by the KeyManager at the end
+ * of a grace window.
+ */
+export function recordSigningKeyPrune(count: number): void {
+  if (count > 0) signingKeyPrunesTotal.inc(count)
+}
+
+/**
+ * Record a single /.well-known/jwks.json request.
+ * `cache` is `'hit'` (304 Not Modified served) or `'miss'` (full body served).
+ */
+export function recordJwksRequest(cache: 'hit' | 'miss', status: number): void {
+  jwksRequestsTotal.inc({ cache, status: String(status) })
+}
 
 // ============================================================================
 // Memory/OOM Metrics

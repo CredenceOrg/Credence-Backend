@@ -20,6 +20,11 @@ export class SettlementService {
    * Utilizes cache with TTL to preserve behavior for unchanged records.
    */
   async getSettlementByHash(transactionHash: string): Promise<Settlement | null> {
+    const isLocked = await isCacheLocked('settlement', transactionHash)
+    if (isLocked) {
+      return this.repository.findByTransactionHash(transactionHash)
+    }
+
     const cached = await cache.get<Settlement>('settlement', transactionHash)
     
     if (cached) {
@@ -72,17 +77,25 @@ export class SettlementService {
     if (isDuplicate) {
       recordSettlementDuplicate()
     }
+
+    // Lock the id too now that we have it
+    await acquireCacheLock('settlement', `id:${settlement.id}`)
     
-    // Post-commit hook: invalidate the cache immediately after status mutation with verification
-    await invalidateCache(
-      'settlement',
+    // Post-commit hook: invalidate all keys related to this settlement
+    await invalidateMultiple('settlement', [
       settlement.transactionHash,
-      settlement,
-      {
-        verify: true,
-        verifyFn: (cached, fresh) => cached.status !== fresh.status
+      `id:${settlement.id}`,
+      `bondId:${settlement.bondId}`
+    ])
+
+    // Verify cache is cleared after commit (stale-read detection)
+    runPostCommit(async () => {
+      const staleCheck = await cache.get<Settlement>('settlement', settlement.transactionHash)
+      if (staleCheck && staleCheck.status !== settlement.status) {
+        recordStaleCacheRead('settlement')
+        console.warn(`Stale cache detected for settlement:${settlement.transactionHash}`)
       }
-    )
+    })
 
     return settlement
   }

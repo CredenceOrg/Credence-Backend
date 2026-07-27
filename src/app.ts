@@ -16,6 +16,7 @@ import { createPayoutsRouter } from "./routes/payouts.js";
 import { AnalyticsService } from "./services/analytics/service.js";
 import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
+import { cache } from "./cache/redis.js";
 import { pool } from "./db/pool.js";
 import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
@@ -30,7 +31,7 @@ import { tenantContextMiddleware } from "./middleware/tenantContext.js";
 import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
 import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
-  compressionMiddleware,
+  createCompressionMiddleware,
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
@@ -52,9 +53,11 @@ import { requestAttemptEchoMiddleware } from "./middleware/requestAttemptEcho.js
 import { RedisConnection } from "./cache/redis.js";
 import { createFaultInjectionRouter } from "./routes/faultInjection.js";
 import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
+import { createAuthRouter } from "./routes/auth.js";
 
 const app = express();
 
+// ── Rate-limit configuration ──────────────────────────────────────────────────
 let rateLimitConfig: {
   enabled: boolean;
   windowSec: number;
@@ -76,8 +79,25 @@ try {
     failOpen: !isProd,
   };
 }
-
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
+
+let authRateLimitConfig: {
+  enabled: boolean;
+  windowSec: number;
+  maxPerTenant: number;
+  failOpen: boolean;
+};
+try {
+  authRateLimitConfig = validateConfig(process.env).authRateLimit;
+} catch {
+  const isProd = process.env.NODE_ENV === "production";
+  authRateLimitConfig = {
+    enabled: true,
+    windowSec: 60,
+    maxPerTenant: 20,
+    failOpen: !isProd,
+  };
+}
 
 let globalTimeoutMs: number;
 try {
@@ -108,10 +128,14 @@ const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
   .filter(Boolean);
 
 if (metricsCidrs?.length) {
-  app.get("/metrics", createCidrWhitelistMiddleware(metricsCidrs), async (_req, res) => {
-    res.set("Content-Type", register.contentType);
-    res.end(await register.metrics());
-  });
+  app.get(
+    "/metrics",
+    createCidrWhitelistMiddleware(metricsCidrs),
+    async (_req, res) => {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    },
+  );
 } else {
   app.get("/metrics", async (_req, res) => {
     res.set("Content-Type", register.contentType);
@@ -127,7 +151,9 @@ app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 app.use(gracefulDegradeMiddleware);
 
-app.use("/.well-known/jwks.json", createJwksRouter({ cacheMaxAgeSeconds: jwksCacheMaxAge }));
+// ── Routes ────────────────────────────────────────────────────────────────────
+
+app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
 
@@ -144,8 +170,11 @@ if (process.env.REDIS_URL) {
 app.use("/api/health", createHealthRouter({ ...healthProbes, isReady, redisClient }));
 app.use("/api/version", createVersionRouter());
 
+app.use("/api/auth", createAuthRouter(authRateLimitConfig));
+
 app.use("/api", rateLimitMiddleware);
 
+// Idempotency middleware — runs after body parsing, before route handlers.
 try {
   const idempotencyConfig = validateConfig(process.env).idempotency;
   const idempotencyRepo = new IdempotencyRepository(pool);
@@ -165,15 +194,20 @@ try {
     defaultMonthlyCredits: config.credits.defaultMonthly,
     defaultLowCreditThreshold: config.credits.defaultLowCreditThreshold,
   };
-  const costMeterMiddleware = createCostMeterMiddleware(costMeterConfig, () => pool);
+  const costMeterMiddleware = createCostMeterMiddleware(
+    costMeterConfig,
+    () => pool,
+  );
   app.use("/api", costMeterMiddleware);
 } catch {
 }
 
 app.use("/api/trust", trustRouter);
 
+// Bond status — uses the real BondService + BondStore backed by
+// deriveBondPaymentStatus, with read-through caching via CacheService.
 const bondService = new BondService(new BondStore());
-app.use("/api/bond", createBondRouter(bondService));
+app.use("/api/bond", createBondRouter(bondService, cache));
 
 app.use("/api/attestations", createAttestationRouter());
 
@@ -181,12 +215,16 @@ app.use("/api/bulk", bulkRouter);
 
 app.use("/api/imports", createImportsRouter());
 
+// Defence-in-depth open-redirect guard for /api/admin/*.
 const adminRedirectAllowedHosts = process.env.ADMIN_REDIRECT_ALLOWED_HOSTS
   ?.split(",")
   .map((s) => s.trim())
   .filter(Boolean) ?? [];
 
-app.use("/api/admin", createSafeRedirectMiddleware({ allowedHosts: adminRedirectAllowedHosts }));
+app.use(
+  "/api/admin",
+  createSafeRedirectMiddleware({ allowedHosts: adminRedirectAllowedHosts }),
+);
 app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());

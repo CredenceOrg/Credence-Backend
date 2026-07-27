@@ -1,15 +1,35 @@
 import { describe, it, expect } from 'vitest'
 import {
   classifyDownstreamError,
+  classifyTransportError,
+  classifyHttpStatus,
   isRetryableRpcCode,
   RETRYABLE_RPC_ERROR_CODES,
   type DownstreamClassification,
+  type RetryDecision,
 } from './retryClassifier.js'
 
 /** Build an undici-style `TypeError("fetch failed")` wrapping a syscall cause. */
 function fetchFailed(code: string): Error {
   const cause = Object.assign(new Error(`connect ${code}`), { code })
   return Object.assign(new TypeError('fetch failed'), { cause })
+}
+
+/** Build a plain Node-style Error with a syscall code attached. */
+function nodeError(code: string, message = `connect ${code}`): Error {
+  return Object.assign(new Error(message), { code })
+}
+
+/** Build an Error whose `name` is `AbortError` (older-style abort). */
+function abortError(): Error {
+  return Object.assign(new Error('The operation was aborted'), { name: 'AbortError' })
+}
+
+/** Build an undici-style abort that wraps an AbortError as a `cause`. */
+function undiciWrappedAbort(): TypeError {
+  const cause = Object.assign(new Error('Aborted'), { name: 'AbortError' })
+  const wrapper = Object.assign(new TypeError('fetch failed'), { cause })
+  return wrapper
 }
 
 describe('isRetryableRpcCode', () => {
@@ -108,5 +128,136 @@ describe('classifyDownstreamError — unrecognised', () => {
 
   it('returns null for a plain string', () => {
     expect(classifyDownstreamError('nope')).toBeNull()
+  })
+
+  it('returns null for null', () => {
+    expect(classifyDownstreamError(null)).toBeNull()
+  })
+
+  it('returns null for an empty object', () => {
+    expect(classifyDownstreamError({})).toBeNull()
+  })
+
+  it('returns null for a JSON-RPC envelope missing code', () => {
+    expect(classifyDownstreamError({ error: { message: 'no code' } })).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// classifyTransportError — direct thin wrapper around the same source of truth
+// ---------------------------------------------------------------------------
+
+describe('classifyTransportError', () => {
+  it('returns a retryable TIMEOUT for a bare AbortError', () => {
+    expect(classifyTransportError(abortError())).toEqual<RetryDecision>({
+      retryable: true,
+      code: 'TIMEOUT',
+      reason: expect.any(String) as unknown as string,
+    })
+  })
+
+  it('returns a retryable TIMEOUT for undici TypeError wrapping an AbortError', () => {
+    const result = classifyTransportError(undiciWrappedAbort())
+    expect(result.retryable).toBe(true)
+    if (result.retryable) {
+      expect(result.code).toBe('TIMEOUT')
+    }
+  })
+
+  it('returns a retryable RESET for ECONNRESET', () => {
+    const result = classifyTransportError(nodeError('ECONNRESET'))
+    expect(result.retryable).toBe(true)
+    if (result.retryable) {
+      expect(result.code).toBe('RESET')
+      expect(result.reason).toBe('connect ECONNRESET')
+    }
+  })
+
+  it('returns a retryable REFUSED for ECONNREFUSED', () => {
+    const result = classifyTransportError(fetchFailed('ECONNREFUSED'))
+    expect(result.retryable).toBe(true)
+    if (result.retryable) {
+      expect(result.code).toBe('REFUSED')
+    }
+  })
+
+  it('returns a retryable NETWORK for generic undici fetch failure', () => {
+    const result = classifyTransportError(new TypeError('fetch failed'))
+    expect(result.retryable).toBe(true)
+    if (result.retryable) {
+      expect(result.code).toBe('NETWORK')
+    }
+  })
+
+  it('returns retryable: false for a SyntaxError (parse, not transport)', () => {
+    const result = classifyTransportError(new SyntaxError('Unexpected token'))
+    expect(result.retryable).toBe(false)
+  })
+
+  it('returns retryable: false for a RangeError (application bug)', () => {
+    const result = classifyTransportError(new RangeError('out of range'))
+    expect(result.retryable).toBe(false)
+    if (!result.retryable) {
+      expect(result.reason).toBe('out of range')
+    }
+  })
+
+  it('returns retryable: false for a plain string', () => {
+    const result = classifyTransportError('boom')
+    expect(result.retryable).toBe(false)
+    if (!result.retryable) {
+      expect(result.reason).toBe('boom')
+    }
+  })
+
+  it('returns retryable: false for null', () => {
+    expect(classifyTransportError(null)).toEqual({ retryable: false, reason: 'null' })
+  })
+
+  it('propagates the transport message as `reason` for retryable outcomes', () => {
+    const result = classifyTransportError(nodeError('EPIPE'))
+    expect(result.retryable).toBe(true)
+    if (result.retryable) {
+      expect(result.code).toBe('RESET')
+      expect(typeof result.reason).toBe('string')
+      expect(result.reason.length).toBeGreaterThan(0)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// classifyHttpStatus — status-only classification for status-code only errors
+// ---------------------------------------------------------------------------
+
+describe('classifyHttpStatus', () => {
+  it.each([408, 429, 500, 502, 503, 504])('retries %i', (status) => {
+    const result = classifyHttpStatus(status)
+    expect(result).toEqual({
+      retryable: true,
+      status,
+      reason: `HTTP ${status}`,
+    })
+  })
+
+  it.each([200, 201, 301, 302, 400, 401, 403, 404, 410, 422, 451])(
+    'does not retry %i',
+    (status) => {
+      const result = classifyHttpStatus(status)
+      expect(result).toEqual({
+        retryable: false,
+        status,
+        reason: `HTTP ${status}`,
+      })
+    },
+  )
+
+  it('uses a developer-supplied reason when provided', () => {
+    const result = classifyHttpStatus(503, 'upstream overloaded')
+    expect(result).toEqual({ retryable: true, status: 503, reason: 'upstream overloaded' })
+  })
+
+  it('returns a non-retryable classification with a custom reason', () => {
+    const result = classifyHttpStatus(404, 'wallet not found')
+    expect(result).toEqual({ retryable: false, status: 404, reason: 'wallet not found' })
   })
 })

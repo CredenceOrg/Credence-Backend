@@ -1,5 +1,12 @@
-export { runHealthChecks } from './checks.js'
-export type { DependencyHealth, DependencyStatus, HealthProbe, HealthResult } from './types.js'
+export { runHealthChecks, buildDegradationSummary } from './checks.js'
+export type {
+  DependencyHealth,
+  DependencyReason,
+  DependencyStatus,
+  DegradationSummary,
+  HealthProbe,
+  HealthResult,
+} from './types.js'
 export {
   createDbProbe,
   createCacheProbe,
@@ -7,6 +14,15 @@ export {
   createHorizonListenerProbe,
   createOutboxPublisherProbe,
   createHorizonClientProbe,
+  createKeyManagerProbe,
+  createKekProbe,
   createDefaultProbes,
 } from './probes.js'
-export type { DbProbeOptions, RedisProbeOptions, HorizonClientProbeOptions } from './probes.js'
+export type {
+  DbProbeOptions,
+  RedisProbeOptions,
+  HorizonClientProbeOptions,
+  KeyManagerProbeOptions,
+  KekProbeOptions,
+} from './probes.js'
+export { withProbeCache } from '../../clients/healthProbeCache.js'
