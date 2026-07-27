@@ -34,6 +34,7 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
+import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
 
 const app = express();
 
@@ -63,6 +64,15 @@ try {
 
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
+// Resolve maintenance mode flag at startup; default to off when config is invalid.
+let maintenanceModeEnabled = false;
+try {
+  maintenanceModeEnabled = validateConfig(process.env).maintenanceMode.enabled;
+} catch {
+  // Fail-open for maintenance mode: an invalid config must not block startup.
+}
+const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
+
 app.use(requestIdMiddleware);
 
 const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
@@ -89,6 +99,7 @@ app.use(jsonBodyParser);
 app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 
+app.use(maintenanceModeMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
