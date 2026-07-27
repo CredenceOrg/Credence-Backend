@@ -9,6 +9,7 @@ import { cache, CacheService } from './redis.js'
 import { recordStaleCacheRead } from '../middleware/metrics.js'
 import { getInvalidationBus } from './invalidationBus.js'
 import { logger } from '../utils/logger.js'
+import { computeStableHash } from '../utils/hash.js'
 
 export interface InvalidationOptions {
   /**
@@ -56,9 +57,9 @@ export async function invalidateCache(
     
     if (staleCheck) {
       // Use custom verification function or default comparison
-      const isStale = verifyFn 
+      const isStale = verifyFn
         ? verifyFn(staleCheck, freshData)
-        : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+        : computeStableHash(staleCheck) !== computeStableHash(freshData)
       
       if (isStale) {
         recordStaleCacheRead(namespace)

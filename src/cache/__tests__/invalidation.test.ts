@@ -24,6 +24,12 @@ vi.mock('../../middleware/metrics.js', () => ({
   recordStaleCacheRead: vi.fn()
 }))
 
+vi.mock('../invalidationBus.js', () => ({
+  getInvalidationBus: () => ({
+    publish: vi.fn().mockResolvedValue(undefined)
+  })
+}))
+
 describe('Cache Invalidation', () => {
   beforeEach(() => {
     vi.clearAllMocks()
