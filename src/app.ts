@@ -17,6 +17,7 @@ import { AnalyticsService } from "./services/analytics/service.js";
 import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
 import { pool } from "./db/pool.js";
+import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
 import { latencyBudgetMiddleware } from "./middleware/latencyBudget.js";
 import { errorHandler } from "./middleware/errorHandler.js";
@@ -93,6 +94,7 @@ try {
   jwksCacheMaxAge = 300;
 }
 
+app.use(responseTimeMiddleware);
 app.use(requestIdMiddleware);
 app.use(securityHeadersMiddleware);
 app.use(cacheHeaderMiddleware);
