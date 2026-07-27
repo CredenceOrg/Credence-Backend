@@ -88,6 +88,16 @@ Accepted in any case (EIP-55 checksummed or all lower-case).
 
 ---
 
+## Response Time Header
+
+Every response includes an `x-response-time-ms` header containing the server-side processing time in milliseconds. This is the wall-clock time from when the request first reaches the server until the response headers are sent. It covers the full lifecycle including middleware, route handlers, database queries, and external RPC calls.
+
+```
+x-response-time-ms: 42
+```
+
+This header aids downstream debugging — operators, frontend engineers, and automated canaries can observe per-request latency without parsing the response body.
+
 ## Latency Budget
 
 Clients can provide an `x-request-latency-budget-ms` header in their requests. The server will echo this header back in its response. This allows clients to compare their view of the latency budget to the server-reported timing.
@@ -360,7 +370,9 @@ Creates a persisted attestation, invalidates attestation caches, and emits an
 
 ### `GET /api/bond/:address`
 
-Returns bond status for an Ethereum address from the database.
+Returns bond status and derived lifecycle state for a wallet address.
+Reads are served from a Redis-backed cache (5-minute TTL); the response
+includes an `x-cache` header for transparency.
 
 ```
 GET /api/bond/:address
@@ -368,15 +380,21 @@ GET /api/bond/:address
 
 **Path parameters**
 
-| Param     | Description                            |
-| --------- | -------------------------------------- |
-| `address` | Ethereum address (`0x` + 40 hex chars) |
+| Param     | Description                                           |
+| --------- | ----------------------------------------------------- |
+| `address` | Ethereum (`0x` + 40 hex chars) or Stellar (`G` + 55 base32 chars) address |
 
 **Headers (optional)**
 
 | Header      | Description                   |
 | ----------- | ----------------------------- |
 | `X-API-Key` | API key for premium rate tier |
+
+**Response headers**
+
+| Header    | Values          | Description                                            |
+| --------- | --------------- | ------------------------------------------------------ |
+| `x-cache` | `HIT` \| `MISS` | Whether the response was served from cache or freshly fetched |
 
 **Responses**
 
@@ -1021,6 +1039,7 @@ Every response includes:
 | `X-RateLimit-Remaining` | Requests remaining (tighter of tenant vs key budget) |
 | `X-RateLimit-Reset`     | Unix timestamp when the window resets                |
 | `Retry-After`           | Seconds to wait before retrying (only on `429`)      |
+| `x-response-time-ms`    | Server-side processing time in milliseconds          |
 
 ### Error response (`429`)
 

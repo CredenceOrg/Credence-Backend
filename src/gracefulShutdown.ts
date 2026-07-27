@@ -50,6 +50,7 @@ export interface GracefulShutdownOptions {
 
 export class GracefulShutdownManager {
   private shuttingDown = false;
+  private shutdownStartedAt = 0;
   private forceExitTimer: NodeJS.Timeout | null = null;
   private readonly connections = new Set<Socket>();
   private wss: WebSocketServer | null = null;
@@ -103,6 +104,7 @@ export class GracefulShutdownManager {
     }
 
     this.shuttingDown = true;
+    this.shutdownStartedAt = Date.now();
     setReady(false);
     this.metrics.incShutdown(signal);
 
@@ -211,10 +213,18 @@ export class GracefulShutdownManager {
 
     if (typeof scheduler.isJobRunning !== "function") return;
 
-    const maxWaitMs = Math.min(
-      this.options.jobDrainTimeoutMs ?? this.gracePeriodMs * 0.7,
-      10_000,
+    // The scheduler-specific window must not push total shutdown time past
+    // gracePeriodMs: earlier phases (server close, ws drain, listener stop)
+    // already consumed part of that budget, and the independent
+    // forceExitTimer keeps running throughout. Clamp to whatever remains so
+    // we don't wait for a job that will just get killed anyway.
+    const elapsedSinceShutdownStart = Date.now() - this.shutdownStartedAt;
+    const remainingBudgetMs = Math.max(
+      0,
+      this.gracePeriodMs - elapsedSinceShutdownStart,
     );
+    const requestedWaitMs = this.options.jobDrainTimeoutMs ?? this.gracePeriodMs * 0.7;
+    const maxWaitMs = Math.min(requestedWaitMs, 10_000, remainingBudgetMs);
     const deadline = Date.now() + maxWaitMs;
 
     while (scheduler.isJobRunning() && Date.now() < deadline) {

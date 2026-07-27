@@ -177,10 +177,11 @@ function formatZodErrors(error: ZodError): string {
 /**
  * Schema for bond creation operation from Horizon
  * Validates that source_account is a valid Stellar account ID,
- * amount is a non-negative integer string, and duration is either null or a string
+ * amount is a non-negative integer string, and duration is either null or a string.
+ * All string fields are bounded to prevent unbounded persistence.
  */
 export const bondOperationSchema = z.object({
-  source_account: z.string().refine(
+  source_account: z.string().max(128).refine(
     (account): boolean => {
       try {
         return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
@@ -190,15 +191,15 @@ export const bondOperationSchema = z.object({
     },
     { message: 'Invalid Stellar account ID' }
   ),
-  id: z.string().min(1, 'Operation ID is required'),
-  amount: z.string().refine(
+  id: z.string().min(1, 'Operation ID is required').max(256),
+  amount: z.string().max(32).refine(
     (amount): boolean => {
       // Check if it's a non-negative integer string
       return /^\d+$/.test(amount);
     },
     { message: 'Amount must be a non-negative integer string' }
   ),
-  duration: z.union([z.string(), z.null()]).optional(),
+  duration: z.union([z.string().max(32), z.null()]).optional(),
 });
 
 /**
@@ -206,7 +207,7 @@ export const bondOperationSchema = z.object({
  * Similar to bond creation but for withdrawal operations
  */
 export const bondWithdrawalOperationSchema = z.object({
-  source_account: z.string().refine(
+  source_account: z.string().max(128).refine(
     (account): boolean => {
       try {
         return StrKey.isValidEd25519PublicKey(account) || ((StrKey as unknown as { isValidMuxedAccount?: (value: string) => boolean }).isValidMuxedAccount?.(account) ?? false);
@@ -216,15 +217,15 @@ export const bondWithdrawalOperationSchema = z.object({
     },
     { message: 'Invalid Stellar account ID' }
   ),
-  id: z.string().min(1, 'Operation ID is required'),
-  amount: z.string().refine(
+  id: z.string().min(1, 'Operation ID is required').max(256),
+  amount: z.string().max(32).refine(
     (amount): boolean => {
       // Check if it's a non-negative integer string
       return /^\d+$/.test(amount);
     },
     { message: 'Amount must be a non-negative integer string' }
   ),
-  duration: z.union([z.string(), z.null()]).optional(),
+  duration: z.union([z.string().max(32), z.null()]).optional(),
 });
 
 // Export types for convenience

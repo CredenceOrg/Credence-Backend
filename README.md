@@ -50,6 +50,8 @@ The server **fails fast** on startup if any required environment variable is mis
 npm run dev
 ```
 
+`npm run dev` automatically checks for pending database migrations before starting the dev server. If any are found, a reminder to run `npm run migrate:dev` is printed. Set `DATABASE_URL` in your environment to enable this check.
+
 **Production:**
 
 ```bash
@@ -140,7 +142,7 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 
 | Command                   | Description                                |
 | ------------------------- | ------------------------------------------ |
-| `npm run dev`             | Start with tsx watch                       |
+| `npm run dev`             | Check pending migrations, then start with tsx watch |
 | `npm run build`           | Compile TypeScript                         |
 | `npm start`               | Run compiled `dist/`                       |
 | `npm run lint`            | Run ESLint                                 |
@@ -153,6 +155,7 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `npm run migrate`         | Run pending migrations (CI/production)     |
 | `npm run migrate:down`    | Rollback last migration                    |
 | `npm run migrate:dry-run` | Preview pending migrations without running |
+| `npm run test:db:reset`   | Drop, recreate, and migrate local test DB  |
 
 ## Developer Setup
 
@@ -219,6 +222,8 @@ docs/openapi.yaml
 Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
 
 For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
+
+The full request/response pipeline — from Zod schema definition to OpenAPI generation to frontend client types — is documented in **[docs/TYPE_SAFETY.md](docs/TYPE_SAFETY.md)**.
 
 ### Postman / Insomnia collection
 
@@ -369,7 +374,9 @@ The service includes a Redis-based caching layer with:
 - **Graceful fallback** - Continues working when Redis is unavailable
 - **Cache response header** - Appends `x-cache` header (`HIT`, `MISS`, or `STALE`) to responses for transparency
 
-See [docs/caching.md](./docs/caching.md) for detailed documentation.
+See [docs/caching.md](./docs/caching.md) for detailed documentation, and
+[docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
+cache namespaces and their TTLs.
 
 ## Developer SDK
 

@@ -101,11 +101,45 @@ pnpm run migrate:dev
 DB_URL=postgresql://credence:credence@localhost:5433/credence_test pnpm run migrate:dev
 ```
 
+To drop, recreate, and re-apply all migrations on the test database in one step (same URL defaults as above):
+
+```bash
+docker compose -f docker-compose.test.yml up -d
+npm run test:db:reset
+```
+
+Uses `TEST_DATABASE_URL` when set; otherwise `src/config/testDatabase.ts` defaults. Only the `credence_test` database name is allowed.
+
 ---
 
 ## Test Commands
 
 All commands are verified against `package.json`.
+
+### Quick local workflow
+
+```bash
+# Install dependencies
+npm install
+
+# Start the helper services for the integration suite
+docker compose -f docker-compose.test.yml up -d
+
+# Run the same suite CI exercises
+npm test
+```
+
+### Integration suite and database parity
+
+```bash
+# Run the repository and integration suites explicitly
+npm test -- tests/integration tests/repositories
+
+# Prefer the same Postgres 16 connection string CI uses
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test npm test
+```
+
+Use the CI-style connection string when you need to reproduce failures that depend on database behavior rather than local testcontainers defaults. The compose-based local setup uses port 5433 by default, while CI uses the standard Postgres port 5432.
 
 ### Run all tests
 

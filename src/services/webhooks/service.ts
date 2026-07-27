@@ -3,6 +3,10 @@ import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryRes
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
 import { type AuditLogService, AuditAction } from '../audit/index.js'
 import { buildDlqEntry } from './dlq.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -116,12 +120,27 @@ export class WebhookService {
     )
 
     if (this.dlq) {
+      // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
+      // We compute the exhausted-result list exactly once and reuse it for
+      // both the metric increment AND the DLQ push so the metrics always
+      // agree with what was actually DLQ-ed. Reason attribution prefers
+      // `error` (human-readable message), falling back to mTLS-specific
+      // `errorCode`, then to `UNKNOWN`. The boundedReason helper inside
+      // retryMetrics.ts normalizes the label to a low-cardinality
+      // ASCII-uppercase-underscore identifier.
+      const exhaustedResults = rawResults.flat().filter(r => !r.success)
+      for (const r of exhaustedResults) {
+        const reasonText = r.error ?? r.errorCode ?? 'UNKNOWN'
+        // WebhookDeliveryResult.attempts is REQUIRED by the type but the
+        // runtime path is defensive — historical callers have delivered
+        // results that omit it under failure paths.
+        const attempts =
+          typeof r.attempts === 'number' && r.attempts >= 1 ? r.attempts : 1
+        recordJobDeadLetter('webhook', reasonText)
+        recordJobTerminalOutcome('webhook', 'dead_letter', attempts)
+      }
       await Promise.all(
-        rawResults.flatMap(webhookResults => 
-          webhookResults
-            .filter(r => !r.success)
-            .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
-        )
+        exhaustedResults.map(r => this.dlq!.push(buildDlqEntry(r, payload)))
       )
     }
 

@@ -2,8 +2,8 @@ import { Router, Request, Response } from 'express'
 import { WebhookService } from '../../services/webhooks/service.js'
 import { PostgresWebhookRepository } from '../../db/repositories/webhookRepository.js'
 import { pool } from '../../db/pool.js'
-import { AuthenticatedRequest, requireUserAuth, requireAdminRole, requireApiKey, ApiScope } from '../../middleware/auth.js'
-import { auditLogService } from '../../services/audit/index.js'
+import { AuthenticatedRequest, requireUserAuth, requireAdminRole, requireApiKey, ApiScope, UserRole } from '../../middleware/auth.js'
+import { auditLogService, AuditAction } from '../../services/audit/index.js'
 import { sendError, ErrorCode } from '../../lib/errors.js'
 
 /**
@@ -27,7 +27,7 @@ export function createWebhookAdminRouter(): Router {
    *
    * @requires webhooks:admin scope OR admin role
    */
-  router.post('/:id/rotate', requireUserAuth, async (req: Request, res: Response) => {
+  router.post('/:id/rotate', requireUserAuth, requireAdminRole, async (req: Request, res: Response) => {
     try {
       const { id } = req.params
       const admin = (req as AuthenticatedRequest).user!
@@ -47,7 +47,7 @@ export function createWebhookAdminRouter(): Router {
           req.ip,
           requestId
         )
-        res.status(403).json({ error: 'Forbidden', message: 'Admin role required' })
+        sendError(res, ErrorCode.FORBIDDEN, 'Admin role required')
         return
       }
 

@@ -8,6 +8,7 @@ import {
 } from '../services/governance/slashingVotes.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 import {
+  buildPaginationLinks,
   buildPaginationMeta,
   parsePaginationParams,
 } from '../lib/pagination.js'
@@ -151,7 +152,8 @@ router.get('/slash-requests', requireUserAuth, (req: Request, res: Response, nex
     const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
     const { requests, total } = listSlashRequests(status, limit, offset)
     const paginationMeta = buildPaginationMeta(total, page, limit)
-    res.status(200).json({ success: true, data: requests, ...paginationMeta })
+    const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+    res.status(200).json({ success: true, data: requests, ...paginationMeta, links: buildPaginationLinks(fullUrl, page, limit, total) })
   } catch (error) {
     next(error)
   }

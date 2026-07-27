@@ -222,7 +222,7 @@ Consumed by `docker-compose.yml`, not by the app directly:
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `credence` | Container credentials; compose builds `DATABASE_URL` from them. |
 | `POSTGRES_PORT` | `5432` | Host-exposed Postgres port. |
 | `REDIS_PORT` | `6379` | Host-exposed Redis port. |
-| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). |
+| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). Reset locally with `npm run test:db:reset` (see [local-testing-guide.md](./local-testing-guide.md)). |
 
 ## Common pitfalls
 

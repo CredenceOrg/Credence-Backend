@@ -96,6 +96,38 @@ describe('safeCompareHex', () => {
   it('returns false when lengths differ', () => {
     expect(safeCompareHex('a'.repeat(64), 'a'.repeat(32))).toBe(false)
   })
+
+  it('returns false when first argument is null', () => {
+    expect(safeCompareHex(null as unknown as string, 'a'.repeat(64))).toBe(false)
+  })
+
+  it('returns false when first argument is undefined', () => {
+    expect(safeCompareHex(undefined as unknown as string, 'a'.repeat(64))).toBe(false)
+  })
+
+  it('returns false when second argument is null', () => {
+    expect(safeCompareHex('a'.repeat(64), null as unknown as string)).toBe(false)
+  })
+
+  it('returns false when second argument is undefined', () => {
+    expect(safeCompareHex('a'.repeat(64), undefined as unknown as string)).toBe(false)
+  })
+
+  it('returns false when first argument is a number', () => {
+    expect(safeCompareHex(42 as unknown as string, 'a'.repeat(64))).toBe(false)
+  })
+
+  it('returns false when both arguments are empty strings', () => {
+    expect(safeCompareHex('', '')).toBe(false)
+  })
+
+  it('returns false gracefully when input contains non-hex characters (Buffer.from safety)', () => {
+    expect(safeCompareHex('zz'.repeat(32), 'aa'.repeat(32))).toBe(false)
+  })
+
+  it('returns false gracefully on odd-length hex string', () => {
+    expect(safeCompareHex('a'.repeat(63), 'b'.repeat(63))).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -147,6 +179,16 @@ describe('verifySignature', () => {
   it('returns missing_signature when rawSignature is empty string', () => {
     const result = verifySignature('', body, secret)
     expect(result).toEqual({ ok: false, reason: 'missing_signature' })
+  })
+
+  it('returns missing_timestamp when body is null', () => {
+    const result = verifySignature(validSig, null as unknown as string, secret)
+    expect(result).toEqual({ ok: false, reason: 'missing_timestamp' })
+  })
+
+  it('returns missing_timestamp when body is undefined', () => {
+    const result = verifySignature(validSig, undefined as unknown as string, secret)
+    expect(result).toEqual({ ok: false, reason: 'missing_timestamp' })
   })
 
   it('returns malformed_signature for non-hex header value', () => {

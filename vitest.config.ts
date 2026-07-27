@@ -12,6 +12,8 @@ export default defineConfig({
       "tests/integration/**/*.test.ts",
       "tests/repositories/**/*.test.ts",
       "tests/routes/**/*.test.ts",
+      "tests/rbac/**/*.test.ts",
+      "tests/rbac.test.ts",
       "monitoring/**/*.test.ts",
       "scripts/**/*.test.ts",
     ],

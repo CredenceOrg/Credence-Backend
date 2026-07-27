@@ -134,6 +134,29 @@ describe('Fault injection route', () => {
 
         expect(res.status).toBe(404)
       })
+
+      it('includes a stable machine-readable code on the 404 body', async () => {
+        const app = appWithFaultInjection(false)
+        const res = await request(app)
+          .post('/api/dev/fault-injection')
+          .send({})
+
+        expect(res.body.code).toBe('not_found')
+        expect(res.body.error_code).toBe('not_found')
+      })
+    })
+
+    describe('when DEV_MODE is enabled', () => {
+      it('includes a stable machine-readable code on the 400 validation body', async () => {
+        const app = appWithFaultInjection(true)
+        const res = await request(app)
+          .post('/api/dev/fault-injection')
+          .send({ statusCode: 200 })
+
+        expect(res.status).toBe(400)
+        expect(res.body.code).toBe('validation_failed')
+        expect(res.body.error_code).toBe('validation_failed')
+      })
     })
   })
 })

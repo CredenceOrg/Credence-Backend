@@ -1,9 +1,12 @@
 import {
-  getBackoffDelayMs,
-  resolveProviderRetryPolicy,
   type ProviderRetryPolicies,
   type RetryPolicy,
 } from "../lib/retryPolicy.js";
+import {
+  executeWithRetry,
+  resolveExtendedProviderRetryPolicy,
+  type ExtendedRetryPolicy,
+} from "./retryExecutor.js";
 import {
   executeSorobanOperation,
   createMetricsAdapter,
@@ -138,7 +141,7 @@ export class SorobanClientError extends Error {
   }
 }
 
-const DEFAULT_RETRY: RetryOptions = {
+const DEFAULT_RETRY: ExtendedRetryPolicy = {
   maxAttempts: 3,
   baseDelayMs: 200,
   maxDelayMs: 2_000,
@@ -151,7 +154,7 @@ export class SorobanClient {
   private readonly network: SorobanNetwork;
   private readonly contractId: string;
   private readonly timeoutMs: number;
-  private readonly retryOptions: RetryOptions;
+  private readonly retryOptions: ExtendedRetryPolicy;
   private readonly fetchFn: typeof fetch;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
@@ -179,7 +182,7 @@ export class SorobanClient {
       "soroban",
       createTimeoutConfig("soroban", "SOROBAN_RPC_TIMEOUT", config.timeoutMs),
     );
-    this.retryOptions = resolveProviderRetryPolicy("soroban", DEFAULT_RETRY, {
+    this.retryOptions = resolveExtendedProviderRetryPolicy("soroban", DEFAULT_RETRY, {
       providerPolicies: config.retryPolicies,
       overrides: config.retry,
     });
@@ -361,67 +364,22 @@ export class SorobanClient {
     params: Record<string, unknown>,
   ): Promise<T> {
     return breaker.execute(async () => {
-      let attempt = 0;
-      let lastError: SorobanClientError | null = null;
-      const startMs = Date.now();
-
-      while (attempt < this.retryOptions.maxAttempts) {
-        attempt += 1;
-        try {
-          const result = await this.executeRpc<T>(method, params, attempt);
-          this.retryObserver.onSuccess?.({
-            provider: "soroban",
-            attempt,
-            durationMs: Date.now() - startMs,
-          });
-          return result;
-        } catch (error) {
-          const normalized = this.normalizeError(error, attempt);
-          lastError = normalized;
-
-          const hasAttemptsRemaining = attempt < this.retryOptions.maxAttempts;
-          const shouldRetry =
-            hasAttemptsRemaining && this.isRetryable(normalized);
-
-          if (!shouldRetry) {
-            if (!hasAttemptsRemaining || !this.isRetryable(normalized)) {
-              this.retryObserver.onRetryExhausted?.({
-                provider: "soroban",
-                attempts: attempt,
-                errorCode: normalized.code,
-              });
-            }
-            throw normalized;
-          }
-
-          const delay = this.getDelayMs(attempt);
-          this.retryObserver.onRetryAttempt?.({
-            provider: "soroban",
-            attempt,
-            delayMs: delay,
-            errorCode: normalized.code,
-          });
-          logger.info(
-            `Retrying outbound request provider=soroban attempt=${attempt + 1}/${this.retryOptions.maxAttempts} delayMs=${delay} code=${normalized.code}`,
-          );
-          await this.sleepFn(delay);
+      let attemptCounter = 0;
+      return executeWithRetry<T>(
+        "soroban",
+        async () => {
+          attemptCounter += 1;
+          return this.executeRpc<T>(method, params, attemptCounter);
+        },
+        {
+          policy: this.retryOptions,
+          retryObserver: this.retryObserver,
+          sleepFn: this.sleepFn,
+          randomFn: this.randomFn,
         }
-      }
-
-      this.retryObserver.onRetryExhausted?.({
-        provider: "soroban",
-        attempts: attempt,
-        errorCode: lastError?.code ?? "NETWORK_ERROR",
+      ).catch((error) => {
+        throw this.normalizeError(error, attemptCounter);
       });
-
-      throw (
-        lastError ??
-        new SorobanClientError({
-          code: "NETWORK_ERROR",
-          message: `Unknown Soroban RPC failure after ${this.retryOptions.maxAttempts} attempts.`,
-          attempts: this.retryOptions.maxAttempts,
-        })
-      );
     });
   }
 
@@ -502,7 +460,7 @@ export class SorobanClient {
 
         return payload.result;
       },
-      { overrideMs: this.timeoutMs, metrics: this.metrics },
+      { overrideMs: this.retryOptions.timeoutMs ?? this.timeoutMs, metrics: this.metrics },
     );
   }
 
