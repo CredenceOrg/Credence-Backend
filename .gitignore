@@ -4,8 +4,6 @@ dist/
 coverage
 *.local
 .DS_Store
-.env
-.env.*
 !.env.example
 
 # Generated SBOM (produced by `npm run sbom:generate`)
@@ -17,3 +15,7 @@ prometheus-data/
 grafana-data/
 node_modules
 .kimchi/
+branch_structure.json
+temp_auto_push.bat
+temp_interactive_push.bat
+config.bat

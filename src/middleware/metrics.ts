@@ -12,9 +12,15 @@
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
 import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import { registerPoolMetrics, registerPreparedStatementCacheMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
-import { pool, workerPool } from '../db/pool.js'
+import {
+  pool,
+  workerPool,
+  apiPreparedStatementCache,
+  workerPreparedStatementCache,
+  replicaPreparedStatementCache,
+} from '../db/pool.js'
 
 // Create a Registry to register metrics
 export const register = new client.Registry()
@@ -24,6 +30,13 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register prepared-statement cache size metrics
+registerPreparedStatementCacheMetrics(register, {
+  api: apiPreparedStatementCache,
+  worker: workerPreparedStatementCache,
+  replica: replicaPreparedStatementCache,
+})
 
 // Register downstream RPC latency metrics
 registerRpcLatencyMetrics(register)
