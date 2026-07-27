@@ -462,6 +462,78 @@ components:
         - valid
         - break_detected
         - never_run
+    authLoginBodySchema:
+      def:
+        type: object
+        shape:
+          email:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: email
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: email
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: email
+            minLength: null
+            maxLength: null
+          password:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          tenantId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+      type: object
+    authRefreshBodySchema:
+      def:
+        type: object
+        shape:
+          refreshToken:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          tenantId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+      type: object
     bondCreationEventSchema:
       def:
         type: object
@@ -1562,6 +1634,92 @@ components:
             format: null
             minLength: null
             maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    faultInjectionRequestSchema:
+      def:
+        type: object
+        shape:
+          statusCode:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 400
+                maxValue: 599
+                isInt: true
+                isFinite: true
+                format: safeint
+              defaultValue: 500
+            type: default
+          message:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: null
+                maxLength: 512
+            type: optional
+      type: object
+    faultInjectionResponseSchema:
+      def:
+        type: object
+        shape:
+          fault:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          statusCode:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
           message:
             def:
               type: string
@@ -3719,6 +3877,112 @@ components:
                   maxLength: null
             type: object
       type: object
+    paginationLinksSchema:
+      def:
+        type: object
+        shape:
+          self:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: url
+                    check: string_format
+                    abort: false
+                  type: string
+                  format: url
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: url
+            minLength: null
+            maxLength: null
+          first:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          prev:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          next:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          last:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     policyListQuerySchema:
       def:
         type: object
@@ -4233,6 +4497,62 @@ components:
         - bond_audit
         - attestation_export
         - top_talkers
+    resetCacheBodySchema:
+      def:
+        type: object
+        shape:
+          namespace:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    resetCacheResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          data:
+            def:
+              type: object
+              shape:
+                namespace:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                clearedCount:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+            type: object
+      type: object
     resolveDisputeBodySchema:
       def:
         type: object
@@ -7246,6 +7566,36 @@ components:
         - gitSha
         - buildTimestamp
         - nodeVersion
+    FaultInjectionResponse:
+      type: object
+      properties:
+        fault:
+          type: boolean
+          enum:
+            - true
+        statusCode:
+          type: integer
+          example: 500
+        message:
+          type: string
+          example: Simulated fault for retry testing
+      required:
+        - fault
+        - statusCode
+        - message
+    FaultInjectionRequest:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          minimum: 400
+          maximum: 599
+          default: 500
+          example: 500
+        message:
+          type: string
+          maxLength: 512
+          example: Simulated fault for retry testing
     Wallet:
       type: object
       properties:
@@ -8164,6 +8514,54 @@ paths:
                 type: object
                 additionalProperties:
                   nullable: true
+  /api/dev/fault-injection:
+    post:
+      summary: Fault injection
+      description: Returns a configurable HTTP error (default 500) with a structured
+        JSON body. Only available when DEV_MODE is enabled (404 otherwise).
+        Intended for chaos / retry testing.
+      tags:
+        - Dev
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FaultInjectionRequest"
+      responses:
+        "200":
+          description: Simulated fault response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultInjectionResponse"
+        "400":
+          description: Validation error (invalid statusCode or message too long)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "404":
+          description: DEV_MODE is disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
   /api/trust/{address}:
     get:
       summary: Get trust score

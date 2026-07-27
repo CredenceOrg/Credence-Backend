@@ -1,3 +1,4 @@
+import type { Response } from 'express'
 import {
   ErrorCode as ErrorCodeRegistry,
   getErrorCatalogEntry,
@@ -91,14 +92,9 @@ export class AppError extends Error {
   }
 }
 
-export class CrawlerBlockedError extends Error {
-  public readonly statusCode = 403;
-  public readonly code = 'ADMIN_CRAWLER_BLOCKED';
-
-  constructor(message = 'Automated crawling of admin surfaces is forbidden.') {
-    super(message);
-    this.name = 'CrawlerBlockedError';
-    Object.setPrototypeOf(this, CrawlerBlockedError.prototype);
+export class CrawlerBlockedError extends AppError {
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.CRAWLER_BLOCKED).defaultMessage) {
+    super(message, ErrorCodeRegistry.CRAWLER_BLOCKED)
   }
 }
 
@@ -171,4 +167,49 @@ export class RequestTooLargeError extends AppError {
   constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.REQUEST_TOO_LARGE).defaultMessage) {
     super(message, ErrorCodeRegistry.REQUEST_TOO_LARGE)
   }
+}
+
+/**
+ * Specific error for missing required security headers.
+ */
+export class MissingSecurityHeaderError extends AppError {
+  constructor(
+    message: string = getErrorCatalogEntry(ErrorCodeRegistry.MISSING_SECURITY_HEADER).defaultMessage,
+    details?: unknown
+  ) {
+    super(message, ErrorCodeRegistry.MISSING_SECURITY_HEADER, undefined, details)
+  }
+}
+
+/**
+ * Send a structured error response using the centralized error catalog.
+ *
+ * This is a convenience helper for route handlers that need to return an
+ * error directly (rather than throwing an AppError through next()). It
+ * produces the same `{ error, code, error_code, details? }` envelope as
+ * the global error-handler middleware.
+ *
+ * In production, only the catalog default message is returned (no PII).
+ *
+ * @param statusOverride - Optional HTTP status override. When provided, the
+ *   response uses this status instead of the catalog default. Use sparingly
+ *   to preserve backward compatibility with existing API contracts.
+ */
+export function sendError(
+  res: Response,
+  code: ErrorCodeValue,
+  message?: string,
+  details?: unknown,
+  statusOverride?: number,
+): void {
+  const catalogEntry = getErrorCatalogEntry(code)
+  const status = statusOverride ?? getHttpStatus(catalogEntry)
+  const isProduction = process.env.NODE_ENV === 'production'
+
+  res.status(status).json({
+    error: isProduction ? catalogEntry.defaultMessage : (message ?? catalogEntry.defaultMessage),
+    code: catalogEntry.code,
+    error_code: catalogEntry.code,
+    ...(!isProduction && details !== undefined ? { details } : {}),
+  })
 }

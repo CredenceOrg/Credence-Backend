@@ -434,6 +434,61 @@ describe('per-tier overrides', () => {
     expect(blocked.body.details).toMatchObject({ limit: 1 })
   })
 
+  it('x_ratelimit_limit_header_matches_config_across_free_pro_enterprise', async () => {
+    // Free vs Pro vs Enterprise X-RateLimit-Limit values must mirror config
+    // (production defaults and arbitrary overrides).
+    const defaultCfg = { maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }
+    const customCfg = { maxFree: 9, maxPro: 42, maxEnterprise: 777 }
+
+    const cases: Array<{
+      tier: SubscriptionTier
+      config: typeof defaultCfg
+      expected: number
+      ns: string
+    }> = [
+      { tier: 'free', config: defaultCfg, expected: 100, ns: 'unit:hdr:def:free' },
+      { tier: 'pro', config: defaultCfg, expected: 1000, ns: 'unit:hdr:def:pro' },
+      { tier: 'enterprise', config: defaultCfg, expected: 10000, ns: 'unit:hdr:def:ent' },
+      { tier: 'free', config: customCfg, expected: 9, ns: 'unit:hdr:cus:free' },
+      { tier: 'pro', config: customCfg, expected: 42, ns: 'unit:hdr:cus:pro' },
+      { tier: 'enterprise', config: customCfg, expected: 777, ns: 'unit:hdr:cus:ent' },
+    ]
+
+    for (const { tier, config, expected, ns } of cases) {
+      fakeRedis.flush()
+      const app = buildApp({
+        namespace: ns,
+        config,
+        tier,
+        keyId: `key-${ns}`,
+        ownerId: `owner-${ns}`,
+      })
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe(String(expected))
+      expect(res.headers['x-ratelimit-remaining']).toBe(String(expected - 1))
+    }
+  })
+
+  it('x_ratelimit_limit_on_429_matches_tier_config_not_higher_tiers', async () => {
+    const cfg = { maxFree: 1, maxPro: 50, maxEnterprise: 200 }
+    const app = buildApp({
+      namespace: 'unit:hdr:sad:free',
+      config: cfg,
+      tier: 'free',
+      keyId: 'key-hdr-sad',
+      ownerId: 'owner-hdr-sad',
+    })
+
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+    const blocked = await request(app).get('/api/ping')
+    expect(blocked.status).toBe(429)
+    expect(blocked.headers['x-ratelimit-limit']).toBe(String(cfg.maxFree))
+    expect(blocked.headers['x-ratelimit-remaining']).toBe('0')
+    expect(blocked.headers['retry-after']).toBeDefined()
+    expect(blocked.body.details).toMatchObject({ limit: cfg.maxFree })
+  })
+
   it('different_tiers_operate_independently_on_separate_tenant_buckets', async () => {
     // Two separate apps, same config, different tiers — each exhausts its
     // own bucket without affecting the other.

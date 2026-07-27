@@ -52,6 +52,9 @@ export enum LogEventType {
   // ── Audit Chain Verifier Events ──
   AUDIT_CHAIN_VERIFICATION = "audit-chain:verification",
 
+  // ── Audit Log Events ──
+  AUDIT_LOG_RECORDED = "audit:log-recorded",
+
   // ── Database Events ──
   DB_SLOW_QUERY = "db:slow-query",
 
@@ -239,6 +242,14 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     lastCheckedSeq: { type: "number" },
     firstViolationSeq: { type: "number" },
     checkedAt: { type: "string" },
+  },
+
+  [LogEventType.AUDIT_LOG_RECORDED]: {
+    tenantId: { type: "string" },
+    action: { type: "string" },
+    resourceType: { type: "string" },
+    status: { type: "string" },
+    requestId: { type: "string" },
   },
 
   // ── Database ──

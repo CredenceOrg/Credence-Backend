@@ -1,15 +1,22 @@
 import { Pool, type PoolClient, type QueryResult } from "pg";
-import dotenv from "dotenv";
+import { createHash } from "node:crypto";
+import { LRUCache } from "lru-cache";
 import { AppError, ErrorCode } from "../lib/errors.js";
 import { logger } from "../utils/logger.js";
 import { getTenantId } from "../utils/tenantContext.js";
-
-dotenv.config();
+import { redact } from "../observability/redaction.js";
+import { LogEventType } from "../observability/logSchemas.js";
+import { loadConfig } from "../config/index.js";
 
 /**
  * Parse a numeric environment variable with a fallback default.
  * Returns the fallback if the variable is missing or non-numeric.
  * @internal Exported for testing only.
+ * @deprecated Pool configuration is now sourced from the validated config
+ * module (DB_POOL_MAX, DB_WORKER_POOL_MAX, DB_REPLICA_POOL_MAX, etc. — see
+ * src/config/index.ts). Kept only for DB_TENANT_CONNECTION_BUDGET, which has
+ * no fixed default and is derived from POOL_MAX below. New pool settings
+ * should be added to the config module instead (#887).
  */
 export function envInt(key: string, fallback: number): number {
   const raw = process.env[key];
@@ -18,22 +25,28 @@ export function envInt(key: string, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-const DB_URL = process.env.DB_URL;
-const POOL_MAX = envInt("DB_POOL_MAX", 20);
-const IDLE_TIMEOUT = envInt("DB_POOL_IDLE_TIMEOUT_MS", 300_000); // 5 minutes: kills idle connections to keep pool counts predictable
-const CONN_TIMEOUT = envInt("DB_POOL_CONNECTION_TIMEOUT_MS", 5_000);
-const STMT_TIMEOUT = envInt("DB_STATEMENT_TIMEOUT_MS", 30_000);
-const WORKER_MAX = envInt("DB_WORKER_POOL_MAX", 5);
+// Single source of truth for every pool tuning knob — validated once at
+// startup by src/config/index.ts rather than read ad hoc via process.env
+// throughout this module. See issue #887.
+const cfg = loadConfig();
+
+const DB_URL = cfg.db.url;
+const POOL_MAX = cfg.db.pool.max;
+const IDLE_TIMEOUT = cfg.db.pool.idleTimeoutMillis;
+const CONN_TIMEOUT = cfg.db.pool.connectionTimeoutMillis;
+const STMT_TIMEOUT = cfg.db.pool.statementTimeoutMs;
+const WORKER_MAX = cfg.db.workerPool.max;
+const REPLICA_MAX = cfg.db.replicaPool.max;
 
 /**
  * Minimum query duration (ms) that triggers a slow-query log entry with the
  * query's EXPLAIN plan attached. 0 disables slow-query logging entirely.
  * See docs/observability.md#slow-query-logging.
  */
-const SLOW_QUERY_THRESHOLD_MS = envInt("SLOW_QUERY_THRESHOLD_MS", 1_000);
+const SLOW_QUERY_THRESHOLD_MS = cfg.db.slowQueryThresholdMs;
 
 const DB_REPLICA_URL = process.env.DB_REPLICA_URL || DB_URL;
-const MAX_REPLICA_LAG_MS = envInt("MAX_REPLICA_LAG_MS", 1000);
+const MAX_REPLICA_LAG_MS = cfg.db.maxReplicaLagMs;
 const TENANT_CONNECTION_BUDGET = Math.max(1, Math.min(envInt("DB_TENANT_CONNECTION_BUDGET", Math.max(1, Math.floor(POOL_MAX / 4))), POOL_MAX));
 const tenantConnectionCounts = new Map<string, number>();
 
@@ -134,7 +147,7 @@ workerPool.on("error", (err) => {
  */
 export const replicaPool = withTenantConnectionBudget(new Pool({
   connectionString: DB_REPLICA_URL,
-  max: POOL_MAX,
+  max: REPLICA_MAX,
   idleTimeoutMillis: IDLE_TIMEOUT,
   connectionTimeoutMillis: CONN_TIMEOUT,
   options: `-c statement_timeout=${STMT_TIMEOUT}`,
@@ -172,6 +185,89 @@ function extractQueryParams(args: unknown[]): unknown[] | undefined {
     return Array.isArray(values) ? values : undefined;
   }
   return Array.isArray(args[1]) ? (args[1] as unknown[]) : undefined;
+}
+
+/**
+ * Per-pool LRU cache mapping exact query text to a stable, deterministic
+ * prepared-statement name. Bounded by `DB_PREPARED_STATEMENT_CACHE_MAX` to
+ * protect server-side prepared-statement memory (each distinct name is
+ * remembered per physical connection). See docs/observability.md#prepared-statement-cache.
+ *
+ * The name is derived purely from the query text (a hash), never from an
+ * incrementing counter. That's deliberate: if a name were reused for two
+ * *different* query texts, a pg connection that already parsed the old text
+ * under that name would skip re-parsing on the next call (per node-postgres's
+ * per-connection `parsedStatements` tracking) and silently execute the wrong
+ * SQL. A pure hash of the text means eviction-then-reintroduction always maps
+ * back to the exact same name, so that corruption case cannot happen.
+ */
+export const apiPreparedStatementCache = new LRUCache<string, string>({
+  max: cfg.db.preparedStatementCacheMax,
+});
+export const workerPreparedStatementCache = new LRUCache<string, string>({
+  max: cfg.db.preparedStatementCacheMax,
+});
+export const replicaPreparedStatementCache = new LRUCache<string, string>({
+  max: cfg.db.preparedStatementCacheMax,
+});
+
+function statementNameFor(text: string): string {
+  return `qs_${createHash("sha1").update(text).digest("hex").slice(0, 16)}`;
+}
+
+/**
+ * PostgreSQL's extended query protocol cannot PREPARE more than one command
+ * at a time — reject text containing multiple semicolon-separated statements
+ * rather than caching (and later reusing) a name for it.
+ */
+function isSingleStatement(text: string): boolean {
+  return !text.trim().replace(/;\s*$/, "").includes(";");
+}
+
+/**
+ * Wraps `target.query` so that repeat executions of the same query text reuse
+ * a server-side prepared statement (via a stable `name`) instead of being
+ * re-parsed by Postgres on every call. Falls through unmodified for
+ * callback-style calls, calls that already specify an explicit `name`, and
+ * text this module cannot safely name (multi-statement text, or no
+ * extractable text at all).
+ * @internal Exported for testing only.
+ */
+export function instrumentPreparedStatementCache(
+  target: Pool,
+  cache: LRUCache<string, string>
+): void {
+  const originalQuery = target.query.bind(target) as (...args: unknown[]) => unknown;
+
+  target.query = ((...args: unknown[]) => {
+    if (typeof args[args.length - 1] === "function") {
+      return originalQuery(...args);
+    }
+
+    const first = args[0];
+    if (first && typeof first === "object" && "name" in first && (first as { name?: unknown }).name) {
+      // Caller already chose an explicit name — respect it untouched.
+      return originalQuery(...args);
+    }
+
+    const text = extractQueryText(args);
+    if (!text || !isSingleStatement(text)) {
+      return originalQuery(...args);
+    }
+
+    let name = cache.get(text);
+    if (!name) {
+      name = statementNameFor(text);
+      cache.set(text, name);
+    }
+
+    if (first && typeof first === "object") {
+      // Preserve any other QueryConfig fields (rowMode, types, etc.).
+      return originalQuery({ ...(first as object), name });
+    }
+
+    return originalQuery({ name, text, values: extractQueryParams(args) });
+  }) as unknown as Pool["query"];
 }
 
 /**
@@ -283,9 +379,58 @@ export function instrumentSlowQueryLogging(
   }) as unknown as Pool["query"];
 }
 
+import { trace, SpanStatusCode } from "@opentelemetry/api";
+
+export function instrumentQueryTracing(target: Pool, poolName: PoolName): void {
+  const originalQuery = target.query.bind(target) as (...args: unknown[]) => unknown;
+
+  target.query = ((...args: unknown[]) => {
+    // Callback-style calls aren't used anywhere in this codebase; pass them
+    // through unmodified.
+    if (typeof args[args.length - 1] === "function") {
+      return originalQuery(...args);
+    }
+
+    const text = extractQueryText(args) || "unknown";
+    const tracer = trace.getTracer("credence-backend");
+
+    return tracer.startActiveSpan("db.query", async (span) => {
+      span.setAttribute("db.system", "postgresql");
+      span.setAttribute("db.statement", text);
+      span.setAttribute("db.pool", poolName);
+
+      try {
+        const result = await (originalQuery(...args) as Promise<QueryResult>);
+        if (result && typeof result.rowCount === "number") {
+          span.setAttribute("db.row_count", result.rowCount);
+        }
+        span.setStatus({ code: SpanStatusCode.OK });
+        return result;
+      } catch (err) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: err instanceof Error ? err.message : "Unknown error",
+        });
+        span.recordException(err as Error);
+        throw err;
+      } finally {
+        span.end();
+      }
+    });
+  }) as unknown as Pool["query"];
+}
+
 instrumentSlowQueryLogging(pool, "api");
+instrumentQueryTracing(pool, "api");
+instrumentPreparedStatementCache(pool, apiPreparedStatementCache);
+
 instrumentSlowQueryLogging(workerPool, "worker");
+instrumentQueryTracing(workerPool, "worker");
+instrumentPreparedStatementCache(workerPool, workerPreparedStatementCache);
+
 instrumentSlowQueryLogging(replicaPool, "replica");
+instrumentQueryTracing(replicaPool, "replica");
+instrumentPreparedStatementCache(replicaPool, replicaPreparedStatementCache);
 
 /**
  * Helper to execute an operation on the replica, falling back to primary

@@ -55,6 +55,8 @@ The API version is **not** embedded in the URL path (`/api/...` not `/api/v1/...
 
 ## Deprecation Policy
 
+> See **[docs/DEPRECATION_POLICY.md](DEPRECATION_POLICY.md)** for full details on support windows, communication cadence, and client migration guidelines.
+
 ### Deprecation Window: **6 months minimum**
 
 When a breaking change is planned:
@@ -222,6 +224,7 @@ When reviewing a PR, check:
 ## Related Documents
 
 - **API Reference:** [`docs/api.md`](api.md)
+- **Deprecation Policy:** [`docs/DEPRECATION_POLICY.md`](DEPRECATION_POLICY.md)
 - **OpenAPI Spec:** [`docs/openapi.yaml`](openapi.yaml)
 - **Error Codes:** [`docs/error-codes.md`](error-codes.md)
 - **SDK Documentation:** [`docs/sdk.md`](sdk.md)

@@ -40,6 +40,32 @@ export async function invalidateCache(
 ): Promise<boolean> {
   const { verify = false, verifyFn } = options
   
+  const context = transactionContextStorage.getStore()
+  if (context) {
+    runPostCommit(async () => {
+      await cache.delete(namespace, key)
+      const bus = getInvalidationBus()
+      await bus.publish({
+        type: 'invalidate',
+        namespace,
+        key
+      })
+      if (verify && freshData) {
+        const staleCheck = await cache.get(namespace, key)
+        if (staleCheck) {
+          const isStale = verifyFn 
+            ? verifyFn(staleCheck, freshData)
+            : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+          if (isStale) {
+            recordStaleCacheRead(namespace)
+            console.warn(`Stale cache detected for ${namespace}:${key}`)
+          }
+        }
+      }
+    })
+    return true
+  }
+
   // Delete the cache entry
   const deleted = await cache.delete(namespace, key)
   
@@ -57,9 +83,9 @@ export async function invalidateCache(
     
     if (staleCheck) {
       // Use custom verification function or default comparison
-      const isStale = verifyFn 
+      const isStale = verifyFn
         ? verifyFn(staleCheck, freshData)
-        : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+        : computeStableHash(staleCheck) !== computeStableHash(freshData)
       
       if (isStale) {
         recordStaleCacheRead(namespace)
@@ -82,6 +108,24 @@ export async function invalidateMultiple(
   namespace: string,
   keys: string[]
 ): Promise<number> {
+  const context = transactionContextStorage.getStore()
+  if (context) {
+    runPostCommit(async () => {
+      await Promise.all(
+        keys.map(async (key) => {
+          await cache.delete(namespace, key)
+        })
+      )
+      const bus = getInvalidationBus()
+      await bus.publish({
+        type: 'invalidate_multiple',
+        namespace,
+        keys
+      })
+    })
+    return keys.length
+  }
+
   let count = 0
   
   await Promise.all(
@@ -114,6 +158,20 @@ export async function invalidatePattern(
   namespace: string,
   pattern: string
 ): Promise<number> {
+  const context = transactionContextStorage.getStore()
+  if (context) {
+    runPostCommit(async () => {
+      await cache.clearNamespace(`${namespace}:${pattern}`)
+      const bus = getInvalidationBus()
+      await bus.publish({
+        type: 'invalidate_pattern',
+        namespace,
+        pattern
+      })
+    })
+    return 0
+  }
+
   const count = await cache.clearNamespace(`${namespace}:${pattern}`)
   
   // Publish invalidation event
@@ -173,8 +231,18 @@ export function withCacheInvalidation<T extends (...args: any[]) => Promise<any>
  * @param parts - Parts to join into a cache key
  * @returns Cache key string
  */
-export function createCacheKey(...parts: (string | number)[]): string {
-  return parts.join(':')
+export function createCacheKey(...parts: (string | number | Record<string, string | number>)[]): string {
+  return parts
+    .map(p => {
+      if (typeof p === 'object' && p !== null) {
+        return Object.keys(p)
+          .sort()
+          .map(k => `${k}=${JSON.stringify(p[k])}`)
+          .join('&')
+      }
+      return String(p)
+    })
+    .join(':')
 }
 
 /**

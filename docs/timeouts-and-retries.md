@@ -448,6 +448,31 @@ DB_POOL_IDLE_TIMEOUT_MS=600000
 
 ---
 
+## Long Transaction Reaper
+
+`DB_STATEMENT_TIMEOUT_MS` bounds a single statement, but it resets on every
+new statement within a transaction — it does nothing for an idle-in-transaction
+session (no statement is running) or a transaction built from many small,
+fast statements separated by slow application-level work. Either shape holds
+row/table locks and blocks autovacuum for as long as the transaction stays
+open. Waiters queue up behind the stale locks, their own connections stay
+checked out of the pool while they wait, and the pool eventually saturates —
+a hold-off cascade.
+
+`LongTransactionReaper` (`src/jobs/longTransactionReaper.ts`) closes this gap
+by periodically scanning `pg_stat_activity` and calling
+`pg_terminate_backend()` on any client backend whose transaction has been
+open longer than the configured max age.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_LONG_TRANSACTION_REAPER_ENABLED` | `true` | Master on/off switch |
+| `DB_LONG_TRANSACTION_MAX_AGE_MS` | `30000` | Transactions open longer than this are terminated |
+| `DB_LONG_TRANSACTION_REAPER_INTERVAL_MS` | `10000` | How often `pg_stat_activity` is scanned |
+| `DB_LONG_TRANSACTION_REAPER_DRY_RUN` | `false` | Log/count over-age transactions without terminating them |
+
+---
+
 ## Further Reading
 
 - **Observability** (metrics, tracing): [`docs/observability.md`](./observability.md)

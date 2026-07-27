@@ -289,4 +289,32 @@ describe('WebhookService', () => {
     // Should take ~100ms (parallel) not ~200ms (sequential)
     expect(duration).toBeLessThan(200)
   })
+
+  describe('replayWebhook', () => {
+    it('throws if DLQ is not configured', async () => {
+      const service = new WebhookService(mockStore)
+      await expect(service.replayWebhook('dlq_1')).rejects.toThrow('DLQ is not configured')
+    })
+
+    it('throws if DLQ entry not found', async () => {
+      const mockDlq = { get: vi.fn().mockResolvedValue(null), push: vi.fn(), list: vi.fn(), markReplayed: vi.fn() }
+      const service = new WebhookService(mockStore, undefined, mockDlq)
+      await expect(service.replayWebhook('dlq_1')).rejects.toThrow('DLQ entry not found')
+    })
+
+    it('replays successfully and marks as replayed', async () => {
+      const mockDlq = { 
+        get: vi.fn().mockResolvedValue({ id: 'dlq_1', webhookId: 'wh_1', payload: { event: 'bond.created', timestamp: '2026-02-25T12:00:00Z', data: {} } }),
+        push: vi.fn(),
+        list: vi.fn(),
+        markReplayed: vi.fn()
+      }
+      const service = new WebhookService(mockStore, undefined, mockDlq)
+
+      const result = await service.replayWebhook('dlq_1')
+      expect(result.success).toBe(true)
+      expect(mockDlq.markReplayed).toHaveBeenCalledWith('dlq_1', expect.any(String))
+      expect(fetch).toHaveBeenCalledTimes(1)
+    })
+  })
 })

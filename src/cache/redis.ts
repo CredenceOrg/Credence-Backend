@@ -4,6 +4,7 @@ import { executeCacheOperation, createMetricsAdapter } from '../lib/timeoutExecu
 import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.js'
 import { logger } from '../utils/logger.js'
 import { singleflight } from '../lib/singleflight.js'
+import { recordCacheHit, recordCacheMiss, isObjectStale } from '../utils/cacheContext.js'
 
 export type RedisClient = RedisClientType
 
@@ -146,6 +147,11 @@ export class CacheService {
     // Check L1 cache first
     const l1Value = this.l1Cache.get(namespacedKey)
     if (l1Value !== undefined) {
+      if (l1Value === null) {
+        recordCacheMiss()
+      } else {
+        recordCacheHit(isObjectStale(l1Value))
+      }
       return l1Value as T
     }
     
@@ -156,6 +162,7 @@ export class CacheService {
         const value = await this.redis.getClient().get(namespacedKey)
         
         if (value === null) {
+          recordCacheMiss()
           return null
         }
 
@@ -169,11 +176,13 @@ export class CacheService {
 
         // Store in L1
         this.l1Cache.set(namespacedKey, parsedValue)
+        recordCacheHit(isObjectStale(parsedValue))
         return parsedValue
       },
       { metrics: this.metrics }
     ).catch(error => {
       logger.error(`Cache get failed for key ${namespacedKey}:`, error)
+      recordCacheMiss()
       return null
     })
   }

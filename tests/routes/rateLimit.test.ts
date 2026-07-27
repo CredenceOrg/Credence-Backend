@@ -344,6 +344,106 @@ describe('Rate Limit Middleware', () => {
       }
       expect((await request(app).get('/api/ping')).status).toBe(429)
     })
+
+    it('x_ratelimit_limit_header_matches_config_for_free_pro_and_enterprise_tiers', async () => {
+      // Lock Free / Pro / Enterprise header values to whatever the active
+      // config says — defaults (100 / 1000 / 10000) and custom overrides alike.
+      const cases: Array<{
+        tier: SubscriptionTier
+        config: Config['rateLimit']
+        expectedLimit: number
+        namespace: string
+      }> = [
+        {
+          tier: 'free',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 100,
+          namespace: 'ratelimit:hdr:defaults:free',
+        },
+        {
+          tier: 'pro',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 1000,
+          namespace: 'ratelimit:hdr:defaults:pro',
+        },
+        {
+          tier: 'enterprise',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 10000,
+          namespace: 'ratelimit:hdr:defaults:enterprise',
+        },
+        {
+          tier: 'free',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 17,
+          namespace: 'ratelimit:hdr:custom:free',
+        },
+        {
+          tier: 'pro',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 53,
+          namespace: 'ratelimit:hdr:custom:pro',
+        },
+        {
+          tier: 'enterprise',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 211,
+          namespace: 'ratelimit:hdr:custom:enterprise',
+        },
+      ]
+
+      for (const { tier, config, expectedLimit, namespace } of cases) {
+        const app = express()
+        app.use(express.json())
+        app.use((req, _res, next) => {
+          ;(req as any).apiKeyRecord = {
+            id: `key-${tier}-${expectedLimit}`,
+            ownerId: `owner-${tier}-${expectedLimit}`,
+            tier,
+          }
+          next()
+        })
+        app.use('/api', createRateLimitMiddleware(config, { namespace }))
+        app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+        const res = await request(app).get('/api/ping')
+        expect(res.status).toBe(200)
+        expect(res.headers['x-ratelimit-limit']).toBe(String(expectedLimit))
+        expect(res.headers['x-ratelimit-remaining']).toBe(String(expectedLimit - 1))
+        expect(res.headers['x-ratelimit-reset']).toBeDefined()
+      }
+    })
+
+    it('x_ratelimit_limit_on_429_still_matches_the_callers_tier_config', async () => {
+      // Sad path: once a free-tier caller is blocked, the Limit header must
+      // still report maxFree — not maxPro / maxEnterprise.
+      const config = baseConfig({ maxFree: 1, maxPro: 50, maxEnterprise: 200 })
+      const app = buildApp({
+        config,
+        apiKeyRecord: { id: 'key-free-sad', ownerId: 'owner-free-sad', tier: 'free' },
+      })
+
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      const blocked = await request(app).get('/api/ping')
+      expect(blocked.status).toBe(429)
+      expect(blocked.headers['x-ratelimit-limit']).toBe(String(config.maxFree))
+      expect(blocked.headers['x-ratelimit-remaining']).toBe('0')
+      expect(blocked.headers['retry-after']).toBeDefined()
+      expect(blocked.body.details).toMatchObject({ limit: config.maxFree })
+    })
+
+    it('unauthenticated_request_uses_free_tier_limit_in_header', async () => {
+      const config = baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 })
+      const app = express()
+      app.use(express.json())
+      app.use('/api', createRateLimitMiddleware(config, { namespace: 'ratelimit:hdr:anon' }))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe(String(config.maxFree))
+      expect(res.headers['x-ratelimit-remaining']).toBe(String(config.maxFree - 1))
+    })
   })
 
   // ═══════════════════════════════════════════════════════════════════════════

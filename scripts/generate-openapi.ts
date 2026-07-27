@@ -77,6 +77,28 @@ registry.registerPath({
   },
 });
 
+// Fault-injection (dev-only, behind DEV_MODE flag)
+registry.registerPath({
+  method: 'post',
+  path: '/api/dev/fault-injection',
+  summary: 'Fault injection',
+  description:
+    'Returns a configurable HTTP error (default 500) with a structured JSON body. ' +
+    'Only available when DEV_MODE is enabled (404 otherwise). Intended for chaos / retry testing.',
+  tags: ['Dev'],
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.faultInjectionRequestSchema } },
+    },
+  },
+  responses: {
+    200: { description: 'Simulated fault response', content: { 'application/json': { schema: schemas.faultInjectionResponseSchema } } },
+    400: { description: 'Validation error (invalid statusCode or message too long)', content: { 'application/json': { schema: z.object({ error: z.string(), details: z.array(z.any()) }) } } },
+    404: { description: 'DEV_MODE is disabled', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
+  },
+});
+
 // Trust paths
 registry.registerPath({
   method: 'get',
@@ -848,6 +870,7 @@ registry.registerPath({
 });
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
+
 const document = generator.generateDocument({
   openapi: '3.0.0',
   info: { version: '1.0.0', title: 'Credence API', description: 'Generated OpenAPI documentation from Zod schemas' },

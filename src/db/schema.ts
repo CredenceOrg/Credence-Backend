@@ -227,6 +227,7 @@ const CREATE_TABLE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS audit_logs_actor_time_idx ON audit_logs (actor_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_resource_time_idx ON audit_logs (resource_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs (occurred_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred_at_tenant_id ON audit_logs (occurred_at DESC, tenant_id)`,
   `CREATE INDEX IF NOT EXISTS settlements_bond_id_idx ON settlements (bond_id)`,
   `CREATE INDEX IF NOT EXISTS settlements_status_idx ON settlements (status)`,
   `CREATE INDEX IF NOT EXISTS settlements_settled_at_idx ON settlements (settled_at DESC)`,

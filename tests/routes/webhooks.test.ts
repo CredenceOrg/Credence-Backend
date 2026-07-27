@@ -273,7 +273,7 @@ describe('Webhook Routes', () => {
       expect((body as { error: string }).error).toBe('Unauthorized')
     })
 
-    it('returns 403 when caller has verifier role (not admin)', async () => {
+    it('returns 403 when caller has verifier role (not admin) and writes audit entry', async () => {
       const { status, body } = await request(
         app,
         'POST',
@@ -283,6 +283,13 @@ describe('Webhook Routes', () => {
 
       expect(status).toBe(403)
       expect((body as { error: string }).error).toBe('Forbidden')
+
+      await new Promise(resolve => setTimeout(resolve, 10))
+
+      expect(mockAuditLogs).toHaveLength(1)
+      expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(mockAuditLogs[0].status).toBe('failure')
+      expect(mockAuditLogs[0].resourceId).toBe(SEED_WEBHOOK.id)
     })
   })
 })

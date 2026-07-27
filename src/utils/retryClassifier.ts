@@ -1,14 +1,19 @@
 /**
- * Retry classifier for outbound transport errors.
+ * Retry classifier for outbound transport and downstream errors.
  *
  * Centralises the decision of whether a thrown error is transient (retriable)
  * and, when both a timeout signal and a connection-reset arrive simultaneously,
  * ensures the classifier always picks the correct code (TIMEOUT wins over RESET
  * because the AbortController fired first).
  *
- * Rule: isAbortError is checked before any syscall-code inspection so that
+ * Rule: `isAbortError` is checked before any syscall-code inspection so that
  * undici's `TypeError("fetch failed") { cause: AbortError }` is always
  * classified as TIMEOUT, not RESET.
+ *
+ * `classifyTransportError` and `classifyDownstreamError` both rely on
+ * `isRetryableTransportCode` as the single source of truth for transport-layer
+ * retryability, so adding a non-retriable transport code only requires updating
+ * that one function — both classifiers pick it up automatically.
  */
 
 import {
@@ -18,8 +23,15 @@ import {
   type TransportErrorCode,
 } from '../clients/httpErrors.js'
 
+/**
+ * Discriminated retry decision returned for a thrown value.
+ *
+ * `reason` is populated for BOTH retryable and non-retryable outcomes so
+ * callers can log a human-readable explanation without re-deriving it from the
+ * raw error.
+ */
 export type RetryDecision =
-  | { retryable: true; code: TransportErrorCode }
+  | { retryable: true; code: TransportErrorCode; reason: string }
   | { retryable: false; reason: string }
 
 /**
@@ -32,6 +44,10 @@ export type RetryDecision =
  * - ECONNREFUSED → REFUSED → retryable
  * - Generic undici transport failure → NETWORK → retryable
  * - Non-transport errors (SyntaxError, application errors) → not retryable
+ *
+ * Retryability is determined by `isRetryableTransportCode`, not by hardcoded
+ * per-class logic, so a non-retriable transport code added in the future will
+ * flow through to this function automatically.
  */
 export function classifyTransportError(err: unknown): RetryDecision {
   const transport = normalizeTransportError(err)
@@ -40,8 +56,11 @@ export function classifyTransportError(err: unknown): RetryDecision {
     return { retryable: false, reason: msg }
   }
   if (isRetryableTransportCode(transport.code)) {
-    return { retryable: true, code: transport.code }
+    return { retryable: true, code: transport.code, reason: transport.message }
   }
+  // Currently unreachable while every TransportErrorCode is retriable, but
+  // explicit so that a future non-retriable transport code is honoured here
+  // rather than silently forced to retryable.
   return { retryable: false, reason: transport.message }
 }
 
@@ -89,16 +108,21 @@ export function isRetryableRpcCode(code: number | undefined): boolean {
  * Typed classification of a downstream error. `class` is always present so
  * callers can `switch` exhaustively; `retryable` carries the retry decision so
  * the caller does not re-derive it.
+ *
+ * Transport errors carry `retryable: boolean` (not the literal `true`) because
+ * retryability is sourced from `isRetryableTransportCode` — a future
+ * non-retriable transport code would then flow through unchanged instead of
+ * being silently forced to retryable.
  */
 export type DownstreamClassification =
   | {
       class: 'NETWORK_ERROR'
-      retryable: true
+      retryable: boolean
       reason: string
       /** Underlying transport code (RESET | REFUSED | NETWORK). */
       transportCode: TransportErrorCode
     }
-  | { class: 'TIMEOUT_ERROR'; retryable: true; reason: string }
+  | { class: 'TIMEOUT_ERROR'; retryable: boolean; reason: string }
   | {
       class: 'RPC_ERROR'
       retryable: boolean
@@ -148,6 +172,10 @@ function extractRpcError(err: unknown): { code: number; message?: string } | nul
  *
  * Timeout is resolved before generic network via `normalizeTransportError`, so
  * an abort wrapped as a reset is still surfaced as `TIMEOUT_ERROR`.
+ *
+ * `retryable` is sourced from `isRetryableTransportCode` for transport errors
+ * so this function never diverges from `classifyTransportError` on the same
+ * underlying error.
  */
 export function classifyDownstreamError(err: unknown): DownstreamClassification | null {
   const rpc = extractRpcError(err)
@@ -162,16 +190,46 @@ export function classifyDownstreamError(err: unknown): DownstreamClassification 
 
   const transport = normalizeTransportError(err)
   if (transport !== null) {
+    const retryable = isRetryableTransportCode(transport.code)
     if (transport.code === 'TIMEOUT') {
-      return { class: 'TIMEOUT_ERROR', retryable: true, reason: transport.message }
+      return { class: 'TIMEOUT_ERROR', retryable, reason: transport.message }
     }
     return {
       class: 'NETWORK_ERROR',
-      retryable: true,
+      retryable,
       reason: transport.message,
       transportCode: transport.code,
     }
   }
 
   return null
+}
+
+/**
+ * Classification of an HTTP response when only the status code is available
+ * (e.g. the response was rejected before any body was read). Mirrors
+ * `isRetryableHttpStatus` so both throw-based and status-based classifications
+ * share a single source of truth.
+ */
+export type HttpStatusClassification =
+  | { retryable: true; status: number; reason: string }
+  | { retryable: false; status: number; reason: string }
+
+/**
+ * Returns a retry-friendly classification of an HTTP status code:
+ * - 408 / 429 / 5xx → retryable
+ * - everything else (including 2xx, 3xx, 4xx other than 408/429) → not retryable
+ *
+ * Use this when the only signal you have is the response status (e.g. an error
+ * thrown with the status attached but no underlying transport failure).
+ */
+export function classifyHttpStatus(
+  status: number,
+  message?: string,
+): HttpStatusClassification {
+  const reason = message ?? `HTTP ${status}`
+  if (isRetryableHttpStatus(status)) {
+    return { retryable: true, status, reason }
+  }
+  return { retryable: false, status, reason }
 }

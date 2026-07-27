@@ -1,5 +1,6 @@
 import type { DistributedLock } from './distributedLock.js'
 import type { RedisClient } from '../cache/redis.js'
+import type { IdempotencyRedisClient } from './scheduler.js'
 import { InvoiceDueDateWorker, type InvoiceDueDateWorkerOptions, type InvoiceDueDateWorkerResult } from './invoiceDueDateWorker.js'
 import { ExportWorker, type ExportWorkerOptions, type ExportWorkerResult } from './exportWorker.js'
 import { AnalyticsRefreshWorker, type AnalyticsRefreshWorkerResult } from './analyticsRefreshWorker.js'
@@ -16,6 +17,11 @@ export interface BaseLockedWorkerOptions {
   lockTtlMs?: number
   /** Logger function for lock lifecycle events */
   logger?: (message: string) => void
+  /** Redis client for idempotency checks. When set together with enableIdempotency,
+   *  the worker skips execution if a lastRun marker already exists. */
+  redisClient?: IdempotencyRedisClient
+  /** Enable idempotency guard using Redis lastRun markers. */
+  enableIdempotency?: boolean
 }
 
 /**
@@ -43,6 +49,9 @@ export interface LockedAnalyticsRefreshWorkerOptions extends BaseLockedWorkerOpt
 export class LockedInvoiceDueDateWorker {
   private readonly lockTtlMs: number
   private readonly logger: (message: string) => void
+  private readonly redisClient?: IdempotencyRedisClient
+  private readonly enableIdempotency: boolean
+  private readonly idempotencyKey: string
 
   constructor(
     private readonly worker: InvoiceDueDateWorker,
@@ -52,6 +61,9 @@ export class LockedInvoiceDueDateWorker {
   ) {
     this.lockTtlMs = options.lockTtlMs ?? 30 * 60 * 1000 // 30 minutes
     this.logger = options.logger ?? (() => {})
+    this.redisClient = options.redisClient
+    this.enableIdempotency = options.enableIdempotency ?? false
+    this.idempotencyKey = `${this.lockKey}:lastRun`
   }
 
   /**
@@ -61,11 +73,31 @@ export class LockedInvoiceDueDateWorker {
    * @returns Worker execution result or null if lock was not acquired
    */
   async run(nowUtc?: Date | string): Promise<InvoiceDueDateWorkerResult | null> {
+    // Idempotency guard: skip if job was recently completed
+    if (this.enableIdempotency && this.redisClient) {
+      const lastRun = await this.redisClient.get(this.idempotencyKey)
+      if (lastRun) {
+        this.logger(`[LockedInvoiceDueDateWorker] Skipped due date evaluation (idempotency — last run at ${lastRun})`)
+        return null
+      }
+    }
+
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
         this.logger(`[LockedInvoiceDueDateWorker] Starting due date evaluation`)
-        return await this.worker.run(nowUtc)
+        const workerResult = await this.worker.run(nowUtc)
+
+        // Set idempotency marker after successful execution
+        if (this.enableIdempotency && this.redisClient) {
+          await this.redisClient.set(
+            this.idempotencyKey,
+            new Date().toISOString(),
+            { PX: this.lockTtlMs }
+          )
+        }
+
+        return workerResult
       },
       { 
         ttlMs: this.lockTtlMs, 
@@ -96,6 +128,9 @@ export class LockedInvoiceDueDateWorker {
 export class LockedExportWorker {
   private readonly lockTtlMs: number
   private readonly logger: (message: string) => void
+  private readonly redisClient?: IdempotencyRedisClient
+  private readonly enableIdempotency: boolean
+  private readonly idempotencyKey: string
 
   constructor(
     private readonly worker: ExportWorker,
@@ -105,6 +140,9 @@ export class LockedExportWorker {
   ) {
     this.lockTtlMs = options.lockTtlMs ?? 60 * 60 * 1000 // 1 hour for exports
     this.logger = options.logger ?? (() => {})
+    this.redisClient = options.redisClient
+    this.enableIdempotency = options.enableIdempotency ?? false
+    this.idempotencyKey = `${this.lockKey}:lastRun`
   }
 
   /**
@@ -113,11 +151,31 @@ export class LockedExportWorker {
    * @returns Export execution result or null if lock was not acquired
    */
   async run(): Promise<ExportWorkerResult | null> {
+    // Idempotency guard: skip if job was recently completed
+    if (this.enableIdempotency && this.redisClient) {
+      const lastRun = await this.redisClient.get(this.idempotencyKey)
+      if (lastRun) {
+        this.logger(`[LockedExportWorker] Skipped export (idempotency — last run at ${lastRun})`)
+        return null
+      }
+    }
+
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
         this.logger(`[LockedExportWorker] Starting data export`)
-        return await this.worker.run()
+        const workerResult = await this.worker.run()
+
+        // Set idempotency marker after successful execution
+        if (this.enableIdempotency && this.redisClient) {
+          await this.redisClient.set(
+            this.idempotencyKey,
+            new Date().toISOString(),
+            { PX: this.lockTtlMs }
+          )
+        }
+
+        return workerResult
       },
       { 
         ttlMs: this.lockTtlMs, 
@@ -148,6 +206,9 @@ export class LockedExportWorker {
 export class LockedAnalyticsRefreshWorker {
   private readonly lockTtlMs: number
   private readonly logger: (message: string) => void
+  private readonly redisClient?: IdempotencyRedisClient
+  private readonly enableIdempotency: boolean
+  private readonly idempotencyKey: string
 
   constructor(
     private readonly worker: AnalyticsRefreshWorker,
@@ -157,6 +218,9 @@ export class LockedAnalyticsRefreshWorker {
   ) {
     this.lockTtlMs = options.lockTtlMs ?? 15 * 60 * 1000 // 15 minutes for analytics refresh
     this.logger = options.logger ?? (() => {})
+    this.redisClient = options.redisClient
+    this.enableIdempotency = options.enableIdempotency ?? false
+    this.idempotencyKey = `${this.lockKey}:lastRun`
   }
 
   /**
@@ -165,11 +229,31 @@ export class LockedAnalyticsRefreshWorker {
    * @returns Refresh execution result or null if lock was not acquired
    */
   async run(): Promise<AnalyticsRefreshWorkerResult | null> {
+    // Idempotency guard: skip if job was recently completed
+    if (this.enableIdempotency && this.redisClient) {
+      const lastRun = await this.redisClient.get(this.idempotencyKey)
+      if (lastRun) {
+        this.logger(`[LockedAnalyticsRefreshWorker] Skipped analytics refresh (idempotency — last run at ${lastRun})`)
+        return null
+      }
+    }
+
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
         this.logger(`[LockedAnalyticsRefreshWorker] Starting analytics refresh`)
-        return await this.worker.run()
+        const workerResult = await this.worker.run()
+
+        // Set idempotency marker after successful execution
+        if (this.enableIdempotency && this.redisClient) {
+          await this.redisClient.set(
+            this.idempotencyKey,
+            new Date().toISOString(),
+            { PX: this.lockTtlMs }
+          )
+        }
+
+        return workerResult
       },
       { 
         ttlMs: this.lockTtlMs, 

@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { pool } from '../../db/pool.js'
 import { OutboxRepository } from '../../db/outbox/repository.js'
 import type { OutboxQuarantineEntry, OutboxQuarantineReason } from '../../db/outbox/types.js'
-import { buildPaginationMeta, parsePaginationParams } from '../../lib/pagination.js'
+import { buildPaginationLinks, buildPaginationMeta, parsePaginationParams } from '../../lib/pagination.js'
 import {
   ApiScope,
   AuthenticatedRequest,
@@ -11,6 +11,7 @@ import {
   requireUserAuth,
 } from '../../middleware/auth.js'
 import { auditLogService, AuditAction } from '../../services/audit/index.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 const quarantineReasons = new Set<OutboxQuarantineReason>([
   'malformed_json',
@@ -58,7 +59,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
         })
         const reason = typeof req.query.reason === 'string' ? req.query.reason : undefined
         if (reason && !quarantineReasons.has(reason as OutboxQuarantineReason)) {
-          res.status(400).json({ error: 'InvalidReason', message: `Unsupported quarantine reason: ${reason}` })
+          sendError(res, ErrorCode.VALIDATION_FAILED, `Unsupported quarantine reason: ${reason}`)
           return
         }
 
@@ -84,10 +85,13 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
           reason as OutboxQuarantineReason | undefined
         )
 
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
         res.status(200).json({
           success: true,
           data: entries.map(serializeEntry),
           ...buildPaginationMeta(total, page, limit),
+          links: buildPaginationLinks(fullUrl, page, limit, total),
         })
       } catch (error) {
         next(error)
@@ -104,7 +108,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
         const payload = req.body?.payload
         const requestId = (req as any).requestId
         if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
-          res.status(400).json({ error: 'InvalidPayload', message: 'payload must be a JSON object' })
+          sendError(res, ErrorCode.VALIDATION_FAILED, 'payload must be a JSON object')
           return
         }
 
@@ -115,7 +119,7 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
 
         const newEventId = await repository.reinjectQuarantined(pool, id, payload as Record<string, unknown>, actorId)
         if (!newEventId) {
-          res.status(404).json({ error: 'NotFound', message: 'Quarantined event not found or already reinjected' })
+          sendError(res, ErrorCode.NOT_FOUND, 'Quarantined event not found or already reinjected')
           return
         }
 
@@ -142,6 +146,43 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
             quarantineId: id.toString(),
           },
         })
+      } catch (error) {
+        next(error)
+      }
+    }
+  )
+
+  /**
+   * POST /pause
+   *
+   * Pause the outbox publisher. Requires admin authentication.
+   * Logs an audit entry on success.
+   */
+  router.post(
+    '/pause',
+    requireUserAuth,
+    requireAdminRole,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+
+        await auditLogService.logAction(
+          admin.tenantId,
+          admin.id,
+          admin.email,
+          AuditAction.OUTBOX_PAUSE,
+          admin.id,
+          undefined,
+          undefined,
+          'success',
+          undefined,
+          req.ip,
+          requestId
+        )
+
+        res.status(200).json({ success: true, message: 'Outbox publisher paused' })
       } catch (error) {
         next(error)
       }

@@ -1,4 +1,5 @@
 import { Request } from 'express'
+import { RequestLogger } from '../utils/logger.js'
 
 declare global {
   namespace Express {
@@ -6,6 +7,8 @@ declare global {
       requestId: string
       correlationId: string
       traceId: string
+      log: RequestLogger
     }
   }
 }
+

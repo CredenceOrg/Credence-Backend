@@ -1,11 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { Pool } from 'pg'
 
+// pool.ts now sources its settings from loadConfig() (see #887), which
+// validates the *entire* app config, not just DB settings. These are the
+// minimal required vars for that validation to succeed in isolation.
+const REQUIRED_ENV: Record<string, string> = {
+  DB_URL: 'postgresql://user:pass@localhost:5432/credence',
+  REDIS_URL: 'redis://localhost:6379',
+  JWT_SECRET: 'a]r$8kL!qZ3wX#mN9pT&vB6yD0fH2jU4',
+}
+
 describe('DB Pool configuration', () => {
   let envSnapshot: NodeJS.ProcessEnv
 
   beforeEach(() => {
     envSnapshot = { ...process.env }
+    Object.assign(process.env, REQUIRED_ENV)
   })
 
   afterEach(() => {
@@ -75,6 +85,30 @@ describe('DB Pool configuration', () => {
     const { pool, replicaPool } = await import('./pool.js')
     expect(replicaPool).toBeInstanceOf(Pool)
     expect(replicaPool).not.toBe(pool)
+  })
+
+  it('replicaPool.options.max defaults to DB_POOL_MAX when DB_REPLICA_POOL_MAX is unset (#887)', async () => {
+    process.env.DB_POOL_MAX = '17'
+    delete process.env.DB_REPLICA_POOL_MAX
+    vi.resetModules()
+    const { pool, replicaPool } = await import('./pool.js')
+    expect(pool.options.max).toBe(17)
+    expect(replicaPool.options.max).toBe(17)
+  })
+
+  it('replicaPool.options.max honors DB_REPLICA_POOL_MAX independently of DB_POOL_MAX (#887)', async () => {
+    process.env.DB_POOL_MAX = '20'
+    process.env.DB_REPLICA_POOL_MAX = '6'
+    vi.resetModules()
+    const { pool, replicaPool } = await import('./pool.js')
+    expect(pool.options.max).toBe(20)
+    expect(replicaPool.options.max).toBe(6)
+  })
+
+  it('falls back to loadConfig() default replica pool max when the app fails to start with a bad value (failure mode, #887)', async () => {
+    process.env.DB_REPLICA_POOL_MAX = 'not-a-number'
+    vi.resetModules()
+    await expect(import('./pool.js')).rejects.toThrow(/DB_REPLICA_POOL_MAX/)
   })
 
   it('rejects a tenant that exceeds its connection budget', async () => {

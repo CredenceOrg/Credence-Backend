@@ -10,6 +10,7 @@ import {
   migrationsDryRunBodySchema,
 } from '../../schemas/admin.js'
 import { dryRunMigration } from '../../migrations/runner.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 const router = Router()
 
@@ -39,11 +40,7 @@ router.get(
       })
 
       if (!result.success) {
-        return res.status(400).json({
-          success: false,
-          error: 'MigrationDryRunFailed',
-          message: result.error ?? 'Failed to execute migration dry run',
-        })
+        return sendError(res, ErrorCode.VALIDATION_FAILED, result.error ?? 'Failed to execute migration dry run')
       }
 
       const sqlStatements = result.sql ?? []
@@ -89,11 +86,7 @@ router.post(
       })
 
       if (!result.success) {
-        return res.status(400).json({
-          success: false,
-          error: 'MigrationDryRunFailed',
-          message: result.error ?? 'Failed to execute migration dry run',
-        })
+        return sendError(res, ErrorCode.VALIDATION_FAILED, result.error ?? 'Failed to execute migration dry run')
       }
 
       const sqlStatements = result.sql ?? []

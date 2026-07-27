@@ -85,6 +85,31 @@ Split the outbox load into 8 disjoint slices.
 
 ---
 
+## Publish Idempotency (Crash Recovery)
+
+When the outbox publisher crashes mid-batch after a successful external publish
+but before the DB `markPublished` call, the event is left in `processing` state.
+After the consumer lease expires a new consumer reclaims the event, which would
+normally result in a **duplicate emission**.
+
+To prevent this, the publisher sets a `publish_idempotency_key` on the event
+row **before** calling the external publisher.  When a reclaimed event already
+has this key the publisher skips the external publish step and moves straight to
+`markPublished`.
+
+| Scenario | Behaviour |
+|---|---|
+| Normal publish | Key set → publish → markPublished (key cleared) |
+| Crash after publish, before markPublished | On reclaim: key present → skip publish → markPublished |
+| Publish fails | Key cleared → markFailed → retry |
+| Concurrent consumer race | Only one consumer acquires the key; the second sees it and skips |
+
+The key is stored in the `publish_idempotency_key` column (nullable `TEXT`) on
+the `event_outbox` table.  No extra indexes or tables are required — the column
+is read and written atomically with the primary-key lookup.
+
+---
+
 ## Worker Leadership Lease (Advisory Locks)
 
 When running multiple replicas behind a load balancer, you may want **only one** instance to run the outbox loop at a time, while the others remain in standby. This avoids duplicate processing and simplifies operational reasoning.

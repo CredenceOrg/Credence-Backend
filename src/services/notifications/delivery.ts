@@ -22,6 +22,10 @@ import {
   recordNotificationProviderAttempt,
   recordNotificationProviderSuccess,
 } from './promMetrics.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 
 /**
  * Generate an idempotency key for a notification provider attempt.
@@ -468,6 +472,11 @@ export class IdempotentEmailDeliveryService {
     }
 
     recordNotificationDlq(failureReason)
+    // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts. The
+    // `attempts` parameter at this callsite is the final attempt count for
+    // this delivery (1-indexed), so the histogram samples a real number.
+    recordJobDeadLetter('notification', failureReason)
+    recordJobTerminalOutcome('notification', 'dead_letter', attempts)
 
     return {
       notificationId: notification.id,

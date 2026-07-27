@@ -48,7 +48,8 @@ The default limits are based on a **60-second window** (1 minute):
 
 ## Response Headers
 
-Every successful API response includes metadata headers describing the current rate limit window state. When a rate limit is exceeded, a `Retry-After` header is additionally supplied.
+Every successful API response includes metadata headers describing the current rate limit window state. When a rate limit is exceeded, a `Retry-After` header is additionally supplied. For a detailed specification for downstream integrators, see **[docs/RATE_LIMIT_HEADERS.md](RATE_LIMIT_HEADERS.md)**.
+
 
 | Header | Type | Description |
 | :--- | :--- | :--- |

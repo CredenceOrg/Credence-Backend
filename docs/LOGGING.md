@@ -1,71 +1,243 @@
-# Structured Logging Policy
+# Structured Logging Guide
 
-This document outlines the logging standards for contributors to the Credence backend. We rely on structured, JSON-formatted logs to ensure our operations team can effectively filter, monitor, and debug production issues.
+**Audience: contributors** — engineers writing or reviewing code in this repository.
 
-## Core Principles
+This document covers when to use each log level, how PII redaction works, the reserved key schema, request-lifecycle tracing, and the ESLint rules that enforce these conventions.
 
-1.  **Always use the structured logger.** Avoid `console.log` or `console.error`.
-2.  **Log context, not prose.** Let the message be a simple, searchable event name or action, and put variable data in the JSON payload.
-3.  **Protect PII.** Never log sensitive user data in plain text.
+Related docs:
+- [Observability & Request Tracing](observability.md) — `req.log`, request-scoped context, metrics
+- [OBSERVABILITY.md](OBSERVABILITY.md) — Prometheus metrics, Grafana dashboard, alert PromQL
 
-## Reserved Keys
+---
 
-To maintain a consistent schema across all services, the following keys are reserved at the root of the log payload. If you need to log this information, use exactly these keys:
+## Table of Contents
 
-*   **`request_id`** (string): The unique identifier for the incoming HTTP request. This should be propagated to all child logs.
-*   **`tenant`** (string): The identifier of the customer or tenant account making the request.
-*   **`actor`** (string): The identifier of the specific user, service account, or API key performing the action.
+1. [Core principles](#1-core-principles)
+2. [Log levels — when to use each](#2-log-levels--when-to-use-each)
+3. [Request lifecycle tracing](#3-request-lifecycle-tracing)
+4. [Reserved keys](#4-reserved-keys)
+5. [PII redaction rules](#5-pii-redaction-rules)
+6. [Schema-aware logging (LogEventType)](#6-schema-aware-logging-logeventtype)
+7. [ESLint enforcement](#7-eslint-enforcement)
+8. [LOG_LEVEL environment variable](#8-log_level-environment-variable)
+9. [Adding a new event type](#9-adding-a-new-event-type)
+10. [Quick reference — do / do not](#10-quick-reference--do--do-not)
 
-### Example: A well-formed log entry
+---
+
+## 1. Core principles
+
+1. **Use the structured logger.** Never use `console.log` / `console.error` directly in application code; they bypass redaction and schema validation.
+2. **Log context, not prose.** The `message` field should be a stable, searchable event name (e.g. `bond_withdrawal_initiated`). Put variable data in the JSON payload, not in the message string.
+3. **Redact before you serialize.** Redaction runs _before_ `JSON.stringify()` so PII never appears in serialized logs or Node.js heap dumps.
+4. **Fail-secure.** Unknown fields are _dropped_, not passed through. If a field must appear in the log, add it explicitly to the schema for its `LogEventType`.
+
+---
+
+## 2. Log levels — when to use each
+
+### `debug`
+
+Use `debug` for verbose, developer-facing information that is only useful when actively investigating a problem. Debug lines are silenced in production by default (see [LOG_LEVEL](#8-log_level-environment-variable)).
+
+**Use `debug` when:**
+- Tracing the internal state of a complex algorithm step-by-step
+- Logging every retry attempt during local development
+- Dumping intermediate values while chasing a race condition
+- Showing which cache branch was taken
+
+**Do not use `debug` when:**
+- The information is useful in production incidents — use `info` or `warn`
+- It would emit on every request in the hot path — add a feature flag or sample rate
 
 ```typescript
-import { logger } from '../utils/logger'; // Use the project's configured logger
+// Good: step-by-step tracing of cursor pagination logic
+logger.debug({ message: "cursor_page_resolved", cursor, offset, limit });
 
-// Good: Action is the message, data is in the payload using reserved keys
-logger.info('bond_withdrawal_initiated', {
-  request_id: 'req_123abc',
-  tenant: 'org_456def',
-  actor: 'user_789ghi',
-  bond_id: 'bond_001',
-  amount_withdrawn: 500
-});
-
-// Bad: Interpolated strings are hard to search and alert on
-logger.info(`User user_789ghi withdrew 500 from bond_001 (req: req_123abc)`);
+// Good: cache internals during local debugging
+logger.debug({ message: "cache_miss", key: cacheKey, ttl });
 ```
 
-## PII Redaction Rules
+---
 
-We must never store Personally Identifiable Information (PII) or secrets in our logging aggregator. 
+### `info`
 
-**Never log:**
-*   Email addresses
-*   Passwords or API keys
-*   Full names
-*   IP addresses (unless explicitly required for an audit event, in which case they must be hashed or stored in a dedicated secure audit log)
-*   OAuth tokens or JWTs
+Use `info` for normal, observable business events. Info logs should read like an audit trail of what the system did: one line per meaningful action, always at the outermost boundary of that action.
 
-### Redaction Example
+**Use `info` when:**
+- A request was received and handled successfully
+- A background job started, completed, or was skipped
+- A Horizon listener picked up an on-chain event
+- A webhook was delivered
+- A migration ran successfully
 
-If you receive a payload that contains PII, you must sanitize it before logging.
+**Do not use `info` when:**
+- The event happens dozens of times per second per request (e.g. every SQL statement) — that is `debug` territory
+- Something went wrong — use `warn` or `error`
 
 ```typescript
-import { logger } from '../utils/logger';
+// In a route handler — use req.log so request context is automatic
+app.post("/api/attestations", async (req, res) => {
+  req.log.info(
+    { message: "attestation_create_requested", subjectAddress: req.body.subject },
+    { eventType: LogEventType.GENERIC_INFO }
+  );
+  // ... handler logic ...
+  req.log.info(
+    { message: "attestation_created", attestationId: result.id },
+    { eventType: LogEventType.GENERIC_INFO }
+  );
+  res.status(201).json(result);
+});
 
-function processUserUpdate(payload: any, reqId: string) {
-  // Redact PII before logging the payload
-  const safePayload = {
-    ...payload,
-    email: '[REDACTED]',
-    password: '[REDACTED]'
-  };
+// In a background job — use module-level logger
+logger.info(
+  { message: "score_snapshot_job_completed", snapshotCount: 42, durationMs: 310 },
+  { eventType: LogEventType.GENERIC_INFO }
+);
+```
 
-  logger.info('user_profile_updated', {
-    request_id: reqId,
-    actor: payload.user_id,
-    updates: safePayload
-  });
+---
+
+### `warn`
+
+Use `warn` for recoverable problems that the system handled but that an operator should be aware of. A warn does not mean the request failed; it means something unexpected happened and the system compensated.
+
+**Use `warn` when:**
+- A retry was needed (first or second attempt; escalate to `error` on exhaustion)
+- A feature flag was missing and a default was applied
+- A dependency returned a non-fatal degraded response
+- A rate-limit threshold was approached (not yet breached)
+- A config value was out of the recommended range
+- A request carried a deprecated header or API version
+
+**Do not use `warn` when:**
+- The situation is fully expected behavior — use `info`
+- The system cannot continue without human intervention — use `error`
+
+```typescript
+// Soroban RPC retry — warn on attempts, error on exhaustion
+logger.warn(
+  {
+    message: "soroban_rpc_retry",
+    provider: "horizon-mainnet",
+    attempt: 2,
+    maxAttempts: 5,
+    delayMs: 800,
+    code: "NETWORK_ERROR",
+  },
+  { eventType: LogEventType.SOROBAN_RETRY }
+);
+
+// Deprecated header still accepted
+req.log.warn(
+  { message: "deprecated_header_received", header: "x-legacy-tenant-id" },
+  { eventType: LogEventType.GENERIC_WARN }
+);
+```
+
+---
+
+### `error`
+
+Use `error` for failures that require operator attention or that caused a request to fail. Every `error` line should ideally map to an on-call alert or ticket.
+
+**Use `error` when:**
+- A request returned 500
+- A background job failed after all retries were exhausted
+- A database query threw an unrecoverable error
+- A webhook delivery was exhausted
+- An unexpected exception was caught at the top-level error handler
+
+**Do not use `error` when:**
+- The failure is a client mistake (400-level) — use `warn` or `info`
+- Retries are still available — use `warn` until the final attempt
+
+```typescript
+// Caught exception in the error handler middleware
+logger.error(
+  { message: "unhandled_request_error", method: req.method, path: req.path, statusCode: 500 },
+  err,                                   // second argument: the Error object
+  { eventType: LogEventType.HTTP_ERROR }
+);
+
+// Webhook exhausted
+logger.error(
+  {
+    message: "webhook_delivery_exhausted",
+    provider: subscription.url,
+    attempts: 5,
+    errorCode: "TIMEOUT",
+  },
+  { eventType: LogEventType.WEBHOOK_DELIVERY_EXHAUSTED }
+);
+```
+
+The `logger.error()` signature accepts an optional second `Error` argument which is serialized to `{ error: string, stack: string }` — both fields are included in the `GENERIC_ERROR` and `HTTP_ERROR` schemas.
+
+---
+
+### Level summary table
+
+| Level   | Visible in production (default) | Who cares? | Example events |
+|---------|----------------------------------|------------|----------------|
+| `debug` | No (`LOG_LEVEL=info`)            | Developer actively debugging | cursor resolved, cache branch taken |
+| `info`  | Yes                              | Operator, auditor | request handled, job completed, event received |
+| `warn`  | Yes                              | On-call engineer (no page) | retry attempt, deprecated header, degraded dependency |
+| `error` | Yes                              | On-call engineer (page) | 500 response, job exhausted, DB failure |
+
+---
+
+## 3. Request lifecycle tracing
+
+Every inbound HTTP request is assigned three IDs by `requestIdMiddleware` (`src/middleware/requestId.ts`):
+
+| ID | Header | Purpose |
+|----|--------|---------|
+| `requestId` | `X-Request-ID` | Unique per HTTP call; returned in the response header |
+| `correlationId` | `X-Correlation-ID` | Persists across service calls; propagated downstream |
+| `traceId` | `X-Trace-ID` | End-to-end trace across all hops |
+
+These IDs are stored in an `AsyncLocalStorage` context (`tracingContext` in `src/utils/logger.ts`) and are automatically appended to every log line emitted during that request — including logs inside services, repositories, and jobs that are called from the handler.
+
+### Using `req.log` inside handlers and middleware
+
+Inside Express route handlers and middleware, always use `req.log` instead of the module-level `logger`. `req.log` is a `RequestLogger` pre-bound to the request's `AsyncLocalStorage` context, so `requestId`, `correlationId`, `tenant`, and `actor` appear in the output without any extra work.
+
+```typescript
+import { Request, Response } from "express";
+import { LogEventType } from "../observability/logSchemas.js";
+
+export async function getBondHandler(req: Request, res: Response) {
+  const { address } = req.params;
+
+  req.log.info(
+    { message: "bond_read_requested", address },
+    { eventType: LogEventType.GENERIC_INFO }
+  );
+
+  try {
+    const bond = await bondService.getByAddress(address);
+
+    req.log.info(
+      { message: "bond_read_success", address, bondId: bond.id },
+      { eventType: LogEventType.GENERIC_INFO }
+    );
+
+    res.json(bond);
+  } catch (err) {
+    req.log.error(
+      { message: "bond_read_failed", address, statusCode: 500 },
+      err as Error,
+      { eventType: LogEventType.HTTP_ERROR }
+    );
+    res.status(500).json({ error: "internal_error" });
+  }
 }
 ```
 
 By following these rules, we ensure that our logs remain a powerful and secure tool for the entire team.
+
+## See Also
+
+- **[Log Retention Policy](LOG_RETENTION.md)** — how long each log type is kept and where.

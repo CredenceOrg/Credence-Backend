@@ -21,3 +21,17 @@ export {
   resetInvalidationBus,
   type InvalidationEvent
 } from './invalidationBus.js';
+export {
+  createCacheInvalidationHook,
+  composeInvalidationHooks,
+  profileInvalidationHook,
+  trustScoreInvalidationHook,
+  bulkVerificationInvalidationHook,
+  orgMembersListInvalidationHook,
+  memberByIdInvalidationHook,
+  genericInvalidationHook,
+  invalidationHookExecutionsTotal,
+  type InvalidationHook,
+  type InvalidationHookOptions,
+  type InvalidationHookResult,
+} from './invalidationHooks.js';

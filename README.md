@@ -1,5 +1,7 @@
 # Credence Backend
 
+[![codecov](https://codecov.io/gh/CredenceOrg/Credence-Backend/branch/main/graph/badge.svg)](https://codecov.io/gh/CredenceOrg/Credence-Backend)
+
 API and services for the Credence economic trust protocol. Provides health checks, trust score and bond status endpoints (to be wired to Horizon and a reputation engine).
 
 ## About
@@ -11,7 +13,9 @@ This service is part of [Credence](../README.md). It supports:
 - Redis-based caching layer
 - **Configurable lock timeouts** – Prevents indefinite waits on locked rows with policy-based timeouts and automatic retry
 - **Horizon listener / identity state sync** – Reconciles DB with on-chain bond state (see [Identity state sync](#identity-state-sync)).
+- **Shadow write mode for safe pipeline migration** – Validates new settlement pipeline by writing to both old and new simultaneously and comparing results in metrics (see [Shadow Write Mode](docs/SHADOW_WRITE_MODE.md))
 - Reputation engine (off-chain score from bond data) (future)
+- **Downstream service dependencies**: see [docs/SERVICE_MAP.md](docs/SERVICE_MAP.md) for every external service the backend calls.
 
 ## Prerequisites
 
@@ -45,6 +49,8 @@ The server **fails fast** on startup if any required environment variable is mis
 ```bash
 npm run dev
 ```
+
+`npm run dev` automatically checks for pending database migrations before starting the dev server. If any are found, a reminder to run `npm run migrate:dev` is printed. Set `DATABASE_URL` in your environment to enable this check.
 
 **Production:**
 
@@ -136,10 +142,11 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 
 | Command                   | Description                                |
 | ------------------------- | ------------------------------------------ |
-| `npm run dev`             | Start with tsx watch                       |
+| `npm run dev`             | Check pending migrations, then start with tsx watch |
 | `npm run build`           | Compile TypeScript                         |
 | `npm start`               | Run compiled `dist/`                       |
 | `npm run lint`            | Run ESLint                                 |
+| `npm run lint:fix`        | Run ESLint and auto-fix violations         |
 | `npm test`                | Run test suite (vitest)                    |
 | `npm run test:watch`      | Run tests in watch mode                    |
 | `npm run test:coverage`   | Run tests with coverage                    |
@@ -148,6 +155,38 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `npm run migrate`         | Run pending migrations (CI/production)     |
 | `npm run migrate:down`    | Rollback last migration                    |
 | `npm run migrate:dry-run` | Preview pending migrations without running |
+| `npm run test:db:reset`   | Drop, recreate, and migrate local test DB  |
+
+## Developer Setup
+
+### Lint on save (VS Code)
+
+The repository ships with `.vscode/settings.json` and `.vscode/extensions.json` so ESLint auto-fixes your code every time you save a TypeScript file — no extra configuration needed.
+
+**Prerequisites:** Install the recommended extension when VS Code prompts you, or run:
+
+```
+Extensions: Show Recommended Extensions   # Ctrl+Shift+P → type "Show Recommended"
+```
+
+The extension ID is `dbaeumer.vscode-eslint`.
+
+**How it works:**
+
+- `.vscode/settings.json` sets `editor.codeActionsOnSave` → `source.fixAll.eslint: "explicit"`, which triggers ESLint's `--fix` pass on every explicit save (`Ctrl+S` / `⌘S`).
+- `eslint.useFlatConfig: true` tells the extension to use the project's `eslint.config.js` flat-config format.
+- `[typescript].editor.defaultFormatter` is set to the ESLint extension so format-on-save routes through ESLint rather than a separate formatter.
+
+**CLI equivalent** (safe to re-run, idempotent):
+
+```bash
+npm run lint        # check only — exits non-zero if there are errors
+npm run lint:fix    # check and auto-fix — writes changes in place
+```
+
+Both commands target `src/` and respect the ignore patterns in `eslint.config.js` (e.g. `dist/`, `**/*.test.ts`).
+
+---
 
 ## API (current)
 
@@ -166,12 +205,13 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
 
-Every public error code, its HTTP status, and the remediation path is documented in **[docs/API_ERROR_TAXONOMY.md](docs/API_ERROR_TAXONOMY.md)** (the generated code/status table is in [docs/error-codes.md](docs/error-codes.md)).
+List endpoints support offset/page and cursor-based pagination. See **[docs/PAGINATION_CONTRACT.md](docs/PAGINATION_CONTRACT.md)** for cursor format, page-size limits, and ordering guarantees.
 
 Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
-**API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**
+**API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**  
+**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**
 
 ### OpenAPI spec
 
@@ -180,6 +220,10 @@ docs/openapi.yaml
 ```
 
 Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
+
+For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
+
+The full request/response pipeline — from Zod schema definition to OpenAPI generation to frontend client types — is documented in **[docs/TYPE_SAFETY.md](docs/TYPE_SAFETY.md)**.
 
 ### Postman / Insomnia collection
 
@@ -256,7 +300,10 @@ Comprehensive monitoring with Prometheus and Grafana is available.
 - Grafana dashboard setup
 - Prometheus configuration
 - Alert rules
+- Queue monitoring on-call guide: **[docs/QUEUE_MONITORING.md](docs/QUEUE_MONITORING.md)**
 - Deployment instructions
+
+Alert routing — how a fired metric becomes a PagerDuty page or Slack message — is documented in **[docs/alert-routing-pipeline.md](docs/alert-routing-pipeline.md)** (contributor guide) and **[docs/alert-routing.md](docs/alert-routing.md)** (on-call reference).
 
 Quick start:
 
@@ -283,6 +330,7 @@ The Grafana dashboard includes:
 
 The service deploys to Kubernetes as a zero-downtime rolling update (`k8s/deployment.yaml`). See:
 
+- **[docs/DEPLOY.md](docs/DEPLOY.md)** — environment-specific (development, staging, production) deployment guide, prerequisites, and verification steps.
 - **[docs/k8s.md](docs/k8s.md)** — manifests, ConfigMap/Secret keys, and the first-time `kubectl apply -k k8s/` quick start.
 - **[docs/deployment-cutover.md](docs/deployment-cutover.md)** — the cutover sequence, exactly what the readiness/liveness/startup probes check (and their timing), and how to detect a bad rollout and trigger `kubectl rollout undo`.
 
@@ -300,6 +348,8 @@ The backend implements a comprehensive timeout and retry strategy for all extern
 - Downstream error classification (`NETWORK_ERROR` vs `TIMEOUT_ERROR` vs `RPC_ERROR`) with typed surfacing
 - Environment variable tuning guide
 - Operational runbook (symptom → diagnosis → tuning)
+
+For diagnosing a backed-up outbox event queue specifically, see **[docs/RUNBOOK_QUEUE_LAG.md](docs/RUNBOOK_QUEUE_LAG.md)**.
 
 ## Horizon Listener
 
@@ -322,8 +372,11 @@ The service includes a Redis-based caching layer with:
 - **TTL support** - Set expiration times on cached values
 - **Health checks** - Built-in Redis health monitoring
 - **Graceful fallback** - Continues working when Redis is unavailable
+- **Cache response header** - Appends `x-cache` header (`HIT`, `MISS`, or `STALE`) to responses for transparency
 
-See [docs/caching.md](./docs/caching.md) for detailed documentation.
+See [docs/caching.md](./docs/caching.md) for detailed documentation, and
+[docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
+cache namespaces and their TTLs.
 
 ## Developer SDK
 
@@ -381,8 +434,10 @@ try {
 | `ANALYTICS_REFRESH_CRON`      | No       | `*/5 * * * *` | Refresh cadence for analytics materialized view        |
 | `ANALYTICS_STALENESS_SECONDS` | No       | `300`         | Max acceptable analytics staleness before marked stale |
 | `DB_POOL_IDLE_TIMEOUT_MS`     | No       | `300000`      | Milliseconds a pooled connection may stay idle before being closed. Kills idle connections to keep pool counts predictable. |
-| `DB_POOL_MAX`                 | No       | `20`          | Maximum connections in the primary / replica pools     |
+| `DB_POOL_MAX`                 | No       | `20`          | Maximum connections in the primary pool                |
 | `DB_WORKER_POOL_MAX`          | No       | `5`           | Maximum connections in the background-worker pool      |
+| `DB_REPLICA_POOL_MAX`         | No       | `DB_POOL_MAX` | Maximum connections in the read-replica pool; falls back to `DB_POOL_MAX` when unset |
+| `MAX_REPLICA_LAG_MS`          | No       | `1000`        | Max replication lag (ms) before reads fall back to the primary pool |
 | `DB_POOL_CONNECTION_TIMEOUT_MS` | No     | `5000`        | Milliseconds to wait for an available connection       |
 | `DB_STATEMENT_TIMEOUT_MS`     | No       | `30000`       | Per-statement timeout; kills runaway queries           |
 
@@ -531,6 +586,8 @@ After running `npm run build`, migrations are executed from `dist/migrations/`.
 5. **Create new migrations** for schema changes
 6. **Back up production database** before running migrations
 
+For large data migrations or backfills, you can track their execution in real-time. See **[docs/backfill-progress.md](docs/backfill-progress.md)**.
+
 ## Tech
 
 - Node.js
@@ -578,15 +635,28 @@ To prevent duplicate side-effects (e.g., duplicate webhooks or notifications) wh
 
 For details on configuration and usage, see **[docs/REPLAY_SAFE_HANDLERS.md](docs/REPLAY_SAFE_HANDLERS.md)**.
 - [Replay & Inspection Guide (Operator)](docs/replay_and_inspection.md)
+- [Event Ordering Guarantees](docs/EVENT_ORDERING.md)
+
+
+## Observability & Logging
+
+For observability, request tracing, metrics, and structured logging guidelines:
+- **Structured Logging Policy**: See [docs/LOGGING.md](docs/LOGGING.md) for logs, formats, and conventions.
+- **Log Retention**: See [docs/LOG_RETENTION.md](docs/LOG_RETENTION.md) for how long each log type is kept and where.
+- **Request Tracing & Metrics**: See [docs/observability.md](docs/observability.md) for request tracing, PII redaction rules, and the `req.log` request-scoped logger.
 
 ## Security
 
 For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
+- **Dependency Upgrades**: See [docs/dependency-upgrades.md](docs/dependency-upgrades.md) for how aggressively we upgrade deps and our review process.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
+- **Canonical JWT Claims Reference**: See [docs/JWT_CLAIMS.md](docs/JWT_CLAIMS.md) for standard, custom, and impersonation JWT claims, headers, and consumer middleware.
 - **Rate Limiting Support & Operations**: See [docs/rate-limiting.md](docs/rate-limiting.md) for details on default tier rate limits, environment configuration, troubleshooting, and support FAQs.
+- **Rate Limit Response Headers**: See [docs/RATE_LIMIT_HEADERS.md](docs/RATE_LIMIT_HEADERS.md) for header semantics (`X-RateLimit-*`, `Retry-After`), calculation rules, and client integration examples.
 - **Evidence Upload Security**: See [docs/evidence-upload-security.md](docs/evidence-upload-security.md) for file upload security configurations, size/count limits, and magic number validations.
 - **Secret-Rotation Posture**: See [docs/SECRETS.md](docs/SECRETS.md) for where secrets live, rotation cadence, and blast radius of each credential type.
+- **Incoming Webhook Security & Posture**: See [docs/WEBHOOK_RECEIVE.md](docs/WEBHOOK_RECEIVE.md) for signature verification, 5-minute replay window tolerance, and CIDR allowed origins.
 
 ## Testing
 

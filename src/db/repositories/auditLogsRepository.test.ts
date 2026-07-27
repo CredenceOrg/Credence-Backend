@@ -337,3 +337,97 @@ describe('InMemoryAuditLogsRepository - Top Talkers', () => {
   })
 })
 
+describe('Audit Log Index and Scoping Behavior', () => {
+  let repository: InMemoryAuditLogsRepository
+
+  beforeEach(() => {
+    repository = new InMemoryAuditLogsRepository()
+  })
+
+  it('happy path: queries and filters by tenantId ordered by occurred_at DESC', async () => {
+    await repository.append({
+      actorId: 'admin-1',
+      actorEmail: 'admin@credence.org',
+      action: AuditAction.ASSIGN_ROLE,
+      resourceType: 'user',
+      resourceId: 'user-1',
+      tenantId: 'tenant-1',
+    })
+
+    await delay(5)
+
+    await repository.append({
+      actorId: 'admin-1',
+      actorEmail: 'admin@credence.org',
+      action: AuditAction.REVOKE_API_KEY,
+      resourceType: 'user',
+      resourceId: 'user-2',
+      tenantId: 'tenant-2',
+    })
+
+    await delay(5)
+
+    await repository.append({
+      actorId: 'admin-1',
+      actorEmail: 'admin@credence.org',
+      action: AuditAction.ASSIGN_ROLE,
+      resourceType: 'user',
+      resourceId: 'user-3',
+      tenantId: 'tenant-1',
+    })
+
+    const result = await repository.query({ tenantId: 'tenant-1' })
+    expect(result.logs).toHaveLength(2)
+    expect(result.logs[0].resourceId).toBe('user-3')
+    expect(result.logs[1].resourceId).toBe('user-1')
+    expect(result.logs.every(log => log.tenantId === 'tenant-1')).toBe(true)
+  })
+
+  it('explicit failure mode: fails to paginate when cursor is invalid or malformed', async () => {
+    await repository.append({
+      actorId: 'admin-1',
+      actorEmail: 'admin@credence.org',
+      action: AuditAction.ASSIGN_ROLE,
+      resourceType: 'user',
+      resourceId: 'user-1',
+      tenantId: 'tenant-1',
+    })
+
+    const result = await repository.query({ tenantId: 'tenant-1' }, 10, 'garbage-cursor')
+    expect(result.logs).toHaveLength(1)
+    expect(result.logs[0].resourceId).toBe('user-1')
+  })
+})
+
+describe('PostgresAuditLogsRepository - Index Querying and Scoping', () => {
+  it('happy path: generates query with correct ORDER BY and WHERE clauses', async () => {
+    const db = {
+      query: vi.fn().mockResolvedValueOnce({ rows: [] }),
+    }
+    const repository = new PostgresAuditLogsRepository(db as any)
+    
+    await repository.query({ tenantId: 'tenant-123' }, 20)
+
+    expect(db.query).toHaveBeenCalled()
+    const sql = String(db.query.mock.calls[0][0])
+    const params = db.query.mock.calls[0][1]
+
+    expect(sql).toContain('WHERE tenant_id = $1')
+    expect(sql).toContain('ORDER BY occurred_at DESC, id DESC')
+    expect(params).toEqual(['tenant-123', 21])
+  })
+
+  it('explicit failure mode: validation or handling of invalid query parameters', async () => {
+    const db = {
+      query: vi.fn().mockResolvedValueOnce({ rows: [] }),
+    }
+    const repository = new PostgresAuditLogsRepository(db as any)
+    
+    await repository.query({ tenantId: 'tenant-123' }, 20, 'invalid-non-base64-cursor!')
+    
+    expect(db.query).toHaveBeenCalled()
+    const sql = String(db.query.mock.calls[0][0])
+    expect(sql).not.toContain('occurred_at, id')
+  })
+})
+

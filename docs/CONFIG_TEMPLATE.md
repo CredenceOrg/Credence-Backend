@@ -55,6 +55,8 @@ At startup the app parses `process.env` through a Zod schema (`envSchema` in
 | `DB_POOL_CONNECTION_TIMEOUT_MS` | `5000` | 1000–30000 | Wait for a free connection before erroring. |
 | `DB_STATEMENT_TIMEOUT_MS` | `30000` | ≥ 0 | Per-statement timeout; kills runaway queries. |
 | `DB_WORKER_POOL_MAX` | `5` | 1–50 | Separate pool for background jobs. |
+| `DB_REPLICA_POOL_MAX` | `DB_POOL_MAX` | 1–200 (optional) | Max connections in the read-replica pool; falls back to `DB_POOL_MAX` when unset. |
+| `MAX_REPLICA_LAG_MS` | `1000` | ≥ 0 | Max replication lag before `withReplica()` falls back to the primary pool. |
 | `DB_LOCK_TIMEOUT_READONLY_MS` | `1000` | 100–30000 | Lock timeout for read-only queries. See [lock-timeout-configuration.md](lock-timeout-configuration.md). |
 | `DB_LOCK_TIMEOUT_DEFAULT_MS` | `2000` | 100–30000 | Standard read-modify-write operations. |
 | `DB_LOCK_TIMEOUT_CRITICAL_MS` | `10000` | 100–60000 | Critical flows that may wait longer. |
@@ -62,6 +64,21 @@ At startup the app parses `process.env` through a Zod schema (`envSchema` in
 > Note: the schema names carry the `_MS` suffix. `.env.example` also lists
 > legacy `DB_LOCK_TIMEOUT_READONLY` / `_DEFAULT` / `_CRITICAL` names — prefer
 > the `_MS` names above.
+
+## Long transaction reaper
+
+Defence-in-depth job that terminates backends holding a transaction open too
+long (`src/jobs/longTransactionReaper.ts`). Unlike `DB_STATEMENT_TIMEOUT_MS`,
+this also catches idle-in-transaction sessions and multi-statement
+transactions with slow app-level pauses between statements — both hold
+locks and block autovacuum without ever tripping a per-statement timeout.
+
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `DB_LONG_TRANSACTION_REAPER_ENABLED` | `true` | Master on/off switch. |
+| `DB_LONG_TRANSACTION_MAX_AGE_MS` | `30000` | Transactions open longer than this are terminated via `pg_terminate_backend`. |
+| `DB_LONG_TRANSACTION_REAPER_INTERVAL_MS` | `10000` | How often `pg_stat_activity` is scanned. |
+| `DB_LONG_TRANSACTION_REAPER_DRY_RUN` | `false` | When `true`, over-age transactions are logged/counted but not terminated. |
 
 ## Authentication and JWT key rotation
 
@@ -100,6 +117,20 @@ At startup the app parses `process.env` through a Zod schema (`envSchema` in
 | `REQUEST_SNAPSHOT_RETENTION_DAYS` | `14` | ≥ 1 |
 | `REQUEST_SNAPSHOT_CLEANUP_INTERVAL_MS` | `86400000` | ≥ 60000 |
 | `REQUEST_SNAPSHOT_CLEANUP_ENABLED` | `true` | |
+
+## Expired sessions sweeper
+
+Periodically deletes `idempotent_job_attempts` rows whose `expires_at` has
+passed, preventing unbounded table growth.
+
+| Variable | Default | Constraint | Notes |
+| --- | --- | --- | --- |
+| `SESSION_TTL_SECONDS` | `86400` | 60–2592000 | TTL (seconds) applied to new session rows. The sweeper removes rows whose `expires_at` ≤ NOW(). |
+| `SESSION_SWEEP_INTERVAL_MS` | `3600000` | ≥ 60000 | How often (ms) the sweeper runs. |
+
+The sweeper is started automatically at application boot when `DATABASE_URL` is
+set. It follows the same batch-delete pattern as the idempotency-key sweeper
+and is stopped during graceful shutdown.
 
 ## Rate limiting
 
@@ -191,7 +222,7 @@ Consumed by `docker-compose.yml`, not by the app directly:
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `credence` | Container credentials; compose builds `DATABASE_URL` from them. |
 | `POSTGRES_PORT` | `5432` | Host-exposed Postgres port. |
 | `REDIS_PORT` | `6379` | Host-exposed Redis port. |
-| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). |
+| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). Reset locally with `npm run test:db:reset` (see [local-testing-guide.md](./local-testing-guide.md)). |
 
 ## Common pitfalls
 

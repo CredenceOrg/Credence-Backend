@@ -27,6 +27,14 @@ export const revokeApiKeyBodySchema = z
   .strict()
 
 /**
+ * Request body schema for rotating the JWT signing key.
+ * POST /api/admin/rotate-signing-key
+ */
+export const rotateSigningKeyBodySchema = z
+  .object({})
+  .strict()
+
+/**
  * Request body schema for issuing an impersonation token
  * POST /api/admin/impersonate
  */
@@ -105,6 +113,7 @@ export const migrationsDryRunResponseSchema = z.object({
 
 export type AssignRoleBody = z.infer<typeof assignRoleBodySchema>
 export type RevokeApiKeyBody = z.infer<typeof revokeApiKeyBodySchema>
+export type RotateSigningKeyBody = z.infer<typeof rotateSigningKeyBodySchema>
 export type IssueImpersonationTokenBody = z.infer<typeof issueImpersonationTokenBodySchema>
 export type InviteMemberBody = z.infer<typeof inviteMemberBodySchema>
 export type UpdateMemberRoleBody = z.infer<typeof updateMemberRoleBodySchema>

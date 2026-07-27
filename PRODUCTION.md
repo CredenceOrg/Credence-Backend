@@ -31,6 +31,18 @@ spec:
         memory: "2Gi"
 ```
 
+## Per-tenant Defaults
+
+The application exposes several per-tenant configuration defaults through environment variables. These serve as the baseline for any tenant that does not have an explicit per-tenant override stored in the database. Sane defaults are provided; override them at the deployment level to change the baseline for all tenants.
+
+| Variable | Default | Description |
+|---|---|---|
+| `TENANT_DEFAULT_RATE_LIMIT` | `100` | Default max requests per tenant when no DB override exists |
+| `TENANT_DEFAULT_RATE_LIMIT_WINDOW_SEC` | `60` | Default rate-limit window (seconds) per tenant |
+| `TENANT_DEFAULT_CONNECTION_BUDGET` | `5` | Default per-tenant DB connection budget cap |
+| `TENANT_DEFAULT_MONTHLY_CREDITS` | `10000` | Default monthly credits for new tenants |
+| `TENANT_DEFAULT_LOW_CREDIT_THRESHOLD` | `100` | Default low-credit warning threshold |
+
 ## Per-tenant Database Connection Budget
 
 Set `DB_TENANT_CONNECTION_BUDGET` to cap how many concurrent PostgreSQL clients a single tenant can hold at once. This is a defence-in-depth control that prevents one noisy tenant from draining the shared pool and affecting other tenants.

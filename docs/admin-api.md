@@ -499,6 +499,7 @@ Each entry contains immutable `who/what/when/resource` fields:
 | `REVOKE_API_KEY` | API key revoked |
 | `CREATE_API_KEY` | New API key created |
 | `DELETE_USER` | User deleted |
+| `RELOAD_CONFIG` | Live configuration reloaded |
 
 ---
 
@@ -604,6 +605,43 @@ curl -X POST "${BASE_URL}/keys/revoke" \
   -H "Content-Type: application/json" \
   -d '{"userId": "verifier-user-1", "apiKey": "<VERIFIER_API_KEY_RAW>"}'
 
+### Reload Config
+
+**POST** `/api/admin/reload-config`
+
+Trigger a live reload of the validated config. This endpoint re-reads the secrets from the vault (`.env`), validates them, and applies them to the current runtime configuration without restarting the application.
+
+*Note: The older endpoint `POST /api/admin/refresh-secrets` is deprecated and acts as an alias to `/reload-config` for backwards compatibility.*
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/reload-config' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>"
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Returns a `ConfigValidationError` if the vault secrets fail schema validation. The current config remains untouched.
+- **401 Unauthorized** - Missing or invalid Bearer token.
+- **403 Forbidden** - User does not have the admin role.
+
+#### Audit Logging
+
+This action is logged with:
+- **Action**: `RELOAD_CONFIG`
+- **Details**: `{ "action": "reload-config" }`
+
+---
+
 ### Migrations Dry-Run
 
 **GET / POST** `/api/admin/migrations/dry-run`
@@ -654,7 +692,98 @@ curl -X POST 'http://localhost:3000/api/admin/migrations/dry-run' \
 
 ---
 
+### Purge Cache
+
+Purges cached entries by key, pattern, or entire namespace. Every cache purge is audit-logged with the calling admin ID, target namespace, parameters, cleared count, and timestamp.
+
+**Endpoint:** `POST /api/admin/purge-cache`  
+**Authentication:** Admin Bearer Token (`requireUserAuth` + `requireAdminRole`)
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | Yes | Cache namespace to target (e.g. `"attestation"`, `"bond"`, `"trust"`) |
+| `key` | string | No | Single cache key within namespace to invalidate |
+| `pattern` | string | No | Pattern to match keys against for bulk invalidation |
+
+Omit both `key` and `pattern` to purge all keys within the specified `namespace`.
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/purge-cache' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "attestation", "key": "id:123"}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "message": "Cache purged for namespace 'attestation'",
+  "data": {
+    "namespace": "attestation",
+    "clearedCount": 1
+  }
+}
+```
+
+---
+
+### Reset Cache
+
+Resets all cached entries in a specific cache namespace. A simpler, more focused alternative to `/purge-cache` for operators who need to clear an entire namespace at once. Audit-logged with admin identity, namespace, and cleared count.
+
+**Endpoint:** `POST /api/admin/reset-cache`  
+**Authentication:** Admin Bearer Token (`requireUserAuth` + `requireAdminRole`)
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | Yes | Cache namespace to reset (e.g. `"attestation"`, `"bond"`, `"trust"`) |
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/reset-cache' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "attestation"}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "message": "Cache namespace 'attestation' reset",
+  "data": {
+    "namespace": "attestation",
+    "clearedCount": 5
+  }
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Missing required `namespace` field or extra unknown fields in request body.
+- **401 Unauthorized** - Missing or invalid Bearer token.
+- **403 Forbidden** - User does not have the admin role.
+
+#### Audit Logging
+
+This action is logged with:
+- **Action**: `RESET_CACHE`
+- **Details**: `{ "namespace": "<namespace>", "clearedCount": <number> }`
+
+---
+
 ## Troubleshooting
+
 
 
 ### Common Issues

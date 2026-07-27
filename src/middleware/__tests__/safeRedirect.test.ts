@@ -49,17 +49,45 @@ describe('createSafeRedirectMiddleware', () => {
     expect(res.headers.location).toBe('/dashboard')
   })
 
-  it('allows an absolute URL whose host is on the allowlist', async () => {
+  it('allows an absolute https URL whose host is on the allowlist', async () => {
     const app = createApp(['admin.credence.io'])
     const res = await request(app).get('/go').query({ to: 'https://admin.credence.io/dashboard' })
     expect(res.status).toBe(302)
     expect(res.headers.location).toBe('https://admin.credence.io/dashboard')
   })
 
+  it('allows an absolute http URL whose host is on the allowlist', async () => {
+    const app = createApp(['admin.credence.io'])
+    const res = await request(app).get('/go').query({ to: 'http://admin.credence.io/dashboard' })
+    expect(res.status).toBe(302)
+    expect(res.headers.location).toBe('http://admin.credence.io/dashboard')
+  })
+
   it('passes through the "back" keyword without validation', async () => {
     const app = createApp()
     const res = await request(app).get('/go-back').set('Referer', '/previous-page')
     expect(res.status).toBe(302)
+  })
+
+  it('allows an absolute URL with host on a multi-entry allowlist', async () => {
+    const app = createApp(['first.com', 'admin.credence.io', 'last.com'])
+    const res = await request(app).get('/go').query({ to: 'https://admin.credence.io/path' })
+    expect(res.status).toBe(302)
+    expect(res.headers.location).toBe('https://admin.credence.io/path')
+  })
+
+  it('allows an absolute URL matching a host:port entry in the allowlist', async () => {
+    const app = createApp(['admin.credence.io:8443'])
+    const res = await request(app).get('/go').query({ to: 'https://admin.credence.io:8443/callback' })
+    expect(res.status).toBe(302)
+    expect(res.headers.location).toBe('https://admin.credence.io:8443/callback')
+  })
+
+  it('allows a case-insensitive host match', async () => {
+    const app = createApp(['ADMIN.CREDENCE.IO'])
+    const res = await request(app).get('/go').query({ to: 'https://admin.credence.io/dashboard' })
+    expect(res.status).toBe(302)
+    expect(res.headers.location).toBe('https://admin.credence.io/dashboard')
   })
 
   // Negative test: this is the check that must fail before the fix (an
@@ -82,6 +110,14 @@ describe('createSafeRedirectMiddleware', () => {
     expect(res.body.code).toBe('unsafe_redirect_target')
   })
 
+  it('blocks an http URL whose host is not on the allowlist', async () => {
+    const app = createApp(['admin.credence.io'])
+    const res = await request(app).get('/go').query({ to: 'http://evil.com/phish' })
+    expect(res.status).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+    expect(res.body.code).toBe('unsafe_redirect_target')
+  })
+
   it('blocks a backslash-trick redirect target', async () => {
     const app = createApp()
     const res = await request(app).get('/go').query({ to: '/\\evil.com' })
@@ -92,6 +128,34 @@ describe('createSafeRedirectMiddleware', () => {
   it('blocks a javascript: URI', async () => {
     const app = createApp()
     const res = await request(app).get('/go').query({ to: 'javascript:alert(1)' })
+    expect(res.status).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+  })
+
+  it('blocks an absolute URL with port mismatch', async () => {
+    const app = createApp(['admin.credence.io'])
+    const res = await request(app).get('/go').query({ to: 'https://admin.credence.io:8443/path' })
+    expect(res.status).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+  })
+
+  it('blocks a subdomain when allowlist has the parent domain', async () => {
+    const app = createApp(['credence.io'])
+    const res = await request(app).get('/go').query({ to: 'https://sub.credence.io/path' })
+    expect(res.status).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+  })
+
+  it('blocks an absolute URL when the allowlist is empty', async () => {
+    const app = createApp()
+    const res = await request(app).get('/go').query({ to: 'https://admin.credence.io/dashboard' })
+    expect(res.status).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+  })
+
+  it('blocks a data: URI', async () => {
+    const app = createApp()
+    const res = await request(app).get('/go').query({ to: 'data:text/html,<script>alert(1)</script>' })
     expect(res.status).toBe(400)
     expect(res.headers.location).toBeUndefined()
   })

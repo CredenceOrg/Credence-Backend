@@ -534,6 +534,7 @@ redis-cli -u "$REDIS_URL" FLUSHALL
 
 ## Related Documentation
 
+- [Runbook: Outbox Queue Lag / Backlog](RUNBOOK_QUEUE_LAG.md) — diagnosing and draining a backed-up outbox queue when `OutboxPublisherLagHigh` fires
 - [Deployment Cutover, Health Gates & Rollback](deployment-cutover.md) — cutover sequence, readiness/liveness thresholds, and when/how to trigger `kubectl rollout undo`
 - [Alert Routing](docs/alert-routing.md) — Severity levels and on-call escalation
 - [Monitoring](docs/monitoring.md) — Metrics and health checks

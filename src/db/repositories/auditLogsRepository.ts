@@ -150,8 +150,21 @@ export function computeRowHash(
   return createHash('sha256').update(input, 'utf8').digest('hex')
 }
 
+const resolveActorId = (input: AuditLogInput): string =>
+  input.actorId ??
+  (input as unknown as { actor_id?: string }).actor_id ??
+  (input as unknown as { adminId?: string }).adminId ??
+  'unknown'
+
+const resolveActorEmail = (input: AuditLogInput): string =>
+  input.actorEmail ??
+  (input as unknown as { actor_email?: string }).actor_email ??
+  (input as unknown as { adminEmail?: string }).adminEmail ??
+  'unknown@unknown'
+
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
+  appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]>
   query(filters?: AuditLogFilters, limit?: number, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }>
   getTopTalkers(limit?: number, windowMinutes?: number, now?: Date): Promise<TopTalkersReport>
   getAll(): Promise<AuditLogEntry[]>
@@ -177,6 +190,8 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
    */
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const actorId = resolveActorId(input)
+    const actorEmail = resolveActorEmail(input)
     const detailsStr = JSON.stringify(input.details ?? {})
     const statusVal = input.status ?? 'success'
 
@@ -257,8 +272,8 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
       `,
       [
         id,
-        input.actorId,
-        input.actorEmail,
+        actorId,
+        actorEmail,
         input.action,
         input.resourceType,
         input.resourceId,
@@ -272,6 +287,15 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     )
 
     return mapAuditLog(result.rows[0])
+  }
+
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    const entries: AuditLogEntry[] = []
+    for (const input of inputs) {
+      const entry = await this.append(input)
+      entries.push(entry)
+    }
+    return entries
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
@@ -411,6 +435,8 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const actorId = resolveActorId(input)
+    const actorEmail = resolveActorEmail(input)
     const seq = ++this.seqCounter
     const occurredAt = new Date().toISOString()
     const detailsStr = JSON.stringify(input.details ?? {})
@@ -426,7 +452,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       prevHash,
       id,
       occurredAt,
-      input.actorId,
+      actorId,
       input.action as string,
       input.resourceType,
       input.resourceId,
@@ -439,10 +465,10 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     const entry: AuditLogEntry = {
       id,
       timestamp: occurredAt,
-      actorId: input.actorId,
-      actorEmail: input.actorEmail,
-      adminId: input.actorId,
-      adminEmail: input.actorEmail,
+      actorId,
+      actorEmail,
+      adminId: actorId,
+      adminEmail: actorEmail,
       action: input.action,
       resourceType: input.resourceType,
       resourceId: input.resourceId,
@@ -465,6 +491,15 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     const frozen = Object.freeze(cloneEntry(entry))
     this.logs.push(frozen)
     return cloneEntry(frozen)
+  }
+
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    const entries: AuditLogEntry[] = []
+    for (const input of inputs) {
+      const entry = await this.append(input)
+      entries.push(entry)
+    }
+    return entries
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {

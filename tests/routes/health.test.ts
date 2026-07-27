@@ -111,4 +111,14 @@ describe('Health route – dependency-aware checks with degradation reasons', ()
     expect(res.status).toBe(200)
     expect(res.body).not.toHaveProperty('dependencies')
   })
+
+  it('/version returns build metadata', async () => {
+    const app = appWithHealth({})
+    const res = await request(app).get('/api/health/version')
+    expect(res.status).toBe(200)
+    expect(res.body).toHaveProperty('gitSha')
+    expect(res.body).toHaveProperty('buildTimestamp')
+    expect(res.body).toHaveProperty('nodeVersion')
+  })
 })
+

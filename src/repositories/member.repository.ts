@@ -179,6 +179,29 @@ export class MemberRepository {
   }
 
   /**
+   * Count active members holding the `owner` role in a given organisation.
+   *
+   * Used by the service to enforce the last-owner guard: soft-deleting or
+   * demoting the last owner would leave the org with no one authorised to
+   * perform administrative actions, so the service blocks such transitions
+   * before applying them. Returns the exact count; no LIMIT because COUNT(*)
+   * over a filtered set is already aggregated to one row and a LIMIT on the
+   * outer query would be dead, while a future maintainer re-shaping the
+   * query for a different scan would risk silent undercount.
+   */
+  async countActiveOwners(orgId: string): Promise<number> {
+    const { rows } = await this.pool.query<{ count: string | number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM org_members
+        WHERE org_id = $1
+          AND role = 'owner'
+          AND deleted_at IS NULL`,
+      [orgId],
+    )
+    return Number(rows[0]?.count ?? 0)
+  }
+
+  /**
    * Restore a soft-deleted member by clearing `deleted_at` and `deleted_by`.
    *
    * @returns The updated row, or null if the member was not deleted / not found.

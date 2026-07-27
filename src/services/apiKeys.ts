@@ -83,9 +83,8 @@ function extractPrefix(rawKey: string): string {
  * Generate and store a new API key.
  *
  * @param ownerId  Identifier of the key owner (user/org ID)
- * @param scope    Primary access scope: 'read' (default) or 'full', or a granular scope string
+ * @param scopeOrScopes Primary scope or array of scopes.
  * @param tier     Subscription tier controlling rate limits (default: 'free')
- * @param scopes   Optional explicit list of granted scopes. When provided, overrides `scope`.
  * @returns        Key metadata including the raw key (shown once only)
  */
 export function generateApiKey(
@@ -117,7 +116,7 @@ export function generateApiKey(
 
   inMemoryStore.set(id, stored)
   return {
-    id,
+    id: stored.id,
     key: rawKey,
     prefix,
     scope: primaryScope,

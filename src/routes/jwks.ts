@@ -1,5 +1,36 @@
 import { Router, type Request, type Response } from 'express'
+import { createHash } from 'crypto'
 import { keyManager } from '../services/keyManager/index.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
+import { recordJwksRequest } from '../middleware/metrics.js'
+
+export interface JwksRouterOptions {
+  /**
+   * Max-age (seconds) for the Cache-Control header on the JWKS endpoint.
+   * Defaults to 300 (5 minutes).
+   */
+  cacheMaxAgeSeconds?: number
+}
+
+/**
+ * Recursively sort object keys so `JSON.stringify` produces a canonical
+ * representation.  `exportJWK` from `jose` does not guarantee a stable
+ * property order across runs/versions, and key insertion history affects
+ * `[...this.keys.values()]` — without this, two semantically identical
+ * JWK Sets can hash to different ETags, defeating `304 Not Modified`.
+ */
+function stableStringify(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(stableStringify)
+  }
+  if (value !== null && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([k, v]) => [k, stableStringify(v)] as const)
+    return Object.fromEntries(entries)
+  }
+  return value
+}
 
 /**
  * Creates the router for the JWK Set (JWKS) endpoint.
@@ -24,22 +55,51 @@ import { keyManager } from '../services/keyManager/index.js'
  * tokens whose `exp` or `iat` values differ slightly due to clock drift.
  *
  * ## Caching
- * The response includes `Cache-Control: public, max-age=300, stale-while-revalidate=60`.
- * Consumers caching this response should re-fetch when they encounter an unknown
- * `kid` in a JWT header, as a rotation may have occurred.
+ * The response includes:
+ *  - `Cache-Control: public, max-age=<cacheMaxAgeSeconds>, stale-while-revalidate=60`
+ *  - `ETag: "<sha256-hex>"` derived from the canonical JWK Set body
+ *
+ * Clients may send `If-None-Match: <etag>` to receive `304 Not Modified`
+ * instead of the full body.  This avoids re-serving the entire JWKS whenever
+ * a rotated key has the same representation, which dramatically reduces
+ * bandwidth while keeping a deterministic cache-busting on rotation.
+ *
+ * The endpoint counter `jwks_requests_total{cache="hit"|"miss",status}` lets
+ * operators see cache-hit ratio and overall traffic.
  */
-export function createJwksRouter(): Router {
+export function createJwksRouter(options?: JwksRouterOptions): Router {
+  const cacheMaxAge = options?.cacheMaxAgeSeconds ?? 300
   const router = Router()
 
-  router.get('/', async (_req: Request, res: Response) => {
+  router.get('/', async (req: Request, res: Response) => {
     try {
       const jwks = await keyManager.getPublicJwks()
+      const body = JSON.stringify(stableStringify(jwks))
+      const etag = `"${createHash('sha256').update(body).digest('hex')}"`
+
+      // Conditional GET — honour RFC 7232 If-None-Match.
+      const ifNoneMatch = req.header('If-None-Match')
+      if (ifNoneMatch && ifNoneMatch === etag) {
+        recordJwksRequest('hit', 304)
+        res
+          .status(304)
+          .set('Cache-Control', `public, max-age=${cacheMaxAge}, stale-while-revalidate=60`)
+          .set('ETag', etag)
+          .end()
+        return
+      }
+
+      recordJwksRequest('miss', 200)
       res
         .status(200)
-        .set('Cache-Control', 'public, max-age=300, stale-while-revalidate=60')
-        .json(jwks)
+        .set('Cache-Control', `public, max-age=${cacheMaxAge}, stale-while-revalidate=60`)
+        .set('ETag', etag)
+        .type('application/json')
+        .send(body)
     } catch {
-      res.status(503).json({ error: 'Key manager not initialized' })
+      // Do not bucket errors into the JWKS cache-miss counter — that is a
+      // service-availability signal, not a cache outcome.
+      sendError(res, ErrorCode.SERVICE_UNAVAILABLE, 'Key manager not initialized')
     }
   })
 

@@ -259,6 +259,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'Service temporarily unavailable',
     category: 'system',
   },
+  MISSING_SECURITY_HEADER: {
+    code: 'missing_security_header',
+    sdkClassName: 'MissingSecurityHeaderCredenceError',
+    kind: 'api',
+    httpStatus: 500,
+    defaultMessage: 'A required security response header is missing',
+    category: 'system',
+  },
   invalid_input: {
     code: 'invalid_input',
     sdkClassName: 'InvalidInputCredenceError',

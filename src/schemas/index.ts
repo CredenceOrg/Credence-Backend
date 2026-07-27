@@ -213,4 +213,9 @@ export {
   type VersionResponse,
 } from './version.js'
 
+export {
+  paginationLinksSchema,
+  type PaginationLinks,
+} from './pagination.js'
+
 

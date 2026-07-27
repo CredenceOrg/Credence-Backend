@@ -34,12 +34,16 @@ export const loggerSchemaValidation: Rule.RuleModule = {
   create(context) {
     return {
       CallExpression(node: any) {
-        // Check if this is a logger.X(...) call
-        if (
+        // Check if this is a logger.X(...) or req.log.X(...) call
+        const isLoggerCall =
           node.callee?.type === "MemberExpression" &&
-          node.callee?.object?.name === "logger" &&
-          LOGGER_METHODS.has(node.callee?.property?.name)
-        ) {
+          (node.callee?.object?.name === "logger" ||
+            (node.callee?.object?.type === "MemberExpression" &&
+              node.callee?.object?.object?.name === "req" &&
+              node.callee?.object?.property?.name === "log")) &&
+          LOGGER_METHODS.has(node.callee?.property?.name);
+
+        if (isLoggerCall) {
           const method = node.callee.property.name;
           const firstArg = node.arguments[0];
 
@@ -107,11 +111,15 @@ export const loggerCallWithObjectRule: Rule.RuleModule = {
   create(context) {
     return {
       CallExpression(node: any) {
-        if (
+        const isLoggerCall =
           node.callee?.type === "MemberExpression" &&
-          node.callee?.object?.name === "logger" &&
-          LOGGER_METHODS.has(node.callee?.property?.name)
-        ) {
+          (node.callee?.object?.name === "logger" ||
+            (node.callee?.object?.type === "MemberExpression" &&
+              node.callee?.object?.object?.name === "req" &&
+              node.callee?.object?.property?.name === "log")) &&
+          LOGGER_METHODS.has(node.callee?.property?.name);
+
+        if (isLoggerCall) {
           const firstArg = node.arguments[0];
 
           if (firstArg?.type === "ObjectExpression") {

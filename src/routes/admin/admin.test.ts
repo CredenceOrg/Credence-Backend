@@ -1,262 +1,150 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import express, { Request, Response, NextFunction } from 'express'
-import request from 'supertest'
-import { createAdminRouter } from './index.js'
+/**
+ * Tests for admin routes covering:
+ * - Only-admin access control (401/403 for non-admin users)
+ * - Idempotent mutation endpoints (Idempotency-Key header)
+ * - Audit logging on every admin action
+ */
 
-// ---- Mock middleware ----
-vi.mock('../../middleware/auth.ts', () => ({
-  UserRole: {
-    ADMIN: 'admin',
-    VERIFIER: 'verifier',
-    USER: 'user',
-  },
-  requireUserAuth: (req: Request, _res: Response, next: NextFunction) => {
-    (req as any).user = { id: 'admin-1', email: 'admin@test.com' }
-    next()
-  },
-  requireAdminRole: (_req: Request, _res: Response, next: NextFunction) => next(),
-}))
+import { describe, it, expect, beforeEach, vi } from 'vitest'
+import express, { type Express } from 'express'
+import { auditLogService, AuditAction } from '../../services/audit/index.js'
 
-// ---- Mock AdminService & ImpersonationService ----
-const { mockAdminService, mockImpersonationService } = vi.hoisted(() => ({
-  mockAdminService: {
-    listUsers: vi.fn(),
-    assignRole: vi.fn(),
-    revokeApiKey: vi.fn(),
-    getAuditLogs: vi.fn(),
-    exportAuditLogs: vi.fn(),
-    logExportCompletion: vi.fn(),
-  },
-  mockImpersonationService: {
-    issueToken: vi.fn(),
-    revokeToken: vi.fn(),
-  },
-}))
+// ── Hoisted mock pool (stable across tests) ────────────────────────
 
-vi.mock('../../services/admin/index.js', () => ({
-  AdminService: class {
-    listUsers = mockAdminService.listUsers
-    assignRole = mockAdminService.assignRole
-    revokeApiKey = mockAdminService.revokeApiKey
-    getAuditLogs = mockAdminService.getAuditLogs
-    exportAuditLogs = mockAdminService.exportAuditLogs
-    logExportCompletion = mockAdminService.logExportCompletion
-  },
-}))
+vi.mock('../../db/pool.js', () => {
+  const idempotencyStore = new Map<string, any>()
 
-vi.mock('../../services/impersonation/index.js', () => ({
-  impersonationService: mockImpersonationService,
-}))
+  return {
+    pool: {
+      query: vi.fn(async (sql: string, params: any[]) => {
+        if (sql.includes('SELECT') && sql.includes('idempotency_keys')) {
+          const key = params[0]
+          const row = idempotencyStore.get(key)
+          if (row && new Date(row.expires_at) > new Date()) {
+            return { rows: [row] }
+          }
+          return { rows: [] }
+        }
 
-// ---- Mock pagination ----
-vi.mock('../../lib/pagination.ts', () => ({
-  parsePaginationParams: vi.fn().mockReturnValue({ page: 1, limit: 10, offset: 0 }),
-  buildPaginationMeta: vi.fn().mockReturnValue({ totalPages: 1 }),
-}))
+        if (sql.includes('INSERT INTO idempotency_keys') || (sql.includes('ON CONFLICT') && sql.includes('idempotency_keys'))) {
+          const [key, requestHash, responseCode, responseBody, expiresAt] = params
+          idempotencyStore.set(key, {
+            key,
+            request_hash: requestHash,
+            response_code: responseCode,
+            response_body: responseBody,
+            expires_at: expiresAt,
+            created_at: new Date(),
+          })
+          return { rowCount: 1 }
+        }
 
-// ---- Mock ReplayService ----
-vi.mock('../../services/replayService.js', () => ({
-  ReplayService: class {
-    listFailedEvents = vi.fn().mockResolvedValue({ events: [], total: 0 })
-    replayEvent = vi.fn().mockResolvedValue({ success: true })
-  },
-}))
+        return { rows: [], rowCount: 0 }
+      }),
+    },
+  }
+})
 
-// ---- Mock repositories ----
-vi.mock('../../db/repositories/failedInboundEventsRepository.js', () => ({
-  FailedInboundEventsRepository: class {},
-}))
+// ── Helpers ────────────────────────────────────────────────────────
 
-vi.mock('../../db/repositories/identityRepository.js', () => ({
-  IdentityRepository: class {},
-}))
+async function request(
+  app: Express,
+  method: 'GET' | 'POST',
+  path: string,
+  headers: Record<string, string> = {},
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
+  return new Promise((resolve, reject) => {
+    const server = app.listen(0, () => {
+      const addr = server.address()
+      if (!addr || typeof addr === 'string') {
+        server.close()
+        reject(new Error('Could not get server address'))
+        return
+      }
 
-vi.mock('../../db/repositories/bondsRepository.js', () => ({
-  BondsRepository: class {},
-}))
+      const url = `http://127.0.0.1:${addr.port}${path}`
+      const opts: RequestInit = {
+        method,
+        headers: { 'Content-Type': 'application/json', ...headers },
+      }
+      if (body !== undefined) opts.body = JSON.stringify(body)
 
-vi.mock('../../services/replayHandlers.js', () => ({
-  registerAllReplayHandlers: vi.fn(),
-}))
-
-import { errorHandler } from '../../middleware/errorHandler.js'
-
-function setup() {
-  const app = express()
-  app.use(express.json())
-  app.use('/api/admin', createAdminRouter())
-  app.use(errorHandler)
-  return app
+      fetch(url, opts)
+        .then(async (res) => {
+          const json = await res.json()
+          server.close()
+          resolve({ status: res.status, body: json })
+        })
+        .catch((err) => {
+          server.close()
+          reject(err)
+        })
+    })
+  })
 }
 
-describe('Admin Router - Strict Validation', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
+function errorHandler(err: any, _req: any, res: any, _next: any) {
+  res.status(500).json({ error: err.message || 'Internal error' })
+}
+
+// ── Admin auth helpers ─────────────────────────────────────────────
+
+const ADMIN_AUTH = { Authorization: 'Bearer admin-key-12345' }
+const VERIFIER_AUTH = { Authorization: 'Bearer verifier-key-67890' }
+const FAKE_AUTH = { Authorization: 'Bearer fake-key-99999' }
+
+// ── Tests ──────────────────────────────────────────────────────────
+
+describe('Admin Routes — Only-Admin Access Control', () => {
+  let app: Express
+
+  beforeEach(async () => {
+    const { createAdminRouter } = await import('./index.js')
+    app = express()
+    app.use(express.json())
+    app.use('/api/admin', createAdminRouter())
+    app.use(errorHandler)
   })
 
-  describe('POST /api/admin/roles/assign', () => {
-    it('should reject unknown fields in assign role request', async () => {
-      mockAdminService.assignRole.mockResolvedValue({
-        user: { id: 'u1' },
-        message: 'assigned',
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/roles/assign')
-        .send({ userId: 'u1', role: 'admin', maliciousField: 'attack' })
-
-      expect(res.status).toBe(400)
-      expect(res.body.code).toBe('validation_failed')
-    })
-
-    it('should accept valid assign role request', async () => {
-      mockAdminService.assignRole.mockResolvedValue({
-        user: { id: 'u1' },
-        message: 'assigned',
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/roles/assign')
-        .send({ userId: 'u1', role: 'admin' })
-
-      expect(res.status).toBe(200)
-    })
+  it('returns_401_when_no_auth_token', async () => {
+    const { status, body } = await request(app, 'POST', '/api/admin/roles/assign', {}, { userId: 'user-1', role: 'admin' })
+    expect(status).toBe(401)
+    expect((body as any).error).toBe('Unauthorized')
   })
 
-  describe('POST /api/admin/keys/revoke', () => {
-    it('should reject unknown fields in revoke API key request', async () => {
-      mockAdminService.revokeApiKey.mockResolvedValue({
-        message: 'revoked',
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/keys/revoke')
-        .send({ userId: 'u1', apiKey: 'key123', maliciousField: 'attack' })
-
-      expect(res.status).toBe(400)
-      expect(res.body.code).toBe('validation_failed')
-    })
-
-    it('should accept valid revoke API key request', async () => {
-      mockAdminService.revokeApiKey.mockResolvedValue({
-        message: 'revoked',
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/keys/revoke')
-        .send({ userId: 'u1', apiKey: 'key123' })
-
-      expect(res.status).toBe(200)
-    })
+  it('returns_401_for_invalid_token', async () => {
+    const { status } = await request(app, 'POST', '/api/admin/roles/assign', FAKE_AUTH, { userId: 'user-1', role: 'admin' })
+    expect(status).toBe(401)
   })
 
-  describe('POST /api/admin/impersonate', () => {
-    it('should reject unknown fields in impersonate request', async () => {
-      mockImpersonationService.issueToken.mockReturnValue({
-        tokenId: 'token123',
-        targetUserId: 'u1',
-        targetUserEmail: 'user@test.com',
-        expiresAt: '2024-01-01T00:00:00Z',
-        ttlSeconds: 900,
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/impersonate')
-        .send({ targetUserId: 'u1', reason: 'debug', maliciousField: 'attack' })
-
-      expect(res.status).toBe(400)
-      expect(res.body.code).toBe('validation_failed')
-    })
-
-    it('should accept valid impersonate request', async () => {
-      mockImpersonationService.issueToken.mockReturnValue({
-        tokenId: 'token123',
-        targetUserId: 'u1',
-        targetUserEmail: 'user@test.com',
-        expiresAt: '2024-01-01T00:00:00Z',
-        ttlSeconds: 900,
-      })
-
-      const res = await request(setup())
-        .post('/api/admin/impersonate')
-        .send({ targetUserId: 'u1', reason: 'debug' })
-
-      expect(res.status).toBe(201)
-    })
+  it('returns_403_when_user_is_not_admin', async () => {
+    const { status, body } = await request(app, 'POST', '/api/admin/roles/assign', VERIFIER_AUTH, { userId: 'user-1', role: 'admin' })
+    expect(status).toBe(403)
+    expect((body as any).error).toBe('Forbidden')
   })
 
-  describe('POST /api/admin/refresh-secrets', () => {
-    it('should reject invalid secrets from the vault and surface a typed error', async () => {
-      // Temporarily mock fs and dotenv just for this test
-      const fs = await import('fs')
-      const dotenv = await import('dotenv')
-      
-      const existsSyncSpy = vi.spyOn(fs.default, 'existsSync').mockReturnValue(true)
-      const readFileSyncSpy = vi.spyOn(fs.default, 'readFileSync').mockReturnValue(Buffer.from('JWT_SECRET=short'))
-      const parseSpy = vi.spyOn(dotenv.default, 'parse').mockReturnValue({ JWT_SECRET: 'short' })
-      
-      const res = await request(setup())
-        .post('/api/admin/refresh-secrets')
-        .send()
-        
-      expect(res.status).toBe(400)
-      expect(res.body.error).toBe('ConfigValidationError')
-      
-      existsSyncSpy.mockRestore()
-      readFileSyncSpy.mockRestore()
-      parseSpy.mockRestore()
-    })
-
-    it('should successfully refresh secrets if valid', async () => {
-      const fs = await import('fs')
-      const dotenv = await import('dotenv')
-      
-      // Ensure we pass validateConfig by having a valid candidateEnv
-      const originalEnv = { ...process.env }
-      process.env.DB_URL = 'postgres://localhost/test'
-      process.env.REDIS_URL = 'redis://localhost/test'
-      process.env.JWT_SECRET = 'valid-secret-at-least-32-chars-long'
-
-      const existsSyncSpy = vi.spyOn(fs.default, 'existsSync').mockReturnValue(true)
-      const readFileSyncSpy = vi.spyOn(fs.default, 'readFileSync').mockReturnValue(Buffer.from('JWT_SECRET=new-valid-secret-at-least-32-chars-long'))
-      const parseSpy = vi.spyOn(dotenv.default, 'parse').mockReturnValue({ JWT_SECRET: 'new-valid-secret-at-least-32-chars-long' })
-      
-      const res = await request(setup())
-        .post('/api/admin/refresh-secrets')
-        .send()
-        
-      expect(res.status).toBe(200)
-      expect(res.body.success).toBe(true)
-      expect(process.env.JWT_SECRET).toBe('new-valid-secret-at-least-32-chars-long')
-      
-      existsSyncSpy.mockRestore()
-      readFileSyncSpy.mockRestore()
-      parseSpy.mockRestore()
-      process.env = originalEnv
-    })
+  it('returns_403_when_user_is_not_admin_on_get_endpoint', async () => {
+    const { status, body } = await request(app, 'GET', '/api/admin/users', VERIFIER_AUTH)
+    expect(status).toBe(403)
+    expect((body as any).error).toBe('Forbidden')
   })
 })
 
-describe('Admin Anti-Crawling Defenses', () => {
-  it('should reject requests from known crawler User-Agents with a typed error', async () => {
-    const response = await request(setup())
-      .get('/admin') // Adjust if the path is wrong
-      .set('User-Agent', 'Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)');
+describe('Admin Routes — Idempotent Mutations', () => {
+  let app: Express
 
-    expect(response.status).toBe(403);
-    
-    // Adjust Zod/Error catalog shape is wrong.
-    expect(response.body).toMatchObject({
-      error: expect.objectContaining({
-        code: 'ADMIN_CRAWLER_BLOCKED'
-      })
-    });
-  });
+  beforeEach(async () => {
+    const { createAdminRouter } = await import('./index.js')
+    app = express()
+    app.use(express.json())
+    app.use('/api/admin', createAdminRouter())
+    app.use(errorHandler)
+  })
 
-  it('should attach X-Robots-Tag headers to legitimate admin requests', async () => {
-    const response = await request(setup())
-      .get('/admin')
-      .set('User-Agent', 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36');
+  it('processes_new_idempotency_key_for_role_assignment', async () => {
+    const headers = { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-new-1' }
+    const payload = { userId: 'admin-user-1', role: 'admin' }
 
     expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
   });
