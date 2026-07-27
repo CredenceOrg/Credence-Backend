@@ -34,6 +34,8 @@ export interface RateLimitConfig {
   windowSec: number
   /** Function to extract tenant identifier from request */
   getTenantId?: (req: Request) => string | undefined
+  /** Function to resolve tenant-specific rate-limit override if configured */
+  getTenantOverride?: (tenantId: string) => Promise<{ rateLimit: number; windowSize: number } | null>
   /**
    * Optional Redis client getter — injected in tests to simulate failures.
    * Defaults to `RedisConnection.getInstance().getClient()`.
@@ -45,6 +47,29 @@ export interface RateLimitConfig {
 
 function hashIdentifier(raw: string): string {
   return createHash('sha256').update(raw).digest('hex').slice(0, 16)
+}
+
+/**
+ * Return the real client IP for rate-limiting purposes.
+ *
+ * Threat model: when Express `trust proxy` is enabled, `req.ip` is derived
+ * from the *leftmost* entry in `X-Forwarded-For`, which is fully
+ * attacker-controlled.  An adversary can set
+ *   X-Forwarded-For: <any-ip>, <legitimate-proxy>
+ * and `req.ip` will return `<any-ip>`, letting them cycle through arbitrary
+ * IPs to bypass per-IP rate limiting.
+ *
+ * Defence: ignore `req.ip` and `X-Forwarded-For` entirely.  Use
+ * `req.socket.remoteAddress` — the IP of the TCP peer that delivered the
+ * request to this process.  In a correctly configured deployment that IP is
+ * always a trusted reverse proxy (or the client directly when no proxy is
+ * present), so it cannot be spoofed at the application layer.
+ *
+ * Performance: two property reads and a string fallback — negligible on any
+ * hot path.  No allocation beyond the constant fallback string.
+ */
+export function getClientIp(req: Request): string {
+  return req.socket?.remoteAddress ?? 'unknown'
 }
 
 /**
@@ -158,16 +183,33 @@ export function createRateLimitMiddleware(
     const tenantId = customGetTenantId?.(req) ?? getTenantId(req)
     const keyId    = getKeyId(req)
     const tier     = getTier(req)
-    const tierMax  = resolveTierLimit(tier, config)
-    // Per-key limit: explicit override or same as tier ceiling
-    const keyMax   = options?.max ?? tierMax
 
-    const ip = req.ip ?? req.socket.remoteAddress ?? 'unknown'
+    let effectiveTierMax = resolveTierLimit(tier, config)
+    let effectiveWindowSec = windowSec
+
+    if (tenantId && options?.getTenantOverride) {
+      try {
+        const override = await options.getTenantOverride(tenantId)
+        if (override) {
+          effectiveTierMax = override.rateLimit
+          effectiveWindowSec = override.windowSize
+        }
+      } catch {
+        // Fall back to tier limit if override lookup fails
+      }
+    }
+
+    // Per-key limit: explicit override or same as tier ceiling
+    const keyMax   = options?.max ?? effectiveTierMax
+
+    // Use getClientIp instead of req.ip to prevent X-Forwarded-For spoofing.
+    // See getClientIp for the full threat model and rationale.
+    const ip = getClientIp(req)
     const tenantSegment = tenantId ? `tenant:${tenantId}` : `ip:${ip}`
 
     const now         = Math.floor(Date.now() / 1000)
-    const windowStart = now - (now % windowSec)
-    const resetTime   = windowStart + windowSec
+    const windowStart = now - (now % effectiveWindowSec)
+    const resetTime   = windowStart + effectiveWindowSec
 
     const tenantKey = `${namespace}:${tenantSegment}:${windowStart}`
     const keyBucket = keyId ? `${namespace}:key:${keyId}:${windowStart}` : null
@@ -176,40 +218,40 @@ export function createRateLimitMiddleware(
       const redis = getRedis()
 
       // Check tenant-level bucket (tier ceiling)
-      const { count: tenantCount, ttl: tenantTtl } = await checkWindow(redis, tenantKey, windowSec)
+      const { count: tenantCount, ttl: tenantTtl } = await checkWindow(redis, tenantKey, effectiveWindowSec)
 
-      if (tenantCount > tierMax) {
+      if (tenantCount > effectiveTierMax) {
         rateLimitRejectedTotal.inc({ tier, key_id: keyId ?? 'none', reason: 'tenant_limit' })
         rateLimitHitsTotal.inc({ tenant: tenantId ?? 'unknown', tier })
-        setRateLimitHeaders(res, { limit: tierMax, remaining: 0, reset: now + tenantTtl, retryAfter: tenantTtl })
-        next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: tenantTtl, limit: tierMax, windowSec }))
+        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: 0, reset: now + tenantTtl, retryAfter: tenantTtl })
+        next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: tenantTtl, limit: effectiveTierMax, windowSec: effectiveWindowSec }))
         return
       }
 
       // Check per-key bucket (key ceiling)
       if (keyBucket) {
-        const { count: keyCount, ttl: keyTtl } = await checkWindow(redis, keyBucket, windowSec)
+        const { count: keyCount, ttl: keyTtl } = await checkWindow(redis, keyBucket, effectiveWindowSec)
 
         if (keyCount > keyMax) {
           rateLimitRejectedTotal.inc({ tier, key_id: keyId!, reason: 'key_limit' })
           rateLimitHitsTotal.inc({ tenant: tenantId ?? 'unknown', tier })
           setRateLimitHeaders(res, { limit: keyMax, remaining: 0, reset: now + keyTtl, retryAfter: keyTtl })
-          next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: keyTtl, limit: keyMax, windowSec }))
+          next(new AppError('Rate limit exceeded. Try again later.', ErrorCode.RATE_LIMIT_EXCEEDED, 429, { retryAfter: keyTtl, limit: keyMax, windowSec: effectiveWindowSec }))
           return
         }
 
         // Remaining is the tighter of the two budgets
-        const remaining = Math.min(tierMax - tenantCount, keyMax - keyCount)
+        const remaining = Math.min(effectiveTierMax - tenantCount, keyMax - keyCount)
         setRateLimitHeaders(res, { limit: keyMax, remaining, reset: resetTime })
       } else {
-        setRateLimitHeaders(res, { limit: tierMax, remaining: tierMax - tenantCount, reset: resetTime })
+        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax - tenantCount, reset: resetTime })
       }
 
       next()
     } catch (err) {
       if (config.failOpen) {
         // Fail-open: let the request through, surface headers with full budget
-        setRateLimitHeaders(res, { limit: tierMax, remaining: tierMax, reset: resetTime })
+        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax, reset: resetTime })
         return next()
       }
 

@@ -115,6 +115,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The request contains a field with an invalid type',
     category: 'validation',
   },
+  UNSAFE_REDIRECT_TARGET: {
+    code: 'unsafe_redirect_target',
+    sdkClassName: 'UnsafeRedirectTargetCredenceError',
+    kind: 'api',
+    httpStatus: 400,
+    defaultMessage: 'The requested redirect target is not permitted',
+    category: 'validation',
+  },
   INVALID_STELLAR_ADDRESS: {
     code: 'invalid_stellar_address',
     sdkClassName: 'InvalidStellarAddressCredenceError',
@@ -163,6 +171,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The authenticated caller is not allowed to perform this action',
     category: 'authorization',
   },
+  CRAWLER_BLOCKED: {
+    code: 'crawler_blocked',
+    sdkClassName: 'CrawlerBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 403,
+    defaultMessage: 'Automated crawling of admin surfaces is forbidden.',
+    category: 'authorization',
+  },
   NOT_FOUND: {
     code: 'not_found',
     sdkClassName: 'NotFoundCredenceError',
@@ -194,6 +210,14 @@ export const ERROR_CATALOG = freezeCatalog({
     httpStatus: 402,
     defaultMessage: 'Monthly credit budget exhausted',
     category: 'business',
+  },
+  SSRF_BLOCKED: {
+    code: 'ssrf_blocked',
+    sdkClassName: 'SsrfBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 422,
+    defaultMessage: 'The target URL resolves to a restricted or internal network address',
+    category: 'validation',
   },
   INSUFFICIENT_FUNDS: {
     code: 'insufficient_funds',
@@ -233,6 +257,14 @@ export const ERROR_CATALOG = freezeCatalog({
     kind: 'api',
     httpStatus: 503,
     defaultMessage: 'Service temporarily unavailable',
+    category: 'system',
+  },
+  MISSING_SECURITY_HEADER: {
+    code: 'missing_security_header',
+    sdkClassName: 'MissingSecurityHeaderCredenceError',
+    kind: 'api',
+    httpStatus: 500,
+    defaultMessage: 'A required security response header is missing',
     category: 'system',
   },
   invalid_input: {

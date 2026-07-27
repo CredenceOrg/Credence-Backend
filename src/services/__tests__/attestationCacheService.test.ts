@@ -8,6 +8,13 @@ import { AttestationsRepository } from '../../db/repositories/attestationsReposi
 import { cache } from '../../cache/redis.js'
 import * as invalidation from '../../cache/invalidation.js'
 
+vi.mock('../../db/pool.js', () => ({
+  pool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  workerPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  replicaPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  withReplica: vi.fn(),
+}))
+
 vi.mock('../../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),
@@ -24,6 +31,14 @@ vi.mock('../../cache/invalidation.js', async () => {
     invalidateCache: vi.fn()
   }
 })
+
+vi.mock('../../config/index.js', () => ({
+  loadConfig: () => ({
+    attestationCache: {
+      ttl: 120,
+    },
+  }),
+}))
 
 describe('AttestationCacheService', () => {
   let service: AttestationCacheService
@@ -70,7 +85,7 @@ describe('AttestationCacheService', () => {
       const result = await service.getAttestationById(1)
 
       expect(mockRepository.findById).toHaveBeenCalledWith(1)
-      expect(cache.set).toHaveBeenCalledWith('attestation', 'id:1', mockAttestation, 300)
+      expect(cache.set).toHaveBeenCalledWith('attestation', 'id:1', mockAttestation, 120)
       expect(result).toEqual(mockAttestation)
     })
   })
@@ -93,7 +108,7 @@ describe('AttestationCacheService', () => {
       const result = await service.getAttestationsBySubject('0x123')
 
       expect(mockRepository.listBySubject).toHaveBeenCalledWith('0x123')
-      expect(cache.set).toHaveBeenCalledWith('attestation', 'subject:0x123', [mockAttestation], 300)
+      expect(cache.set).toHaveBeenCalledWith('attestation', 'subject:0x123', [mockAttestation], 120)
       expect(result).toEqual([mockAttestation])
     })
   })

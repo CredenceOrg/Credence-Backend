@@ -13,6 +13,7 @@ import type {
 } from './types.js'
 
 const ALG = 'PS256'
+const JWKS_CACHE_TTL_MS = 10 * 60 * 1000
 
 /**
  * Manages RSA signing key pairs for JWT issuance and verification.
@@ -36,6 +37,9 @@ export class KeyManager {
   private activeKid: string | null = null
   private readonly config: KeyManagerConfig
   private readonly auditLog: KeyAuditEvent[] = []
+  private jwksCache: JwksResponse | null = null
+  private jwksCacheExpiresAt = 0
+  private jwksCacheVersion = 0
 
   constructor(config: KeyManagerConfig) {
     this.config = config
@@ -54,6 +58,7 @@ export class KeyManager {
       ? await this._importKey(this.config.privateKeyPem, this.config.initialKid)
       : await this._generateKey()
     this._emitAudit({ timestamp: new Date().toISOString(), event: 'KEY_CREATED', kid: key.kid })
+    this._invalidateJwksCache()
   }
 
   // ── Key Accessors ────────────────────────────────────────────────────────
@@ -67,6 +72,16 @@ export class KeyManager {
       throw new Error('KeyManager not initialized — call initialize() first')
     }
     return this.keys.get(this.activeKid)!
+  }
+
+  /**
+   * Typed liveness check.  Returns true iff `initialize()` has produced an
+   * active key in this process.  Lets callers (e.g. the admin rotate
+   * endpoint) distinguish "never bootstrapped" from any other rotation
+   * failure without keying off error-message substrings.
+   */
+  isInitialized(): boolean {
+    return this.activeKid !== null
   }
 
   /**
@@ -118,6 +133,7 @@ export class KeyManager {
     })
 
     this.pruneExpiredKeys()
+    this._invalidateJwksCache()
 
     return { newKid: newKey.kid, retiredKid }
   }
@@ -148,6 +164,10 @@ export class KeyManager {
       }
     }
 
+    if (pruned.length > 0) {
+      this._invalidateJwksCache()
+    }
+
     return pruned
   }
 
@@ -159,6 +179,11 @@ export class KeyManager {
    * Private key material (`d`, `p`, `q`, `dp`, `dq`, `qi`) is never included.
    */
   async getPublicJwks(): Promise<JwksResponse> {
+    const now = Date.now()
+    if (this.jwksCache !== null && now < this.jwksCacheExpiresAt) {
+      return this.jwksCache
+    }
+
     const verificationKeys = this.getAllVerificationKeys()
     const jwkEntries = await Promise.all(
       verificationKeys.map(async (k) => {
@@ -172,7 +197,10 @@ export class KeyManager {
         } as JsonWebKey
       }),
     )
-    return { keys: jwkEntries }
+
+    this.jwksCache = { keys: jwkEntries }
+    this.jwksCacheExpiresAt = now + JWKS_CACHE_TTL_MS
+    return this.jwksCache
   }
 
   // ── JWT Operations ────────────────────────────────────────────────────────
@@ -252,6 +280,7 @@ export class KeyManager {
     this.keys.clear()
     this.activeKid = null
     this.auditLog.length = 0
+    this._invalidateJwksCache()
   }
 
   // ── Private Helpers ──────────────────────────────────────────────────────
@@ -294,6 +323,11 @@ export class KeyManager {
   private _emitAudit(event: KeyAuditEvent): void {
     this.auditLog.push(event)
     console.log(JSON.stringify(event))
+  }
+
+  private _invalidateJwksCache(): void {
+    this.jwksCache = null
+    this.jwksCacheExpiresAt = 0
   }
 }
 

@@ -1,6 +1,7 @@
 import express from "express";
 import { createJwksRouter } from "./routes/jwks.js";
 import { createHealthRouter } from "./routes/health.js";
+import { createVersionRouter } from "./routes/version.js";
 import { createDefaultProbes } from "./services/health/probes.js";
 import { isReady } from "./lifecycle.js";
 import trustRouter from "./routes/trust.js";
@@ -15,20 +16,27 @@ import { createPayoutsRouter } from "./routes/payouts.js";
 import { AnalyticsService } from "./services/analytics/service.js";
 import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
+import { cache } from "./cache/redis.js";
 import { pool } from "./db/pool.js";
+import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
+import { latencyBudgetMiddleware } from "./middleware/latencyBudget.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { createRateLimitMiddleware } from "./middleware/rateLimit.js";
 import { createCostMeterMiddleware } from "./middleware/costMeter.js";
 import { validateConfig } from "./config/index.js";
+import { securityHeadersMiddleware } from "./middleware/securityHeaders.js";
 import { createAttestationRouter } from "./routes/attestations.js";
-import { tenantContextMiddleware } from './middleware/tenantContext.js'
+import { tenantContextMiddleware } from "./middleware/tenantContext.js";
+import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
+import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
-  compressionMiddleware,
+  createCompressionMiddleware,
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
 import { createCidrWhitelistMiddleware } from "./middleware/cidrWhitelist.js";
+import { createSafeRedirectMiddleware } from "./middleware/safeRedirect.js";
 import {
   jsonBodyParser,
   requestSizeLimitErrorHandler,
@@ -38,6 +46,7 @@ import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js
 
 const app = express();
 
+// ── Rate-limit configuration ──────────────────────────────────────────────────
 let rateLimitConfig: {
   enabled: boolean;
   windowSec: number;
@@ -49,8 +58,6 @@ let rateLimitConfig: {
 try {
   rateLimitConfig = validateConfig(process.env).rateLimit;
 } catch {
-  // Fail-closed by default in production so a misconfigured startup cannot
-  // silently disable rate limiting and expose the API to abuse.
   const isProd = process.env.NODE_ENV === "production";
   rateLimitConfig = {
     enabled: true,
@@ -61,7 +68,6 @@ try {
     failOpen: !isProd,
   };
 }
-
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
 // Resolve maintenance mode flag at startup; default to off when config is invalid.
@@ -74,17 +80,26 @@ try {
 const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
 
 app.use(requestIdMiddleware);
+app.use(securityHeadersMiddleware);
+app.use(cacheHeaderMiddleware);
+app.use(clientVersionEchoMiddleware);
+app.use(requestAttemptEchoMiddleware);
+app.use(timeoutBudgetMiddleware);
 
 const metricsCidrs = process.env.METRICS_ALLOWED_CIDRS
-  ?.split(',')
-  .map(s => s.trim())
+  ?.split(",")
+  .map((s) => s.trim())
   .filter(Boolean);
 
 if (metricsCidrs?.length) {
-  app.get("/metrics", createCidrWhitelistMiddleware(metricsCidrs), async (_req, res) => {
-    res.set("Content-Type", register.contentType);
-    res.end(await register.metrics());
-  });
+  app.get(
+    "/metrics",
+    createCidrWhitelistMiddleware(metricsCidrs),
+    async (_req, res) => {
+      res.set("Content-Type", register.contentType);
+      res.end(await register.metrics());
+    },
+  );
 } else {
   app.get("/metrics", async (_req, res) => {
     res.set("Content-Type", register.contentType);
@@ -98,32 +113,66 @@ app.use(compressionMiddleware);
 app.use(jsonBodyParser);
 app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
+app.use(gracefulDegradeMiddleware);
+
+// ── Routes ────────────────────────────────────────────────────────────────────
 
 app.use(maintenanceModeMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
-app.use("/api/health", createHealthRouter({ ...healthProbes, isReady }));
+
+let redisClient: import("./cache/redis.js").RedisClient | undefined;
+if (process.env.REDIS_URL) {
+  try {
+    const conn = RedisConnection.getInstance();
+    conn.connect().catch(() => {});
+    redisClient = conn.getClient();
+  } catch {
+  }
+}
+
+app.use("/api/health", createHealthRouter({ ...healthProbes, isReady, redisClient }));
+app.use("/api/version", createVersionRouter());
+
+app.use("/api/auth", createAuthRouter(authRateLimitConfig));
 
 app.use("/api", rateLimitMiddleware);
 
+// Idempotency middleware — runs after body parsing, before route handlers.
 try {
-  const config = validateConfig(process.env)
+  const idempotencyConfig = validateConfig(process.env).idempotency;
+  const idempotencyRepo = new IdempotencyRepository(pool);
+  app.use(
+    "/api",
+    idempotencyMiddleware(idempotencyRepo, {
+      expiresInSeconds: idempotencyConfig.ttlSeconds,
+    }),
+  );
+} catch {
+}
+
+try {
+  const config = validateConfig(process.env);
   const costMeterConfig = {
     costWeights: config.endpointCostWeights,
     defaultMonthlyCredits: config.credits.defaultMonthly,
     defaultLowCreditThreshold: config.credits.defaultLowCreditThreshold,
-  }
-  const costMeterMiddleware = createCostMeterMiddleware(costMeterConfig, () => pool)
-  app.use("/api", costMeterMiddleware)
+  };
+  const costMeterMiddleware = createCostMeterMiddleware(
+    costMeterConfig,
+    () => pool,
+  );
+  app.use("/api", costMeterMiddleware);
 } catch {
-  // If config is invalid, cost metering is safely skipped
 }
 
 app.use("/api/trust", trustRouter);
 
+// Bond status — uses the real BondService + BondStore backed by
+// deriveBondPaymentStatus, with read-through caching via CacheService.
 const bondService = new BondService(new BondStore());
-app.use("/api/bond", createBondRouter(bondService));
+app.use("/api/bond", createBondRouter(bondService, cache));
 
 app.use("/api/attestations", createAttestationRouter());
 
@@ -131,6 +180,16 @@ app.use("/api/bulk", bulkRouter);
 
 app.use("/api/imports", createImportsRouter());
 
+// Defence-in-depth open-redirect guard for /api/admin/*.
+const adminRedirectAllowedHosts = process.env.ADMIN_REDIRECT_ALLOWED_HOSTS
+  ?.split(",")
+  .map((s) => s.trim())
+  .filter(Boolean) ?? [];
+
+app.use(
+  "/api/admin",
+  createSafeRedirectMiddleware({ allowedHosts: adminRedirectAllowedHosts }),
+);
 app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());
@@ -146,6 +205,20 @@ const analyticsService = process.env.DATABASE_URL
 app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 
 app.use("/api/payouts", createPayoutsRouter());
+
+app.use("/api/reports", reportRouter);
+app.use(cspReportRouter);
+
+
+let devMode = false;
+try {
+  devMode = validateConfig(process.env).devMode;
+} catch {
+}
+app.use(
+  "/api/dev/fault-injection",
+  createFaultInjectionRouter({ devMode }),
+);
 
 app.use(errorHandler);
 

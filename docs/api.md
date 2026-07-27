@@ -2,6 +2,8 @@
 
 - OpenAPI spec: [`docs/openapi.yaml`](openapi.yaml)
 - Postman collection: [`docs/credence.postman_collection.json`](credence.postman_collection.json)
+- Pagination contract: [`docs/PAGINATION_CONTRACT.md`](PAGINATION_CONTRACT.md) — cursor format, page-size limits, and ordering guarantees
+- Deprecation policy: [`docs/DEPRECATION_POLICY.md`](DEPRECATION_POLICY.md) — endpoint deprecation windows, communication cadence, and client migration guidelines
 
 ---
 
@@ -11,6 +13,32 @@
 | ----------------- | ------------------------------------- |
 | Local development | `http://localhost:3000`               |
 | Production        | _(configured via `BASE_URL` env var)_ |
+
+---
+
+## Client Versioning
+
+To aid debugging client deployments, you may optionally provide an `X-Client-Version` header in your requests. If provided, the API will echo this exact value back in the `X-Client-Version` response header, confirming what the API observed.
+
+```
+X-Client-Version: frontend-v1.2.3
+```
+
+## Retry Attempt Echo
+
+To help clients debug their retry loops, you may optionally provide an `x-request-attempt` header in your requests. If provided, the API will echo this exact value back in the `x-request-attempt` response header, confirming what attempt number the server observed.
+
+```
+x-request-attempt: 3
+```
+
+## Cache Status Response Header
+
+For endpoints that utilize caching (such as analytics summaries), the response will include an `x-cache` header indicating the cache transaction status:
+
+* `HIT` — The request was fully served from the cache.
+* `MISS` — The cache did not contain the requested data, and it was fetched from the database or origin server.
+* `STALE` — The request was served from the cache, but the cached data was determined to be stale.
 
 ---
 
@@ -31,6 +59,24 @@ X-API-Key: <your-key>
 
 ---
 
+## Graceful Degradation (X-Read-Only Header)
+
+Operators can trigger a graceful degradation mode (read-only mode) on a per-request basis by supplying the `X-Read-Only` header with the value `true` or `1`.
+
+When graceful degradation is active, any write requests (mutations using HTTP methods `POST`, `PUT`, `PATCH`, or `DELETE`) will be cleanly rejected with a `503 Service Unavailable` status and a structured error response:
+
+```json
+{
+  "error": "Writes are temporarily disabled due to maintenance",
+  "code": "service_unavailable",
+  "error_code": "service_unavailable"
+}
+```
+
+Safe read-only methods (`GET`, `HEAD`, `OPTIONS`) continue to function normally.
+
+---
+
 ## Address format
 
 All `:address` path parameters must be Ethereum addresses:
@@ -39,6 +85,26 @@ Accepted in any case (EIP-55 checksummed or all lower-case).
 
 **Valid:** `0xf39Fd6e51aad88F6f4ce6aB8827279cffFb92266`
 **Invalid:** `0x1234`, `f39fd6...` (no `0x` prefix), `not-an-address`
+
+---
+
+## Response Time Header
+
+Every response includes an `x-response-time-ms` header containing the server-side processing time in milliseconds. This is the wall-clock time from when the request first reaches the server until the response headers are sent. It covers the full lifecycle including middleware, route handlers, database queries, and external RPC calls.
+
+```
+x-response-time-ms: 42
+```
+
+This header aids downstream debugging — operators, frontend engineers, and automated canaries can observe per-request latency without parsing the response body.
+
+## Latency Budget
+
+Clients can provide an `x-request-latency-budget-ms` header in their requests. The server will echo this header back in its response. This allows clients to compare their view of the latency budget to the server-reported timing.
+
+```
+x-request-latency-budget-ms: 1500
+```
 
 ---
 
@@ -97,6 +163,37 @@ GET /api/health
   }
 }
 ```
+
+---
+
+### `GET /api/version`
+
+Returns the running build's git SHA, build timestamp, and Node version.
+Used by support/on-call to confirm which build is deployed in a given
+environment without shell access to the host. Always returns `200`; unlike
+`/api/health`, it performs no dependency checks.
+
+```
+GET /api/version
+```
+
+**Response `200`** example:
+
+```json
+{
+  "service": "credence-backend",
+  "gitSha": "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+  "buildTimestamp": "2026-06-25T20:00:00.000Z",
+  "nodeVersion": "v20.10.0"
+}
+```
+
+`gitSha` and `buildTimestamp` are read from the `GIT_SHA`/`COMMIT_SHA` and
+`BUILD_TIMESTAMP` environment variables when set (recommended for
+production deployments); otherwise `gitSha` falls back to `git rev-parse
+HEAD` in non-production environments, and `buildTimestamp` falls back to
+the `package.json` file's modification time. See
+[`src/utils/version.ts`](../src/utils/version.ts).
 
 ---
 
@@ -273,7 +370,9 @@ Creates a persisted attestation, invalidates attestation caches, and emits an
 
 ### `GET /api/bond/:address`
 
-Returns bond status for an Ethereum address from the database.
+Returns bond status and derived lifecycle state for a wallet address.
+Reads are served from a Redis-backed cache (5-minute TTL); the response
+includes an `x-cache` header for transparency.
 
 ```
 GET /api/bond/:address
@@ -281,15 +380,21 @@ GET /api/bond/:address
 
 **Path parameters**
 
-| Param     | Description                            |
-| --------- | -------------------------------------- |
-| `address` | Ethereum address (`0x` + 40 hex chars) |
+| Param     | Description                                           |
+| --------- | ----------------------------------------------------- |
+| `address` | Ethereum (`0x` + 40 hex chars) or Stellar (`G` + 55 base32 chars) address |
 
 **Headers (optional)**
 
 | Header      | Description                   |
 | ----------- | ----------------------------- |
 | `X-API-Key` | API key for premium rate tier |
+
+**Response headers**
+
+| Header    | Values          | Description                                            |
+| --------- | --------------- | ------------------------------------------------------ |
+| `x-cache` | `HIT` \| `MISS` | Whether the response was served from cache or freshly fetched |
 
 **Responses**
 
@@ -934,6 +1039,7 @@ Every response includes:
 | `X-RateLimit-Remaining` | Requests remaining (tighter of tenant vs key budget) |
 | `X-RateLimit-Reset`     | Unix timestamp when the window resets                |
 | `Retry-After`           | Seconds to wait before retrying (only on `429`)      |
+| `x-response-time-ms`    | Server-side processing time in milliseconds          |
 
 ### Error response (`429`)
 

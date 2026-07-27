@@ -1,3 +1,5 @@
+import { getRemainingTimeoutMs } from '../utils/timeoutContext.js'
+
 /**
  * Centralized timeout budget management for service dependencies.
  * 
@@ -157,7 +159,18 @@ export function resolveTimeout(
   const requestedTimeout = config.overrideMs ?? budget.defaultMs
   
   // Validate and clamp the timeout
-  return clampTimeout(requestedTimeout, budget, serviceType)
+  const clampedTimeout = clampTimeout(requestedTimeout, budget, serviceType)
+
+  const remainingGlobal = getRemainingTimeoutMs()
+  if (remainingGlobal !== undefined) {
+    if (remainingGlobal <= 0) {
+      // Return 1ms to trigger an immediate abort in the executor if budget is already exhausted
+      return 1
+    }
+    return Math.min(clampedTimeout, remainingGlobal)
+  }
+
+  return clampedTimeout
 }
 
 /**

@@ -6,8 +6,7 @@
 import { AttestationsRepository, Attestation, type AttestationPage, type ListAttestationsPageOptions, type CursorPaginationOptions, type AttestationCursorPage } from '../db/repositories/attestationsRepository.js'
 import { cache } from '../cache/redis.js'
 import { createCacheKey, invalidateCache } from '../cache/invalidation.js'
-
-const ATTESTATION_CACHE_TTL = 300 // 5 minutes
+import { loadConfig } from '../config/index.js'
 
 export class AttestationCacheService {
   constructor(private readonly repository: AttestationsRepository) {}
@@ -29,7 +28,7 @@ export class AttestationCacheService {
     
     const attestation = await this.repository.findById(id)
     if (attestation) {
-      await cache.set('attestation', cacheKey, attestation, ATTESTATION_CACHE_TTL)
+      await cache.set('attestation', cacheKey, attestation, loadConfig().attestationCache.ttl)
     }
     
     return attestation
@@ -52,7 +51,7 @@ export class AttestationCacheService {
     
     const attestations = await this.repository.listBySubject(subjectAddress)
     if (attestations.length > 0) {
-      await cache.set('attestation', cacheKey, attestations, ATTESTATION_CACHE_TTL)
+      await cache.set('attestation', cacheKey, attestations, loadConfig().attestationCache.ttl)
     }
     
     return attestations
@@ -79,7 +78,7 @@ export class AttestationCacheService {
     }
 
     const page = await this.repository.listBySubjectPage(subjectAddress, options)
-    await cache.set('attestation', cacheKey, page, ATTESTATION_CACHE_TTL)
+    await cache.set('attestation', cacheKey, page, loadConfig().attestationCache.ttl)
 
     return page
   }
@@ -123,7 +122,7 @@ export class AttestationCacheService {
     
     const attestations = await this.repository.listByBond(bondId)
     if (attestations.length > 0) {
-      await cache.set('attestation', cacheKey, attestations, ATTESTATION_CACHE_TTL)
+      await cache.set('attestation', cacheKey, attestations, loadConfig().attestationCache.ttl)
     }
     
     return attestations

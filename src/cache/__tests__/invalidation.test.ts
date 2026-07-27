@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import fc from 'fast-check'
 import { 
   invalidateCache, 
   invalidateMultiple, 
@@ -22,6 +23,12 @@ vi.mock('../redis.js', () => ({
 
 vi.mock('../../middleware/metrics.js', () => ({
   recordStaleCacheRead: vi.fn()
+}))
+
+vi.mock('../invalidationBus.js', () => ({
+  getInvalidationBus: () => ({
+    publish: vi.fn().mockResolvedValue(undefined)
+  })
 }))
 
 describe('Cache Invalidation', () => {
@@ -137,6 +144,33 @@ describe('Cache Invalidation', () => {
     it('should handle numeric parts', () => {
       const key = createCacheKey(1, 2, 3)
       expect(key).toBe('1:2:3')
+    })
+
+    it('canonicalizes_key_regardless_of_query_param_order', () => {
+      fc.assert(
+        fc.property(
+          fc.dictionary(
+            fc.string({ minLength: 1, maxLength: 20 }),
+            fc.oneof(fc.string(), fc.integer()),
+          ),
+          (params) => {
+            const keys = Object.keys(params).sort()
+            if (keys.length < 2) return
+
+            const asc: Record<string, string | number> = {}
+            const desc: Record<string, string | number> = {}
+            for (const k of keys) asc[k] = params[k]
+            for (const k of keys.slice().reverse()) desc[k] = params[k]
+
+            expect(createCacheKey(asc)).toBe(createCacheKey(desc))
+          },
+        ),
+        { seed: 0xC0FFEE },
+      )
+    })
+
+    it('distinguishes_string_from_number_values', () => {
+      expect(createCacheKey({ a: 1 })).not.toBe(createCacheKey({ a: '1' }))
     })
   })
 })

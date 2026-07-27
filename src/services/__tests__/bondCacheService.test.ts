@@ -8,6 +8,13 @@ import { BondsRepository } from '../../db/repositories/bondsRepository.js'
 import { cache } from '../../cache/redis.js'
 import * as invalidation from '../../cache/invalidation.js'
 
+vi.mock('../../db/pool.js', () => ({
+  pool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  workerPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  replicaPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  withReplica: vi.fn(),
+}))
+
 vi.mock('../../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),
@@ -23,6 +30,14 @@ vi.mock('../../cache/invalidation.js', async () => {
     invalidateCache: vi.fn()
   }
 })
+
+vi.mock('../../config/index.js', () => ({
+  loadConfig: () => ({
+    bondCache: {
+      ttl: 900,
+    },
+  }),
+}))
 
 describe('BondCacheService', () => {
   let service: BondCacheService
@@ -70,7 +85,7 @@ describe('BondCacheService', () => {
 
       expect(cache.get).toHaveBeenCalledWith('bond', 'id:1')
       expect(mockRepository.findById).toHaveBeenCalledWith(1)
-      expect(cache.set).toHaveBeenCalledWith('bond', 'id:1', mockBond, 300)
+      expect(cache.set).toHaveBeenCalledWith('bond', 'id:1', mockBond, 900)
       expect(result).toEqual(mockBond)
     })
 
@@ -104,7 +119,7 @@ describe('BondCacheService', () => {
       const result = await service.getBondsByIdentity('0x123')
 
       expect(mockRepository.listByIdentity).toHaveBeenCalledWith('0x123')
-      expect(cache.set).toHaveBeenCalledWith('bond', 'identity:0x123', [mockBond], 300)
+      expect(cache.set).toHaveBeenCalledWith('bond', 'identity:0x123', [mockBond], 900)
       expect(result).toEqual([mockBond])
     })
   })

@@ -25,6 +25,7 @@ graph TD
         Listener -->|gRPC| gRPC_S
         Scheduler[Job Scheduler] -->|Trigger| Rep
         Scheduler -->|Trigger| Webhooks[Webhook Dispatcher]
+        Sweeper[Expired Sessions Sweeper] -->|Prune| DB
     end
 
     subgraph "Data Layer"
@@ -151,6 +152,7 @@ The application requires the following key environment variables, validated at s
 |----------|-------------|----------|
 | `DATABASE_URL` | PostgreSQL connection string | **Yes** |
 | `DB_REPLICA_URL` | PostgreSQL connection string for the read replica | No (Falls back to primary) |
+| `DB_REPLICA_POOL_MAX` | Max connections in the read-replica pool | No (Falls back to `DB_POOL_MAX`) |
 | `MAX_REPLICA_LAG_MS` | Max acceptable lag for replica reads | No (Default: 1000) |
 | `REDIS_URL` | Redis connection string | **Yes** |
 | `JWT_SECRET` | Secret for signing/verifying JWTs | **Yes** |
@@ -185,3 +187,9 @@ The application requires the following key environment variables, validated at s
 - **Bulk Verification:** Batch processing API for enterprise users.
 - **Developer SDK:** Fully typed TypeScript/JavaScript client library (Planned/WIP).
 - **Advanced Monitoring:** Unified Prometheus/Grafana dashboard for business & infra metrics.
+
+---
+
+## See Also
+
+- **[Downstream Service Map](SERVICE_MAP.md)** — every external service the backend calls, why, and how it is configured.

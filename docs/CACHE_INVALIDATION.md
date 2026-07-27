@@ -109,6 +109,8 @@ await invalidateCache(
 
 If stale data is detected after invalidation, a metric is recorded for monitoring.
 
+The default verification path now uses a canonical hash from [src/utils/hash.ts](src/utils/hash.ts) rather than raw JSON serialization, so object key ordering, Date values, BigInt values, and undefined-vs-missing-key differences are handled consistently.
+
 ## Implementation Details
 
 ### Services with Cache Invalidation

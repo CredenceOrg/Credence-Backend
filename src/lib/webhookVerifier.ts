@@ -30,8 +30,13 @@ export function computeHmac(body: string, secret: string): string {
 }
 
 export function safeCompareHex(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'))
+  if (typeof a !== 'string' || typeof b !== 'string') return false
+  if (a.length !== b.length || a.length === 0) return false
+  try {
+    return timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'))
+  } catch {
+    return false
+  }
 }
 
 export function verifySignature(
@@ -45,6 +50,7 @@ export function verifySignature(
   if (rawSignature == null || rawSignature === '') {
     return { ok: false, reason: 'missing_signature' }
   }
+  if (typeof body !== 'string') return { ok: false, reason: 'missing_timestamp' }
 
   const received = parseSignatureHeader(rawSignature)
   if (!received) return { ok: false, reason: 'malformed_signature' }

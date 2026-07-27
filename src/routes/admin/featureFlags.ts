@@ -12,6 +12,7 @@ import {
   setOverrideBodySchema,
   setTenantRolloutBodySchema,
 } from '../../schemas/featureFlags.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 export function createFeatureFlagAdminRouter(
   service: FeatureFlagService = new FeatureFlagService(),
@@ -42,8 +43,7 @@ export function createFeatureFlagAdminRouter(
         const flags = await service.listFlagsWithOverrides(tenantId)
         res.json({ success: true, data: flags })
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        res.status(400).json({ error: message })
+        sendError(res, ErrorCode.VALIDATION_FAILED, err instanceof Error ? err.message : 'Unknown error')
       }
     },
   )
@@ -57,7 +57,7 @@ export function createFeatureFlagAdminRouter(
     async (req: Request, res: Response) => {
       const parsed = createFlagBodySchema.safeParse(req.body)
       if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.issues })
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
         return
       }
 
@@ -72,8 +72,7 @@ export function createFeatureFlagAdminRouter(
         )
         res.status(201).json({ success: true, data: flag })
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        res.status(400).json({ error: message })
+        sendError(res, ErrorCode.VALIDATION_FAILED, err instanceof Error ? err.message : 'Unknown error')
       }
     },
   )
@@ -87,7 +86,7 @@ export function createFeatureFlagAdminRouter(
     async (req: Request, res: Response) => {
       const parsed = updateFlagBodySchema.safeParse(req.body)
       if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.issues })
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
         return
       }
 
@@ -97,8 +96,8 @@ export function createFeatureFlagAdminRouter(
         res.json({ success: true, data: flag })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
@@ -112,7 +111,7 @@ export function createFeatureFlagAdminRouter(
     async (req: Request, res: Response) => {
       const parsed = setOverrideBodySchema.safeParse(req.body)
       if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.issues })
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
         return
       }
 
@@ -123,8 +122,8 @@ export function createFeatureFlagAdminRouter(
         res.status(201).json({ success: true, data: override })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
@@ -142,8 +141,8 @@ export function createFeatureFlagAdminRouter(
         res.json({ success: true })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
@@ -163,7 +162,7 @@ export function createFeatureFlagAdminRouter(
     async (req: Request, res: Response) => {
       const parsed = setTenantRolloutBodySchema.safeParse(req.body)
       if (!parsed.success) {
-        res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Validation error', details: parsed.error.issues })
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
         return
       }
 
@@ -179,8 +178,8 @@ export function createFeatureFlagAdminRouter(
         res.status(201).json({ success: true, data: tenantRollout })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
@@ -198,8 +197,8 @@ export function createFeatureFlagAdminRouter(
         res.json({ success: true })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )

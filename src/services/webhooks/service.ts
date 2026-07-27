@@ -3,6 +3,10 @@ import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryRes
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
 import { type AuditLogService, AuditAction } from '../audit/index.js'
 import { buildDlqEntry } from './dlq.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -116,12 +120,27 @@ export class WebhookService {
     )
 
     if (this.dlq) {
+      // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
+      // We compute the exhausted-result list exactly once and reuse it for
+      // both the metric increment AND the DLQ push so the metrics always
+      // agree with what was actually DLQ-ed. Reason attribution prefers
+      // `error` (human-readable message), falling back to mTLS-specific
+      // `errorCode`, then to `UNKNOWN`. The boundedReason helper inside
+      // retryMetrics.ts normalizes the label to a low-cardinality
+      // ASCII-uppercase-underscore identifier.
+      const exhaustedResults = rawResults.flat().filter(r => !r.success)
+      for (const r of exhaustedResults) {
+        const reasonText = r.error ?? r.errorCode ?? 'UNKNOWN'
+        // WebhookDeliveryResult.attempts is REQUIRED by the type but the
+        // runtime path is defensive — historical callers have delivered
+        // results that omit it under failure paths.
+        const attempts =
+          typeof r.attempts === 'number' && r.attempts >= 1 ? r.attempts : 1
+        recordJobDeadLetter('webhook', reasonText)
+        recordJobTerminalOutcome('webhook', 'dead_letter', attempts)
+      }
       await Promise.all(
-        rawResults.flatMap(webhookResults => 
-          webhookResults
-            .filter(r => !r.success)
-            .map(r => this.dlq!.push(buildDlqEntry(r, payload)))
-        )
+        exhaustedResults.map(r => this.dlq!.push(buildDlqEntry(r, payload)))
       )
     }
 
@@ -147,6 +166,53 @@ export class WebhookService {
 
     this.rateLimitMap.set(webhookId, Date.now())
     return fn()
+  }
+
+  /**
+   * Replay a specific webhook delivery from the DLQ.
+   */
+  async replayWebhook(dlqId: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookDeliveryResult> {
+    if (!this.dlq) {
+      throw new Error('DLQ is not configured')
+    }
+    const entry = await this.dlq.get(dlqId)
+    if (!entry) {
+      throw new Error('DLQ entry not found')
+    }
+
+    const webhook = await this.store.get(entry.webhookId)
+    if (!webhook) {
+      throw new Error('Webhook not found')
+    }
+
+    // Deliver without idempotency check since we are explicitly replaying
+    const result = await deliverWebhook(webhook, entry.payload, {
+      ...this.deliveryOptions,
+      returnAllChunks: true,
+      eventId: entry.payload.data && typeof entry.payload.data === 'object' && 'eventId' in entry.payload.data ? (entry.payload.data as any).eventId : undefined,
+    })
+
+    if (result.success) {
+      await this.dlq.markReplayed(dlqId, new Date().toISOString())
+    }
+
+    if (this.auditLog && admin) {
+      this.auditLog.logAction(
+        admin.tenantId,
+        admin.id,
+        admin.email,
+        AuditAction.REPLAY_WEBHOOK,
+        dlqId,
+        webhook.url,
+        { webhookId: entry.webhookId, success: result.success },
+        undefined,
+        undefined,
+        undefined,
+        requestId
+      )
+    }
+
+    return result
   }
 }
 

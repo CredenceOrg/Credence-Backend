@@ -15,6 +15,15 @@ export const OVERRIDE_CACHE_PREFIX = 'feature_flag_override:'
 /** In-process cache TTL in milliseconds (30 seconds). */
 export const FLAG_CACHE_TTL_MS = 30_000
 
+/**
+ * How often the background sweep runs to evict entries that have passed
+ * FLAG_CACHE_TTL_MS but were never re-read (milliseconds).
+ *
+ * Defaults to 60 seconds — twice the TTL — so the Map stays small without
+ * sweeping more often than useful.  Override with FLAG_CACHE_SWEEP_INTERVAL_MS.
+ */
+export const FLAG_CACHE_SWEEP_INTERVAL_MS = 60_000
+
 // ── Rollout bucket ───────────────────────────────────────────────────────────
 /** Maximum percent value (inclusive) accepted by the service. */
 export const ROLLOUT_PERCENT_MAX = 100

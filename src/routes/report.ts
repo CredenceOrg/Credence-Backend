@@ -8,14 +8,49 @@ import { validate, type ValidatedRequest } from "../middleware/validate.js";
 import {
   createReportBodySchema,
   reportJobParamsSchema,
+  topTalkersQuerySchema,
   type CreateReportBody,
   type ReportJobParams,
 } from "../schemas/report.js";
+import { auditLogService } from "../services/audit/index.js";
+import { sendError, ErrorCode } from "../lib/errors.js";
 
 const router = Router();
 const reportRepository = new ReportRepository(pool);
 const reportStorage = new ReportStorageService();
 const reportService = new ReportService(reportRepository, reportStorage);
+
+/**
+ * GET /api/reports/top-talkers
+ *
+ * Returns Top N tenants by request count in the aggregate window (default: last hour).
+ *
+ * @requires enterprise scope
+ */
+router.get(
+  "/top-talkers",
+  requireApiKey(ApiScope.ENTERPRISE),
+  validate({ query: topTalkersQuerySchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { limit, windowMinutes } = (req.query as unknown) as {
+        limit?: number;
+        windowMinutes?: number;
+      };
+
+      const report = await auditLogService.getTopTalkers(limit, windowMinutes);
+
+      res.status(200).json({
+        success: true,
+        data: report,
+      });
+    } catch (error) {
+      console.error("Top talkers report error:", error);
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while fetching top talkers report");
+    }
+  },
+);
+
 
 /**
  * POST /api/reports
@@ -52,20 +87,14 @@ router.post(
         });
       } catch (error) {
         if (error instanceof Error && error.message.includes('maximum concurrent')) {
-          res.status(429).json({
-            error: "TooManyRequests",
-            message: error.message,
-          });
+          sendError(res, ErrorCode.RATE_LIMIT_EXCEEDED, error.message)
         } else {
           throw error;
         }
       }
     } catch (error) {
       console.error("Report generation error:", error);
-      res.status(500).json({
-        error: "InternalServerError",
-        message: "An unexpected error occurred while starting the report job",
-      });
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while starting the report job");
     }
   },
 );
@@ -93,10 +122,7 @@ router.get(
       const job = await reportService.getReportStatus(jobId);
 
       if (!job) {
-        res.status(404).json({
-          error: "NotFound",
-          message: `Report job ${jobId} not found`,
-        });
+        sendError(res, ErrorCode.NOT_FOUND, `Report job ${jobId} not found`);
         return;
       }
 
@@ -113,10 +139,7 @@ router.get(
       });
     } catch (error) {
       console.error("Report status query error:", error);
-      res.status(500).json({
-        error: "InternalServerError",
-        message: "An unexpected error occurred while fetching report status",
-      });
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while fetching report status");
     }
   },
 );
@@ -140,20 +163,14 @@ router.get(
       const signature = req.query.signature as string;
 
       if (!expires || !signature) {
-        res.status(400).json({
-          error: "InvalidRequest",
-          message: "Signed URL requires expires and signature query parameters",
-        });
+        sendError(res, ErrorCode.FIELD_REQUIRED, "Signed URL requires expires and signature query parameters");
         return;
       }
 
       const data = reportStorage.verifyAndRetrieve(key, expires, signature);
 
       if (!data) {
-        res.status(401).json({
-          error: "Unauthorized",
-          message: "Invalid or expired signed URL",
-        });
+        sendError(res, ErrorCode.UNAUTHORIZED, "Invalid or expired signed URL");
         return;
       }
 
@@ -165,10 +182,7 @@ router.get(
       res.status(200).send(data);
     } catch (error) {
       console.error("Report download error:", error);
-      res.status(500).json({
-        error: "InternalServerError",
-        message: "An unexpected error occurred while downloading the report",
-      });
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while downloading the report");
     }
   },
 );

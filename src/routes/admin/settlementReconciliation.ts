@@ -7,7 +7,7 @@ import {
 import { validate } from '../../middleware/validate.js'
 import { settlementReconciliationQuerySchema } from '../../schemas/settlementReconciliation.js'
 import { pool } from '../../db/pool.js'
-import { buildCursorEnvelope, encodeCursor } from '../../lib/pagination.js'
+import { buildCursorEnvelope, buildCursorPaginationLinks, encodeCursor } from '../../lib/pagination.js'
 
 const router = Router()
 
@@ -152,6 +152,8 @@ router.get(
         nextCursor,
       })
 
+      const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
       res.status(200).json({
         success: true,
         data: {
@@ -163,7 +165,10 @@ router.get(
               ? latestRun.run_at.toISOString()
               : String(latestRun.run_at),
           },
-          findings: envelope,
+          findings: {
+            ...envelope,
+            links: buildCursorPaginationLinks(fullUrl, limit, nextCursor),
+          },
         },
       })
     } catch (error) {

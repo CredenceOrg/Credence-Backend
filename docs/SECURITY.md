@@ -118,6 +118,8 @@ Each event includes actor metadata, action name, timestamp, and evidence resourc
 
 ## Rate Limiting
 
+For a detailed support and operations guide on rate limiting (including default tier numbers, environment configuration, troubleshooting FAQ, and Prometheus metrics), see the **[Rate Limiting Operations & Support Guide](rate-limiting.md)**.
+
 ### Architecture
 
 Rate limiting is enforced in `src/middleware/rateLimit.ts` using Redis fixed-window counters. Two independent counters are maintained per request:
@@ -297,3 +299,10 @@ When deploying to production, operators must configure allowed origins:
    ❌ Environment validation failed:
      - CORS_ORIGIN: Wildcard CORS origin (*) is prohibited in production environment
    ```
+
+---
+
+## See Also
+
+- **[docs/SECRETS.md](SECRETS.md)** — Secret-rotation posture: where credentials live, rotation cadence, and blast radius for the Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets.
+- **[docs/kms-rotation-runbook.md](kms-rotation-runbook.md)** — Step-by-step operational runbook for Evidence KEK rotation.

@@ -28,6 +28,7 @@ import {
   createRateLimitMiddleware,
   getTenantId,
   getKeyId,
+  getClientIp,
   resolveTierLimit,
   rateLimitRejectedTotal,
   rateLimit,
@@ -342,6 +343,106 @@ describe('Rate Limit Middleware', () => {
         expect((await request(app).get('/api/ping')).status).toBe(200)
       }
       expect((await request(app).get('/api/ping')).status).toBe(429)
+    })
+
+    it('x_ratelimit_limit_header_matches_config_for_free_pro_and_enterprise_tiers', async () => {
+      // Lock Free / Pro / Enterprise header values to whatever the active
+      // config says — defaults (100 / 1000 / 10000) and custom overrides alike.
+      const cases: Array<{
+        tier: SubscriptionTier
+        config: Config['rateLimit']
+        expectedLimit: number
+        namespace: string
+      }> = [
+        {
+          tier: 'free',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 100,
+          namespace: 'ratelimit:hdr:defaults:free',
+        },
+        {
+          tier: 'pro',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 1000,
+          namespace: 'ratelimit:hdr:defaults:pro',
+        },
+        {
+          tier: 'enterprise',
+          config: baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }),
+          expectedLimit: 10000,
+          namespace: 'ratelimit:hdr:defaults:enterprise',
+        },
+        {
+          tier: 'free',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 17,
+          namespace: 'ratelimit:hdr:custom:free',
+        },
+        {
+          tier: 'pro',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 53,
+          namespace: 'ratelimit:hdr:custom:pro',
+        },
+        {
+          tier: 'enterprise',
+          config: baseConfig({ maxFree: 17, maxPro: 53, maxEnterprise: 211 }),
+          expectedLimit: 211,
+          namespace: 'ratelimit:hdr:custom:enterprise',
+        },
+      ]
+
+      for (const { tier, config, expectedLimit, namespace } of cases) {
+        const app = express()
+        app.use(express.json())
+        app.use((req, _res, next) => {
+          ;(req as any).apiKeyRecord = {
+            id: `key-${tier}-${expectedLimit}`,
+            ownerId: `owner-${tier}-${expectedLimit}`,
+            tier,
+          }
+          next()
+        })
+        app.use('/api', createRateLimitMiddleware(config, { namespace }))
+        app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+        const res = await request(app).get('/api/ping')
+        expect(res.status).toBe(200)
+        expect(res.headers['x-ratelimit-limit']).toBe(String(expectedLimit))
+        expect(res.headers['x-ratelimit-remaining']).toBe(String(expectedLimit - 1))
+        expect(res.headers['x-ratelimit-reset']).toBeDefined()
+      }
+    })
+
+    it('x_ratelimit_limit_on_429_still_matches_the_callers_tier_config', async () => {
+      // Sad path: once a free-tier caller is blocked, the Limit header must
+      // still report maxFree — not maxPro / maxEnterprise.
+      const config = baseConfig({ maxFree: 1, maxPro: 50, maxEnterprise: 200 })
+      const app = buildApp({
+        config,
+        apiKeyRecord: { id: 'key-free-sad', ownerId: 'owner-free-sad', tier: 'free' },
+      })
+
+      expect((await request(app).get('/api/ping')).status).toBe(200)
+      const blocked = await request(app).get('/api/ping')
+      expect(blocked.status).toBe(429)
+      expect(blocked.headers['x-ratelimit-limit']).toBe(String(config.maxFree))
+      expect(blocked.headers['x-ratelimit-remaining']).toBe('0')
+      expect(blocked.headers['retry-after']).toBeDefined()
+      expect(blocked.body.details).toMatchObject({ limit: config.maxFree })
+    })
+
+    it('unauthenticated_request_uses_free_tier_limit_in_header', async () => {
+      const config = baseConfig({ maxFree: 100, maxPro: 1000, maxEnterprise: 10000 })
+      const app = express()
+      app.use(express.json())
+      app.use('/api', createRateLimitMiddleware(config, { namespace: 'ratelimit:hdr:anon' }))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe(String(config.maxFree))
+      expect(res.headers['x-ratelimit-remaining']).toBe(String(config.maxFree - 1))
     })
   })
 
@@ -848,6 +949,114 @@ describe('Rate Limit Middleware', () => {
       const res = await request(app).get('/api/ping')
 
       expect(res.status).toBe(429)
+    })
+  })
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Security: X-Forwarded-For spoofing prevention (issue #723)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Negative test for CVE-class: X-Forwarded-For IP spoofing to bypass
+   * per-IP rate limiting.
+   *
+   * Threat model
+   * ─────────────
+   * When Express `trust proxy` is enabled, `req.ip` is derived from the
+   * *leftmost* entry in `X-Forwarded-For`.  An attacker can inject an
+   * arbitrary IP:
+   *
+   *   X-Forwarded-For: 1.2.3.4, <legitimate-proxy>
+   *
+   * If the rate limiter uses `req.ip`, the attacker cycles through fake IPs
+   * to get a fresh bucket on every rotation — effectively unlimited requests.
+   *
+   * Fix (getClientIp)
+   * ──────────────────
+   * `getClientIp` ignores `req.ip` and `X-Forwarded-For` entirely and
+   * returns `req.socket.remoteAddress` — the TCP-layer IP of the peer that
+   * actually delivered the request.  That value is controlled by the kernel,
+   * not by the HTTP payload, so it cannot be forged by the client.
+   *
+   * The negative test below fails on the vulnerable code (which uses
+   * `req.ip`) and passes on the fixed code (which uses
+   * `req.socket.remoteAddress`).
+   */
+  describe('XFF spoofing prevention (security fix #723)', () => {
+    it('getClientIp returns socket.remoteAddress regardless of X-Forwarded-For', () => {
+      // Simulate a request where req.ip has been set to a spoofed address
+      // by Express trust-proxy processing of X-Forwarded-For.
+      const req: any = {
+        ip: '1.2.3.4',                   // spoofed — what req.ip would return under trust proxy
+        socket: { remoteAddress: '10.0.0.1' }, // real connection IP (the actual proxy/client)
+        headers: { 'x-forwarded-for': '1.2.3.4, 10.0.0.1' },
+      }
+      // Must return the real socket address, not the spoofed XFF value.
+      expect(getClientIp(req)).toBe('10.0.0.1')
+      expect(getClientIp(req)).not.toBe('1.2.3.4')
+    })
+
+    it('getClientIp returns "unknown" when socket.remoteAddress is absent', () => {
+      const req: any = { ip: '9.9.9.9', socket: {}, headers: {} }
+      expect(getClientIp(req)).toBe('unknown')
+    })
+
+    it('rate limiter cannot be bypassed by rotating X-Forwarded-For addresses', async () => {
+      /**
+       * This is the core negative test for the fix.
+       *
+       * Without the fix (using req.ip), the attacker could forge a fresh IP
+       * in X-Forwarded-For on every request, getting a new rate-limit bucket
+       * each time, and bypass per-IP rate limiting entirely.
+       *
+       * With the fix (using socket.remoteAddress), every request from the
+       * same TCP connection maps to the same bucket regardless of what the
+       * client puts in X-Forwarded-For.
+       *
+       * We simulate this by building an app with trust proxy enabled so that
+       * req.ip changes with each spoofed XFF header, then verifying the rate
+       * limiter still enforces the limit.
+       */
+      const app = express()
+      // Enable trust proxy so Express derives req.ip from X-Forwarded-For.
+      // This is the attack prerequisite — with trust proxy on, req.ip would
+      // return whatever the attacker puts in the XFF header.
+      app.set('trust proxy', true)
+      app.use(express.json())
+
+      app.use(
+        '/api',
+        createRateLimitMiddleware(baseConfig({ maxFree: 2, maxPro: 2, maxEnterprise: 2 }), {
+          namespace: 'ratelimit:xff-spoof',
+          getRedis: () => mockRedis,
+        }),
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, code: _err.code })
+      })
+
+      // Request 1: spoofed XFF = fake IP A
+      const r1 = await request(app)
+        .get('/api/ping')
+        .set('X-Forwarded-For', '100.0.0.1')
+      expect(r1.status).toBe(200)
+
+      // Request 2: spoofed XFF = fake IP B (different from A)
+      // If req.ip were used, this would look like a fresh bucket → allowed.
+      // With the fix, socket.remoteAddress is the same → same bucket.
+      const r2 = await request(app)
+        .get('/api/ping')
+        .set('X-Forwarded-For', '100.0.0.2')
+      expect(r2.status).toBe(200)
+
+      // Request 3: spoofed XFF = yet another fake IP C
+      // Without the fix: would be allowed (new fake IP → new bucket).
+      // With the fix:    must be blocked (same socket.remoteAddress → same bucket, count=3 > max=2).
+      const r3 = await request(app)
+        .get('/api/ping')
+        .set('X-Forwarded-For', '100.0.0.3')
+      expect(r3.status).toBe(429)
     })
   })
 })

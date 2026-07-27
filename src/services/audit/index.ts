@@ -10,6 +10,9 @@ import {
   type AuditChainVerificationRepository,
 } from '../../db/repositories/auditChainVerificationRepository.js'
 import { toChainVerificationState } from './chainStatus.js'
+import { logger } from '../../utils/logger.js'
+import { redact } from '../../observability/redaction.js'
+import { LogEventType } from '../../observability/logSchemas.js'
 import type {
   AuditChainVerificationState,
   AuditLogEntry,
@@ -66,7 +69,9 @@ export class AuditLogService {
     requestId?: string,
   ): Promise<AuditLogEntry> {
     if (typeof inputOrTenantId !== 'string') {
-      return this.repository.append(inputOrTenantId)
+      const entry = await this.repository.append(inputOrTenantId)
+      this.logAuditEvent(entry)
+      return entry
     }
 
     const tenantId = inputOrTenantId
@@ -74,14 +79,16 @@ export class AuditLogService {
     const resourceType =
       effectiveAction === AuditAction.LIST_USERS || effectiveAction === AuditAction.EXPORT_AUDIT_LOGS
         ? 'admin_user'
-        : 'user'
+        : effectiveAction === AuditAction.ROTATE_SIGNING_KEY
+          ? 'system'
+          : 'user'
 
     const mappedDetails: Record<string, unknown> = {
       ...(details ?? {}),
       ...(targetUserEmail ? { targetUserEmail } : {}),
     }
 
-    return this.repository.append({
+    const entry = await this.repository.append({
       tenantId,
       actorId: actorId ?? 'unknown',
       actorEmail: actorEmail ?? 'unknown@unknown',
@@ -94,6 +101,51 @@ export class AuditLogService {
       ipAddress,
       requestId,
     })
+    this.logAuditEvent(entry)
+    return entry
+  }
+
+  /**
+   * Emit a schema-validated structured log line for a recorded audit entry.
+   *
+   * Every audit log line must carry tenantId so log aggregation can be
+   * scoped per tenant; the allowlist schema for AUDIT_LOG_RECORDED drops
+   * anything else (e.g. actorEmail, details) that isn't explicitly listed.
+   */
+  private logAuditEvent(entry: AuditLogEntry): void {
+    const payload = {
+      eventType: LogEventType.AUDIT_LOG_RECORDED,
+      tenantId: entry.tenantId,
+      action: entry.action,
+      resourceType: entry.resourceType,
+      status: entry.status,
+      requestId: entry.requestId,
+    }
+    const redacted = redact(payload, { eventType: LogEventType.AUDIT_LOG_RECORDED })
+
+    if (entry.status === 'failure') {
+      logger.warn(redacted)
+    } else {
+      logger.info(redacted)
+    }
+  }
+
+  /**
+   * Append a batch of audit log entries while maintaining actor_id integrity.
+   *
+   * @param inputs - Array of audit log input objects
+   * @returns Array of created audit log entries
+   */
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    return this.repository.appendBatch(inputs)
+  }
+
+  /**
+   * Log a batch of audit actions.
+   * Alias for appendBatch.
+   */
+  async logBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    return this.appendBatch(inputs)
   }
 
   /**
@@ -181,29 +233,46 @@ export class AuditLogService {
       allowSuperScope?: boolean
     }
   ): AsyncGenerator<AuditLogEntry> {
-    // SECURITY: Enforce tenant scoping - deny by default
+    this.assertExportScope(tenantId, options)
+
+    const filters: AuditLogFilters = {
+      from: startDate.toISOString(),
+      to: endDate.toISOString(),
+    }
+
+    for await (const log of this.paginateLogs(tenantId, filters, options)) {
+      yield this.redactLogEntry(log)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+
+  private assertExportScope(
+    tenantId?: string,
+    options?: { allowSuperScope?: boolean },
+  ): void {
     if (!tenantId && !options?.allowSuperScope) {
       throw new Error(
         'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
       )
     }
+  }
 
-    const startMs = startDate.getTime()
-    const endMs = endDate.getTime()
-
-    const { logs } = await this.getLogs(tenantId, {}, Number.MAX_SAFE_INTEGER, undefined, options)
-    for (const log of logs) {
-      const logTime = new Date(log.timestamp).getTime()
-      
-      // Apply tenant filter if provided (not in super-scope mode)
-      if (tenantId && log.tenantId !== tenantId) {
-        continue
+  private async *paginateLogs(
+    tenantId: string | undefined,
+    filters: AuditLogFilters,
+    options?: { allowSuperScope?: boolean },
+    pageSize = 500,
+  ): AsyncGenerator<AuditLogEntry> {
+    let cursor: string | undefined
+    while (true) {
+      const page = await this.getLogs(tenantId, filters, pageSize, cursor, options)
+      for (const log of page.logs) {
+        yield log
       }
-      
-      if (logTime >= startMs && logTime <= endMs) {
-        yield this.redactLogEntry(log)
-        await new Promise((resolve) => setImmediate(resolve))
+      if (!page.hasNextPage || !page.nextCursor) {
+        break
       }
+      cursor = page.nextCursor
     }
   }
 
@@ -239,6 +308,17 @@ export class AuditLogService {
 
     return redacted
   }
+
+  /**
+   * Get top N talker tenants by request count in the last window (default: 1 hour).
+   */
+  async getTopTalkers(
+    limit?: number,
+    windowMinutes?: number,
+    now?: Date,
+  ) {
+    return this.repository.getTopTalkers(limit, windowMinutes, now)
+  }
 }
 
 function createRepository(): AuditLogRepository {
@@ -269,4 +349,8 @@ export type {
   AuditLogInput,
   AuditLogFilters,
   ChainVerificationResult,
+  TopTalkerEntry,
+  TopTalkersReport,
 } from './types.js'
+export * from './serviceAccountAudit.js'
+

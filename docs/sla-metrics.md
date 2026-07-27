@@ -10,8 +10,22 @@ Percentile latency metrics (p50, p95, p99) for HTTP requests with safe route tem
 
 **Type:** Histogram  
 **Labels:** `method`, `route`, `status_class`  
-**Buckets:** `0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.75, 1, 2.5, 5, 7.5, 10`  
+**Buckets (seconds):** `0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.5, 1, 2.5, 5, 10`  
+**Constant:** `HTTP_LATENCY_BUCKETS_S` — exported from `src/observability/latencyMetrics.ts`  
 **Description:** HTTP request latency distribution for SLO tracking
+
+The three SLO fence-posts are kept as explicit bucket boundaries so that
+`histogram_quantile()` and range queries land on exact edges without interpolation:
+
+| Bucket | Milliseconds | SLO alignment |
+|--------|-------------|---------------|
+| `0.2`  | 200 ms      | Cache-operation SLO target (`cache.targetMs` in `src/lib/timeouts.ts`) |
+| `0.5`  | 500 ms      | Queue-operation SLO target (`queue.targetMs` in `src/lib/timeouts.ts`) |
+| `1`    | 1000 ms     | Database SLO target + p99 alert threshold (`HighP99Latency` in `alerts.yml`) |
+
+The bucket array is defined once in
+[`src/observability/latencyMetrics.ts`](../src/observability/latencyMetrics.ts)
+as `HTTP_LATENCY_BUCKETS_S` and reused by the histogram, tests, and this document.
 
 **Example output:**
 ```
@@ -127,9 +141,23 @@ rate(http_request_duration_seconds_sum[5m])
 rate(http_request_duration_seconds_count[5m])
 ```
 
-**SLA compliance (% of requests under 250ms):**
+**SLA compliance (% of requests under 200ms — cache SLO target):**
 ```promql
-sum(rate(http_request_duration_seconds_bucket{le="0.25"}[5m])) 
+sum(rate(http_request_duration_seconds_bucket{le="0.2"}[5m])) 
+/ 
+sum(rate(http_request_duration_seconds_count[5m]))
+```
+
+**SLA compliance (% of requests under 500ms — queue SLO target):**
+```promql
+sum(rate(http_request_duration_seconds_bucket{le="0.5"}[5m])) 
+/ 
+sum(rate(http_request_duration_seconds_count[5m]))
+```
+
+**SLA compliance (% of requests under 1000ms — database SLO / p99 threshold):**
+```promql
+sum(rate(http_request_duration_seconds_bucket{le="1"}[5m])) 
 / 
 sum(rate(http_request_duration_seconds_count[5m]))
 ```
@@ -182,14 +210,14 @@ Coverage includes:
     description: "P99 latency is {{ $value }}s (Threshold: 1s)"
 ```
 
-**SLA breach:**
+**SLA breach (< 95% of requests under 200 ms cache SLO target):**
 ```yaml
 - alert: SLABreach
   expr: |
     (
-      sum(rate(http_request_duration_percentiles_seconds_bucket{le="0.2"}[5m])) 
+      sum(rate(http_request_duration_seconds_bucket{le="0.2"}[5m])) 
       / 
-      sum(rate(http_request_duration_percentiles_seconds_count[5m]))
+      sum(rate(http_request_duration_seconds_count[5m]))
     ) < 0.95
   for: 10m
   labels:
@@ -209,3 +237,5 @@ Coverage includes:
 - [Prometheus Summary Metric](https://prometheus.io/docs/practices/histograms/)
 - [Cardinality Best Practices](https://prometheus.io/docs/practices/naming/#labels)
 - [Express Route Matching](https://expressjs.com/en/guide/routing.html)
+- [Performance Baselines Documentation](./PERF_BASELINE.md)
+

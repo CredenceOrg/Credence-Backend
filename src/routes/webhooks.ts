@@ -1,9 +1,10 @@
 import { Router, Request, Response } from 'express'
-import { AuthenticatedRequest, requireUserAuth, requireAdminRole } from '../middleware/auth.js'
+import { AuthenticatedRequest, requireUserAuth, UserRole } from '../middleware/auth.js'
 import { WebhookRotationService, WebhookNotFoundError } from '../services/webhooks/rotationService.js'
 import type { WebhookStore } from '../services/webhooks/types.js'
-import type { AuditLogService } from '../services/audit/index.js'
+import { AuditAction, type AuditLogService } from '../services/audit/index.js'
 import { getTenantId, setTenantId } from '../utils/tenantContext.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
 
 /**
  * Create the webhook management router.
@@ -39,7 +40,6 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
   router.post(
     '/:webhookId/rotate-secret',
     requireUserAuth,
-    requireAdminRole,
     async (req: Request, res: Response): Promise<void> => {
       // Set tenant context from request header
       const tenantId = req.headers['x-tenant-id'] as string || 'default-tenant'
@@ -54,6 +54,26 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
         const actor = authReq.user!
         const ipAddress = req.ip ?? req.socket.remoteAddress
 
+        if (actor.role !== UserRole.ADMIN && actor.role !== UserRole.SUPER_ADMIN && (actor.role as string) !== 'super-admin') {
+          void audit.logAction({
+            tenantId: actor.tenantId || tenantId,
+            actorId: actor.id,
+            actorEmail: actor.email,
+            action: AuditAction.ROTATE_WEBHOOK_SECRET,
+            resourceType: 'webhook',
+            resourceId: webhookId,
+            details: { webhookId, reason: 'insufficient_permissions' },
+            status: 'failure',
+            errorMessage: 'Admin role required',
+            ipAddress,
+          })
+          res.status(403).json({
+            error: 'Forbidden',
+            message: 'Admin role required',
+          })
+          return
+        }
+
         const result = await rotationService.rotateSecret(
           webhookId,
           actor.id,
@@ -67,18 +87,11 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
         })
       } catch (err) {
         if (err instanceof WebhookNotFoundError) {
-          res.status(404).json({
-            error: 'NotFound',
-            message: err.message,
-          })
+          sendError(res, ErrorCode.NOT_FOUND, err.message)
           return
         }
 
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        res.status(500).json({
-          error: 'InternalError',
-          message,
-        })
+        sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, err instanceof Error ? err.message : 'Unknown error')
       } finally {
         // Restore original tenant context
         if (!originalTenant) {
