@@ -11,6 +11,8 @@ This directory contains additional documentation for the Credence Backend.
 - **[Incoming Webhook Security & Posture](WEBHOOK_RECEIVE.md)** – HMAC-SHA256 signature verification, 5-minute replay window, and CIDR allowed origins.
 - **[Event Ordering Guarantees](EVENT_ORDERING.md)** – ordering guarantees and guidelines for downstream consumers.
 - **[Environment Deployment Guide](DEPLOY.md)** – step-by-step deployment instructions for development, staging, and production environments.
-
+- **[Caching Layer](caching.md)** – Redis caching architecture, `CacheService` API reference, and stampede protection.
+- **[Cache Invalidation Strategy](CACHE_INVALIDATION.md)** – invalidation patterns and read-after-write consistency across replicas.
+- **[Cache Inventory](CACHE_INVENTORY.md)** – every cache namespace in the codebase and its TTL, in one table.
+- **[Rate Limiting Design](RATE_LIMITING_DESIGN.md)** – tenant/IP/key rate-limiting windows and tiers.
 - **[Input Validation Guide](INPUT_VALIDATION.md)** – how we validate request inputs (path params, query, body) and surface errors.
-

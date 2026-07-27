@@ -172,4 +172,29 @@ export const replayWebhookBodySchema = z
 
 export type ReplayWebhookBody = z.infer<typeof replayWebhookBodySchema>
 
+/**
+ * Request body schema for resetting a cache namespace
+ * POST /api/admin/reset-cache
+ */
+export const resetCacheBodySchema = z
+  .object({
+    namespace: z.string().min(1, 'namespace is required'),
+  })
+  .strict()
+
+/**
+ * Response schema for POST /api/admin/reset-cache
+ */
+export const resetCacheResponseSchema = z.object({
+  success: z.boolean(),
+  message: z.string(),
+  data: z.object({
+    namespace: z.string(),
+    clearedCount: z.number(),
+  }),
+})
+
+export type ResetCacheBody = z.infer<typeof resetCacheBodySchema>
+export type ResetCacheResponse = z.infer<typeof resetCacheResponseSchema>
+
 

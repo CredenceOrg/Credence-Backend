@@ -18,6 +18,7 @@ import { validate, type ValidatedRequest } from '../middleware/validate.js'
 import { policyService } from '../services/policy/service.js'
 import type { AuthenticatedRequest } from '../middleware/auth.js'
 import {
+  buildPaginationLinks,
   buildPaginationMeta,
   parsePaginationParams,
 } from '../lib/pagination.js'
@@ -78,7 +79,8 @@ export function createPolicyRouter(): Router {
         const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
         const { rules, total } = policyService.listRules(validatedReq.validated.params.orgId, limit, offset)
         const paginationMeta = buildPaginationMeta(total, page, limit)
-        res.json({ success: true, data: rules, ...paginationMeta })
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+        res.json({ success: true, data: rules, ...paginationMeta, links: buildPaginationLinks(fullUrl, page, limit, total) })
       } catch (error) {
         next(error)
       }

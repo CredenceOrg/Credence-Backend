@@ -1,4 +1,4 @@
-import type { Pool } from 'pg'
+import { MigrationBuilder } from 'node-pg-migrate'
 
 /**
  * Migration 006: Add indexes for high-latency transaction queries
@@ -55,33 +55,42 @@ import type { Pool } from 'pg'
  *           bond_end, slashed_amount, active, created_at, updated_at
  *    FROM bonds WHERE active = TRUE AND bond_end < NOW();
  * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * Impact:   Indexes are created with CONCURRENTLY so they do not block writes
+ *           during creation. IF NOT EXISTS keeps the migration idempotent.
+ * Rollback: DROP INDEX CONCURRENTLY IF EXISTS for each index.
  */
-export async function up(pool: Pool): Promise<void> {
-  await pool.query(`
-    -- settlements: covering index for findByBondId sorted result set
-    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_settlements_bond_settled_at
-      ON settlements (bond_id, settled_at DESC, id DESC);
+export const shorthands = undefined
 
-    -- settlements: index for findByTransactionHash and upsert duplicate check
-    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_settlements_transaction_hash
-      ON settlements (transaction_hash);
+export async function up(pgm: MigrationBuilder): Promise<void> {
+  // settlements: covering index for findByBondId sorted result set
+  pgm.sql(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_settlements_bond_settled_at ' +
+      'ON settlements (bond_id, settled_at DESC, id DESC);'
+  )
 
-    -- bonds: covering index for findByIdentityId ORDER BY created_at DESC
-    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bonds_identity_created_at
-      ON bonds (identity_id, created_at DESC);
+  // settlements: index for findByTransactionHash and upsert duplicate check
+  pgm.sql(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_settlements_transaction_hash ' +
+      'ON settlements (transaction_hash);'
+  )
 
-    -- bonds: partial index for findExpired (active bonds approaching/past bond_end)
-    CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bonds_active_bond_end
-      ON bonds (bond_end)
-      WHERE active = TRUE;
-  `)
+  // bonds: covering index for findByIdentityId ORDER BY created_at DESC
+  pgm.sql(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bonds_identity_created_at ' +
+      'ON bonds (identity_id, created_at DESC);'
+  )
+
+  // bonds: partial index for findExpired (active bonds approaching/past bond_end)
+  pgm.sql(
+    'CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_bonds_active_bond_end ' +
+      'ON bonds (bond_end) WHERE active = TRUE;'
+  )
 }
 
-export async function down(pool: Pool): Promise<void> {
-  await pool.query(`
-    DROP INDEX CONCURRENTLY IF EXISTS idx_settlements_bond_settled_at;
-    DROP INDEX CONCURRENTLY IF EXISTS idx_settlements_transaction_hash;
-    DROP INDEX CONCURRENTLY IF EXISTS idx_bonds_identity_created_at;
-    DROP INDEX CONCURRENTLY IF EXISTS idx_bonds_active_bond_end;
-  `)
+export async function down(pgm: MigrationBuilder): Promise<void> {
+  pgm.sql('DROP INDEX CONCURRENTLY IF EXISTS idx_bonds_active_bond_end;')
+  pgm.sql('DROP INDEX CONCURRENTLY IF EXISTS idx_bonds_identity_created_at;')
+  pgm.sql('DROP INDEX CONCURRENTLY IF EXISTS idx_settlements_transaction_hash;')
+  pgm.sql('DROP INDEX CONCURRENTLY IF EXISTS idx_settlements_bond_settled_at;')
 }

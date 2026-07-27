@@ -223,6 +223,8 @@ Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [edi
 
 For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
 
+The full request/response pipeline — from Zod schema definition to OpenAPI generation to frontend client types — is documented in **[docs/TYPE_SAFETY.md](docs/TYPE_SAFETY.md)**.
+
 ### Postman / Insomnia collection
 
 ```
@@ -372,7 +374,9 @@ The service includes a Redis-based caching layer with:
 - **Graceful fallback** - Continues working when Redis is unavailable
 - **Cache response header** - Appends `x-cache` header (`HIT`, `MISS`, or `STALE`) to responses for transparency
 
-See [docs/caching.md](./docs/caching.md) for detailed documentation.
+See [docs/caching.md](./docs/caching.md) for detailed documentation, and
+[docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
+cache namespaces and their TTLs.
 
 ## Developer SDK
 

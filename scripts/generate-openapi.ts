@@ -904,6 +904,41 @@ registry.registerPath({
   },
 });
 
+// Admin Reset Cache API
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/reset-cache',
+  summary: 'Reset a cache namespace',
+  description:
+    'Clears all cached entries in a specific cache namespace on demand. Simpler alternative to /purge-cache for operators who need to nuke an entire namespace. Audit-logged.',
+  tags: ['Admin'],
+  security: bearerAuth,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.resetCacheBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Cache namespace reset successfully',
+      content: { 'application/json': { schema: schemas.resetCacheResponseSchema } },
+    },
+    400: {
+      description: 'Validation error (e.g. missing namespace)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
 registry.registerPath({
   method: 'post',
   path: '/csp-report',

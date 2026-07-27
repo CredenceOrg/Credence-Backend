@@ -1,8 +1,9 @@
 import { Horizon } from '@stellar/stellar-sdk'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { Gauge, register } from 'prom-client'
 import { pool as defaultPool } from '../db/pool.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
+import { upsertCursor } from '../services/identityService.js'
 import {
   recordHorizonListenerHeartbeat,
   setHorizonListenerConfigured,
@@ -213,11 +214,19 @@ export class HorizonWithdrawalListener {
             await this.processWithdrawalEvent(event)
           }
 
-          // Persist cursor after each processed event (validated or quarantined to DLQ)
-          await this.cursorRepo.upsert({
-            streamName: STREAM_NAME,
-            pagingToken: event.pagingToken
-          })
+          // Persist cursor in a transaction to ensure atomicity
+          // If cursor write fails, the event will be re-processed on restart.
+          const client: PoolClient = await this.pool.connect()
+          try {
+            await client.query('BEGIN')
+            await upsertCursor({ streamName: STREAM_NAME, pagingToken: event.pagingToken }, client)
+            await client.query('COMMIT')
+          } catch (txErr) {
+            await client.query('ROLLBACK')
+            throw txErr
+          } finally {
+            client.release()
+          }
 
           // Update local cursor only after successful persistence
           this.lastCursor = event.pagingToken

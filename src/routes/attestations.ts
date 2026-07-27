@@ -1,6 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { PoolClient } from 'pg'
 import {
+  buildPaginationLinks,
+  buildCursorPaginationLinks,
   buildPaginationMeta,
   parsePaginationParams,
   PaginationValidationError,
@@ -107,10 +109,13 @@ function createLegacyAttestationRouter(repo: LegacyAttestationRepository): Route
         ? (result as { total: number }).total
         : repo.countBySubject(req.params.identity, req.query.includeRevoked === 'true')
 
+      const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
       res.json({
         identity: req.params.identity,
         attestations: result.attestations,
         ...buildPaginationMeta(total, page, limit),
+        links: buildPaginationLinks(fullUrl, page, limit, total),
       })
     } catch (error) {
       next(error)
@@ -189,6 +194,8 @@ export function createAttestationRouter(
           nextCursor = encodeCursor(lastAttestation.createdAt.toISOString(), String(lastAttestation.id))
         }
 
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
         res.json({
           address: normalizedAddress,
           data: result.attestations.map(serializeAttestation),
@@ -197,6 +204,7 @@ export function createAttestationRouter(
             hasMore: result.hasMore,
             limit,
           },
+          links: buildCursorPaginationLinks(fullUrl, limit, nextCursor),
         })
         
         // Restore original tenant context if changed

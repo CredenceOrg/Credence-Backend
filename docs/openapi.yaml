@@ -462,6 +462,78 @@ components:
         - valid
         - break_detected
         - never_run
+    authLoginBodySchema:
+      def:
+        type: object
+        shape:
+          email:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: email
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: email
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: email
+            minLength: null
+            maxLength: null
+          password:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          tenantId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+      type: object
+    authRefreshBodySchema:
+      def:
+        type: object
+        shape:
+          refreshToken:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          tenantId:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: 1
+                maxLength: null
+            type: optional
+      type: object
     bondCreationEventSchema:
       def:
         type: object
@@ -1324,239 +1396,6 @@ components:
                 maxLength: null
             type: optional
       type: object
-    cspReportDetailsSchema:
-      def:
-        type: object
-        shape:
-          document-uri:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-          referrer:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          blocked-uri:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          violated-directive:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          effective-directive:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          original-policy:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          disposition:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          status-code:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: number
-                  checks:
-                    - def:
-                        type: number
-                        check: number_format
-                        abort: false
-                        format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                type: number
-                minValue: -9007199254740991
-                maxValue: 9007199254740991
-                isInt: true
-                isFinite: true
-                format: safeint
-            type: optional
-          script-sample:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-      type: object
-    cspReportSchema:
-      def:
-        type: object
-        shape:
-          csp-report:
-            def:
-              type: object
-              shape:
-                document-uri:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                referrer:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                blocked-uri:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                violated-directive:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                effective-directive:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                original-policy:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                disposition:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                status-code:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: number
-                        checks:
-                          - def:
-                              type: number
-                              check: number_format
-                              abort: false
-                              format: safeint
-                            type: number
-                            minValue: -9007199254740991
-                            maxValue: 9007199254740991
-                            isInt: true
-                            isFinite: true
-                            format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                  type: optional
-                script-sample:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-            type: object
-      type: object
     dismissDisputeBodySchema:
       def:
         type: object
@@ -1795,6 +1634,92 @@ components:
             format: null
             minLength: null
             maxLength: null
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    faultInjectionRequestSchema:
+      def:
+        type: object
+        shape:
+          statusCode:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 400
+                maxValue: 599
+                isInt: true
+                isFinite: true
+                format: safeint
+              defaultValue: 500
+            type: default
+          message:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: null
+                maxLength: 512
+            type: optional
+      type: object
+    faultInjectionResponseSchema:
+      def:
+        type: object
+        shape:
+          fault:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          statusCode:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
           message:
             def:
               type: string
@@ -3952,6 +3877,112 @@ components:
                   maxLength: null
             type: object
       type: object
+    paginationLinksSchema:
+      def:
+        type: object
+        shape:
+          self:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: url
+                    check: string_format
+                    abort: false
+                  type: string
+                  format: url
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: url
+            minLength: null
+            maxLength: null
+          first:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          prev:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          next:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          last:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     policyListQuerySchema:
       def:
         type: object
@@ -4466,6 +4497,62 @@ components:
         - bond_audit
         - attestation_export
         - top_talkers
+    resetCacheBodySchema:
+      def:
+        type: object
+        shape:
+          namespace:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    resetCacheResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          message:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          data:
+            def:
+              type: object
+              shape:
+                namespace:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                clearedCount:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+            type: object
+      type: object
     resolveDisputeBodySchema:
       def:
         type: object
@@ -7479,6 +7566,36 @@ components:
         - gitSha
         - buildTimestamp
         - nodeVersion
+    FaultInjectionResponse:
+      type: object
+      properties:
+        fault:
+          type: boolean
+          enum:
+            - true
+        statusCode:
+          type: integer
+          example: 500
+        message:
+          type: string
+          example: Simulated fault for retry testing
+      required:
+        - fault
+        - statusCode
+        - message
+    FaultInjectionRequest:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+          minimum: 400
+          maximum: 599
+          default: 500
+          example: 500
+        message:
+          type: string
+          maxLength: 512
+          example: Simulated fault for retry testing
     Wallet:
       type: object
       properties:
@@ -8298,36 +8415,6 @@ components:
       required:
         - tenantId
         - rolloutPercent
-    CspReport:
-      type: object
-      properties:
-        csp-report:
-          $ref: "#/components/schemas/CspReportDetails"
-      required:
-        - csp-report
-    CspReportDetails:
-      type: object
-      properties:
-        document-uri:
-          type: string
-        referrer:
-          type: string
-        blocked-uri:
-          type: string
-        violated-directive:
-          type: string
-        effective-directive:
-          type: string
-        original-policy:
-          type: string
-        disposition:
-          type: string
-        status-code:
-          type: integer
-        script-sample:
-          type: string
-      required:
-        - document-uri
   securitySchemes:
     bearerAuth:
       type: http
@@ -8427,6 +8514,54 @@ paths:
                 type: object
                 additionalProperties:
                   nullable: true
+  /api/dev/fault-injection:
+    post:
+      summary: Fault injection
+      description: Returns a configurable HTTP error (default 500) with a structured
+        JSON body. Only available when DEV_MODE is enabled (404 otherwise).
+        Intended for chaos / retry testing.
+      tags:
+        - Dev
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FaultInjectionRequest"
+      responses:
+        "200":
+          description: Simulated fault response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FaultInjectionResponse"
+        "400":
+          description: Validation error (invalid statusCode or message too long)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "404":
+          description: DEV_MODE is disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
   /api/trust/{address}:
     get:
       summary: Get trust score
@@ -8746,8 +8881,6 @@ paths:
     get:
       summary: Get bond status
       description: Returns the current bond status and lifecycle state for a wallet address.
-        Reads are served from a Redis-backed cache (5-min TTL) with an `x-cache`
-        response header (`HIT` | `MISS`) for transparency.
       tags:
         - Bond
       parameters:
@@ -8763,14 +8896,6 @@ paths:
       responses:
         "200":
           description: Bond record found
-          headers:
-            x-cache:
-              description: "Cache status: HIT (served from cache) or MISS (freshly fetched)"
-              schema:
-                type: string
-                enum:
-                  - HIT
-                  - MISS
           content:
             application/json:
               schema:
@@ -9833,6 +9958,97 @@ paths:
                 required:
                   - error
                   - message
+  /api/admin/reset-cache:
+    post:
+      summary: Reset a cache namespace
+      description: Clears all cached entries in a specific cache namespace on demand.
+        Simpler alternative to /purge-cache for operators who need to nuke an
+        entire namespace. Audit-logged.
+      tags:
+        - Admin
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                namespace:
+                  type: string
+                  minLength: 1
+              required:
+                - namespace
+              additionalProperties: false
+      responses:
+        "200":
+          description: Cache namespace reset successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  message:
+                    type: string
+                  data:
+                    type: object
+                    properties:
+                      namespace:
+                        type: string
+                      clearedCount:
+                        type: number
+                    required:
+                      - namespace
+                      - clearedCount
+                required:
+                  - success
+                  - message
+                  - data
+        "400":
+          description: Validation error (e.g. missing namespace)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
   /csp-report:
     post:
       summary: CSP violation report endpoint
@@ -9842,12 +10058,8 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CspReport"
-          application/csp-report:
-            schema:
-              $ref: "#/components/schemas/CspReport"
+          application/json: {}
+          application/csp-report: {}
       responses:
         "204":
           description: Report received
