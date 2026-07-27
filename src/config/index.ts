@@ -140,6 +140,19 @@ export const envSchema = z.object({
     .default('1000')
     .transform(Number)
     .pipe(z.number().int().min(0)),
+  /**
+   * Maximum number of distinct query-text shapes tracked per pool in the
+   * prepared-statement name cache (see src/db/pool.ts). Bounds server-side
+   * prepared-statement memory; queries evicted from the cache still work,
+   * they just fall back to an unnamed (re-parsed) statement until they're
+   * reused often enough to re-enter the cache. Default: 200 — see
+   * docs/observability.md#prepared-statement-cache.
+   */
+  DB_PREPARED_STATEMENT_CACHE_MAX: z
+    .string()
+    .default('200')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10000)),
 
   // Redis
   REDIS_URL: z.string().url({ message: 'REDIS_URL must be a valid URL' }),
@@ -612,6 +625,8 @@ export interface Config {
     maxReplicaLagMs: number
     /** Minimum query duration (ms) that triggers a slow-query log entry. 0 disables. */
     slowQueryThresholdMs: number
+    /** Max distinct query-text shapes tracked per pool in the prepared-statement name cache. */
+    preparedStatementCacheMax: number
   }
   redis: {
     url: string
@@ -876,6 +891,7 @@ function mapEnvToConfig(env: Env): Config {
       },
       maxReplicaLagMs: env.MAX_REPLICA_LAG_MS,
       slowQueryThresholdMs: env.SLOW_QUERY_THRESHOLD_MS,
+      preparedStatementCacheMax: env.DB_PREPARED_STATEMENT_CACHE_MAX,
     },
     redis: {
       url: env.REDIS_URL,

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest'
 import client from 'prom-client'
-import { registerPoolMetrics } from './poolMetrics.js'
+import { LRUCache } from 'lru-cache'
+import { registerPoolMetrics, registerPreparedStatementCacheMetrics } from './poolMetrics.js'
 import type { Pool } from 'pg'
 
 describe('Pool Metrics Exporter', () => {
@@ -151,5 +152,49 @@ describe('Pool Metrics Exporter', () => {
 
     // Updated: 90% utilization
     expect(metricsStr).toContain('pg_pool_utilization_percent{pool="api"} 90')
+  })
+})
+
+describe('Prepared Statement Cache Metrics', () => {
+  it('reports the current size of each pool\'s cache, sampled at scrape time', async () => {
+    const registry = new client.Registry()
+
+    const api = new LRUCache<string, string>({ max: 10 })
+    const worker = new LRUCache<string, string>({ max: 10 })
+    const replica = new LRUCache<string, string>({ max: 10 })
+    api.set('SELECT 1', 'qs_a')
+    api.set('SELECT 2', 'qs_b')
+    worker.set('SELECT 3', 'qs_c')
+
+    registerPreparedStatementCacheMetrics(registry, { api, worker, replica })
+
+    const metricsStr = await registry.metrics()
+
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="api"} 2')
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="worker"} 1')
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="replica"} 0')
+  })
+
+  it('reflects growth and eviction on subsequent scrapes without re-registering', async () => {
+    const registry = new client.Registry()
+
+    const api = new LRUCache<string, string>({ max: 2 })
+    const worker = new LRUCache<string, string>({ max: 10 })
+    const replica = new LRUCache<string, string>({ max: 10 })
+
+    registerPreparedStatementCacheMetrics(registry, { api, worker, replica })
+
+    let metricsStr = await registry.metrics()
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="api"} 0')
+
+    api.set('SELECT 1', 'qs_a')
+    api.set('SELECT 2', 'qs_b')
+    metricsStr = await registry.metrics()
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="api"} 2')
+
+    // Bounded at max=2: a third distinct entry evicts the LRU one rather than growing.
+    api.set('SELECT 3', 'qs_c')
+    metricsStr = await registry.metrics()
+    expect(metricsStr).toContain('db_prepared_statement_cache_size{pool="api"} 2')
   })
 })

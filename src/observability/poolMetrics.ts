@@ -7,6 +7,7 @@
  */
 
 import type { Pool } from "pg";
+import type { LRUCache } from "lru-cache";
 import client from "prom-client";
 
 /**
@@ -68,6 +69,39 @@ export function registerPoolMetrics(
         : 0;
       this.set({ pool: "api" }, apiUtilization);
       this.set({ pool: "worker" }, workerUtilization);
+    },
+  });
+}
+
+/**
+ * Register the prepared-statement cache size gauge for each pool.
+ *
+ * Each pool (api/worker/replica) keeps its own bounded LRU cache mapping
+ * query text to a stable prepared-statement name (see
+ * `instrumentPreparedStatementCache` in src/db/pool.ts). `size` is sampled
+ * at scrape time via `collect()` rather than pushed on every query.
+ *
+ * Sustained values at the configured `DB_PREPARED_STATEMENT_CACHE_MAX`
+ * indicate cache-miss thrash: more distinct query shapes are hitting the
+ * pool than the cache can retain, so queries are being evicted (and falling
+ * back to unnamed/re-parsed execution) before they're ever reused.
+ *
+ * @param registry - Prometheus registry to register the metric with.
+ * @param caches - Prepared-statement caches keyed by pool name.
+ */
+export function registerPreparedStatementCacheMetrics(
+  registry: client.Registry,
+  caches: { api: LRUCache<string, string>; worker: LRUCache<string, string>; replica: LRUCache<string, string> },
+): void {
+  new client.Gauge({
+    name: "db_prepared_statement_cache_size",
+    help: "Current number of distinct query shapes tracked in the prepared-statement name cache, per pool. Sustained values at the configured DB_PREPARED_STATEMENT_CACHE_MAX indicate cache-miss thrash.",
+    labelNames: ["pool"] as const,
+    registers: [registry],
+    collect() {
+      this.set({ pool: "api" }, caches.api.size);
+      this.set({ pool: "worker" }, caches.worker.size);
+      this.set({ pool: "replica" }, caches.replica.size);
     },
   });
 }
