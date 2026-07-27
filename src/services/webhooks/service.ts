@@ -186,15 +186,18 @@ export class WebhookService {
     }
 
     // Deliver without idempotency check since we are explicitly replaying
-    const result = await deliverWebhook(webhook, entry.payload, {
+    const results = await deliverWebhook(webhook, entry.payload, {
       ...this.deliveryOptions,
       returnAllChunks: true,
       eventId: entry.payload.data && typeof entry.payload.data === 'object' && 'eventId' in entry.payload.data ? (entry.payload.data as any).eventId : undefined,
     })
 
-    if (result.success) {
+    const allSucceeded = results.every(r => r.success)
+    if (allSucceeded) {
       await this.dlq.markReplayed(dlqId, new Date().toISOString())
     }
+
+    const result = results[0]
 
     if (this.auditLog && admin) {
       this.auditLog.logAction(
