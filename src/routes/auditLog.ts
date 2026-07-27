@@ -59,6 +59,18 @@ export function createAuditLogRouter(service: AuditLogService = auditLogService)
         return
       }
 
+      // SECURITY: Scope the export to the caller's own tenant. Never allow a
+      // blanket cross-tenant export — there is no "super admin" role in this
+      // RBAC system, so every admin must be confined to their own tenant.
+      const tenantId = (req as Request & { user?: { tenantId?: string } }).user?.tenantId
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'MissingTenantContext',
+          message: 'Tenant context is required to export audit logs',
+        })
+        return
+      }
+
       // Validate export window is not too large
       const windowMs = to.getTime() - from.getTime()
       if (windowMs > maxWindowMs) {
@@ -76,7 +88,7 @@ export function createAuditLogRouter(service: AuditLogService = auditLogService)
 
       let stream: any
       try {
-        stream = service.exportLogsStream(from, to, undefined, { allowSuperScope: true })
+        stream = service.exportLogsStream(from, to, tenantId)
 
         // Set up gzip only after successfully starting the stream
         let outputStream: any = res
