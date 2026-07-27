@@ -40,6 +40,8 @@ export enum ApiScope {
   ADMIN_WRITE = 'admin:write',
   FLAGS_READ = 'flags:read',
   FLAGS_WRITE = 'flags:write',
+  BOND_READ = 'bond:read',
+  BOND_WRITE = 'bond:write',
 
   // Legacy aliases (backward-compatible)
   PUBLIC = "public",
@@ -66,6 +68,8 @@ export const SCOPE_SETS: Record<string, ReadonlySet<ApiScope>> = {
     ApiScope.ADMIN_WRITE,
     ApiScope.FLAGS_READ,
     ApiScope.FLAGS_WRITE,
+    ApiScope.BOND_READ,
+    ApiScope.BOND_WRITE,
   ]),
 };
 
@@ -149,6 +153,8 @@ const API_KEYS: Record<string, ApiScope[]> = {
   'test-admin-write-key': [ApiScope.ADMIN_READ, ApiScope.ADMIN_WRITE],
   'test-flags-read-key': [ApiScope.FLAGS_READ],
   'test-flags-write-key': [ApiScope.FLAGS_READ, ApiScope.FLAGS_WRITE],
+  'test-bond-read-key': [ApiScope.BOND_READ],
+  'test-bond-write-key': [ApiScope.BOND_READ, ApiScope.BOND_WRITE],
 }
 
 /**

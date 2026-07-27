@@ -8,6 +8,7 @@ import {
 } from '../lib/pagination.js'
 import { ValidationError, ErrorCode, NotFoundError } from '../lib/errors.js'
 import { validate } from '../middleware/validate.js'
+import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import {
   attestationsPathParamsSchema,
   createAttestationBodySchema,
@@ -157,6 +158,7 @@ export function createAttestationRouter(
 
   router.get(
     '/:address',
+    requireApiKey(ApiScope.ATTESTATIONS_READ),
     validate({ params: attestationsPathParamsSchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
@@ -215,6 +217,7 @@ export function createAttestationRouter(
 
   router.post(
     '/',
+    requireApiKey(ApiScope.ATTESTATIONS_WRITE),
     validate({ body: createAttestationBodySchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       // Set tenant context from request header if available
