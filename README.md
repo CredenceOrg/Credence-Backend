@@ -378,9 +378,11 @@ See [docs/caching.md](./docs/caching.md) for detailed documentation, and
 [docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
 cache namespaces and their TTLs.
 
-## Developer SDK
+## API Clients & SDKs
 
 A TypeScript/JavaScript SDK is available at `src/sdk/` for programmatic access to the API. See [docs/sdk.md](docs/sdk.md) for full documentation.
+
+For a complete list of recommended client libraries and guidance on generating clients for other languages, see **docs/API_CLIENTS.md**.
 
 ## Configuration
 
