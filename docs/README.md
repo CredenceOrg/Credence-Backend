@@ -14,5 +14,6 @@ This directory contains additional documentation for the Credence Backend.
 - **[Caching Layer](caching.md)** – Redis caching architecture, `CacheService` API reference, and stampede protection.
 - **[Cache Invalidation Strategy](CACHE_INVALIDATION.md)** – invalidation patterns and read-after-write consistency across replicas.
 - **[Cache Inventory](CACHE_INVENTORY.md)** – every cache namespace in the codebase and its TTL, in one table.
+- **[Grafana Metrics & Dashboards Reference](METRICS_DASHBOARDS.md)** – detailed mapping of Grafana dashboard panels to Service Level Indicators (SLIs) and Objectives (SLOs) for operators.
 - **[Rate Limiting Design](RATE_LIMITING_DESIGN.md)** – tenant/IP/key rate-limiting windows and tiers.
 - **[Input Validation Guide](INPUT_VALIDATION.md)** – how we validate request inputs (path params, query, body) and surface errors.

@@ -199,14 +199,24 @@ export function createAdminRouter(): Router {
 
       res.status(200).json({
         success: true,
-        message: result.message,
-        data: result.user,
       })
     } catch (error) {
       next(error)
     }
-  },
-  )
+  };
+
+  /**
+   * POST /api/admin/reload-config
+   * Triggering a live reload of the validated config; audit-logged.
+   */
+  router.post('/reload-config', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   * @deprecated Use /reload-config instead.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, handleReloadConfig);
 
   /**
    * POST /api/admin/keys/revoke
@@ -233,16 +243,6 @@ export function createAdminRouter(): Router {
       next(error);
     }
   });
-
-      res.status(200).json({
-        success: true,
-        message: result.message,
-      })
-    } catch (error) {
-      next(error)
-    }
-  },
-  )
 
   /**
    * POST /api/admin/impersonate

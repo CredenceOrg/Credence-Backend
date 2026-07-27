@@ -8,40 +8,52 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import express, { type Express } from 'express'
 import { auditLogService, AuditAction } from '../../services/audit/index.js'
+import { userRepo } from '../../repositories/userRepository.js'
 
 // ── Hoisted mock pool (stable across tests) ────────────────────────
 
 vi.mock('../../db/pool.js', () => {
   const idempotencyStore = new Map<string, any>()
+  const mockPool = {
+    query: vi.fn(async (sql: string, params: any[]) => {
+      if (sql.includes('SELECT') && sql.includes('idempotency_keys')) {
+        const key = params[0]
+        const row = idempotencyStore.get(key)
+        if (row && new Date(row.expires_at) > new Date()) {
+          return { rows: [row] }
+        }
+        return { rows: [] }
+      }
+
+      if (sql.includes('INSERT INTO idempotency_keys') || (sql.includes('ON CONFLICT') && sql.includes('idempotency_keys'))) {
+        const [key, actorId, requestHash, responseCode, responseBody, ttlSeconds, expiresAt] = params
+        idempotencyStore.set(key, {
+          key,
+          actor_id: actorId,
+          request_hash: requestHash,
+          response_code: responseCode,
+          response_body: responseBody,
+          ttl_seconds: ttlSeconds,
+          expires_at: expiresAt,
+          created_at: new Date(),
+        })
+        return { rowCount: 1 }
+      }
+
+      return { rows: [], rowCount: 0 }
+    }),
+    totalCount: 0,
+    idleCount: 0,
+    waitingCount: 0,
+  }
 
   return {
-    pool: {
-      query: vi.fn(async (sql: string, params: any[]) => {
-        if (sql.includes('SELECT') && sql.includes('idempotency_keys')) {
-          const key = params[0]
-          const row = idempotencyStore.get(key)
-          if (row && new Date(row.expires_at) > new Date()) {
-            return { rows: [row] }
-          }
-          return { rows: [] }
-        }
-
-        if (sql.includes('INSERT INTO idempotency_keys') || (sql.includes('ON CONFLICT') && sql.includes('idempotency_keys'))) {
-          const [key, requestHash, responseCode, responseBody, expiresAt] = params
-          idempotencyStore.set(key, {
-            key,
-            request_hash: requestHash,
-            response_code: responseCode,
-            response_body: responseBody,
-            expires_at: expiresAt,
-            created_at: new Date(),
-          })
-          return { rowCount: 1 }
-        }
-
-        return { rows: [], rowCount: 0 }
-      }),
-    },
+    pool: mockPool,
+    workerPool: mockPool,
+    replicaPool: mockPool,
+    apiPreparedStatementCache: { size: 0 },
+    workerPreparedStatementCache: { size: 0 },
+    replicaPreparedStatementCache: { size: 0 },
   }
 })
 
@@ -88,6 +100,24 @@ function errorHandler(err: any, _req: any, res: any, _next: any) {
   res.status(500).json({ error: err.message || 'Internal error' })
 }
 
+function seedTestUsers() {
+  userRepo._reset()
+  userRepo.upsert({
+    id: 'admin-user-1',
+    role: 'super-admin',
+    email: 'admin@credence.org',
+    tenantId: 'tenant-admin',
+    active: true,
+  })
+  userRepo.upsert({
+    id: 'verifier-user-1',
+    role: 'verifier',
+    email: 'verifier@credence.org',
+    tenantId: 'tenant-verifier',
+    active: true,
+  })
+}
+
 // ── Admin auth helpers ─────────────────────────────────────────────
 
 const ADMIN_AUTH = { Authorization: 'Bearer admin-key-12345' }
@@ -100,6 +130,7 @@ describe('Admin Routes — Only-Admin Access Control', () => {
   let app: Express
 
   beforeEach(async () => {
+    seedTestUsers()
     const { createAdminRouter } = await import('./index.js')
     app = express()
     app.use(express.json())
@@ -135,6 +166,7 @@ describe('Admin Routes — Idempotent Mutations', () => {
   let app: Express
 
   beforeEach(async () => {
+    seedTestUsers()
     const { createAdminRouter } = await import('./index.js')
     app = express()
     app.use(express.json())
@@ -171,8 +203,8 @@ describe('Admin Routes — Idempotent Mutations', () => {
     await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'admin' })
 
     const { status, body } = await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'super-admin' })
-    expect(status).toBe(400)
-    expect((body as any).error).toBe('IdempotencyParameterMismatch')
+    expect(status).toBe(409)
+    expect((body as any).code).toBe('idempotency_key_mismatch')
   })
 
   it('allows_different_keys_for_same_payload', async () => {
@@ -211,6 +243,7 @@ describe('Admin Routes — Audit Logged Actions', () => {
   let app: Express
 
   beforeEach(async () => {
+    seedTestUsers()
     await auditLogService.clearLogs()
     const { createAdminRouter } = await import('./index.js')
     app = express()

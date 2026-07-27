@@ -292,6 +292,7 @@ We rely on structured logging to maintain a consistent schema and protect PII. S
 
 Comprehensive monitoring with Prometheus and Grafana is available.
 
+- **[docs/METRICS_DASHBOARDS.md](docs/METRICS_DASHBOARDS.md)** — operator's reference mapping the Grafana dashboard panels directly to Service Level Indicators (SLIs) and Objectives (SLOs).
 - **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)** — operator's index of every Prometheus metric, the Grafana dashboard panel for each, the PromQL behind every alert, and runnable triage queries. **Start here if you are operating the service.**
 - **[docs/monitoring.md](docs/monitoring.md)** — full setup, instrumentation, and deployment guide for Prometheus + Grafana.
 - **[docs/SLA.md](docs/SLA.md)** — uptime commitments and per-endpoint SLO/SLI targets for downstream integrators.
