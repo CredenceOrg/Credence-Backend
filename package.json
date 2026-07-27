@@ -4,9 +4,9 @@
   "type": "module",
   "scripts": {
     "predev": "tsx scripts/check-pending-migrations.ts",
-    "dev": "tsx watch src/index.ts",
-    "build": "tsc",
-    "start": "node dist/index.js",
+    "dev": "node api.js && tsx watch src/index.ts",
+    "build": "node api.js && tsc",
+    "start": "node api.js && node dist/index.js",
     "prepare": "husky install",
     "lint": "node --import tsx ./node_modules/eslint/bin/eslint.js src",
     "lint:fix": "node --import tsx ./node_modules/eslint/bin/eslint.js src --fix",

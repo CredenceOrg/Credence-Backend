@@ -23,7 +23,7 @@ export {
   createSuccessEvent,
 } from './timeoutMetrics.js'
 
-export { registerPoolMetrics } from './poolMetrics.js'
+export { registerPoolMetrics, registerPreparedStatementCacheMetrics } from './poolMetrics.js'
 export {
   DOWNSTREAM_RPC_LATENCY_BUCKETS_MS,
   downstreamRpcLatencyHistogram,
