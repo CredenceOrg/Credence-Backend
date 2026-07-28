@@ -170,6 +170,30 @@ export class RequestTooLargeError extends AppError {
 }
 
 /**
+ * Thrown when an optimistic-locking update is rejected because another writer
+ * incremented the `version` between the caller's read and write.
+ *
+ * Callers should re-fetch the resource, re-apply their change, and retry.
+ */
+export class OptimisticLockError extends AppError {
+  /** The address (or identifier) of the resource that conflicted. */
+  public readonly resourceAddress: string
+  /** The version the caller expected to find. */
+  public readonly expectedVersion: number
+
+  constructor(resourceAddress: string, expectedVersion: number) {
+    super(
+      `Optimistic lock conflict: resource "${resourceAddress}" was modified by another writer (expected version ${expectedVersion}). Re-fetch and retry.`,
+      ErrorCodeRegistry.OPTIMISTIC_LOCK_CONFLICT,
+      undefined,
+      { resourceAddress, expectedVersion },
+    )
+    this.resourceAddress = resourceAddress
+    this.expectedVersion = expectedVersion
+  }
+}
+
+/**
  * Specific error for missing required security headers.
  */
 export class MissingSecurityHeaderError extends AppError {

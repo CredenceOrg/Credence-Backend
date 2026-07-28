@@ -37,8 +37,10 @@ const DEFAULT_MESSAGES = {
   'request_too_large': "The request body exceeds the maximum allowed size",
   'unauthorized': "Authentication is required",
   'forbidden': "The authenticated caller is not allowed to perform this action",
+  'crawler_blocked': "Automated crawling of admin surfaces is forbidden.",
   'not_found': "The requested resource was not found",
   'conflict': "The request conflicts with the current resource state",
+  'optimistic_lock_conflict': "The resource was modified by another request. Fetch the latest version and retry.",
   'idempotency_key_mismatch': "Idempotency key is already bound to a different actor or payload",
   'insufficient_credits': "Monthly credit budget exhausted",
   'ssrf_blocked': "The target URL resolves to a restricted or internal network address",
@@ -47,6 +49,7 @@ const DEFAULT_MESSAGES = {
   'rate_limit_exceeded': "Rate limit exceeded",
   'internal_server_error': "An unexpected internal server error occurred",
   'service_unavailable': "Service temporarily unavailable",
+  'missing_security_header': "A required security response header is missing",
   'invalid_input': "Invalid input",
   'sdk_request_timeout': "Request timed out",
   'sdk_network_error': "Network error",
@@ -352,6 +355,20 @@ export class ForbiddenCredenceError extends CredenceError {
   }
 }
 
+export class CrawlerBlockedCredenceError extends CredenceError {
+  static readonly errorCode = 'crawler_blocked' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['crawler_blocked'],
+    status: number = 403,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'crawler_blocked', status, details, options)
+    this.name = 'CrawlerBlockedCredenceError'
+  }
+}
+
 export class NotFoundCredenceError extends CredenceError {
   static readonly errorCode = 'not_found' as const
 
@@ -377,6 +394,20 @@ export class ConflictCredenceError extends CredenceError {
   ) {
     super(message, 'conflict', status, details, options)
     this.name = 'ConflictCredenceError'
+  }
+}
+
+export class OptimisticLockConflictCredenceError extends CredenceError {
+  static readonly errorCode = 'optimistic_lock_conflict' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['optimistic_lock_conflict'],
+    status: number = 409,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'optimistic_lock_conflict', status, details, options)
+    this.name = 'OptimisticLockConflictCredenceError'
   }
 }
 
@@ -492,6 +523,20 @@ export class ServiceUnavailableCredenceError extends CredenceError {
   }
 }
 
+export class MissingSecurityHeaderCredenceError extends CredenceError {
+  static readonly errorCode = 'missing_security_header' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['missing_security_header'],
+    status: number = 500,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'missing_security_header', status, details, options)
+    this.name = 'MissingSecurityHeaderCredenceError'
+  }
+}
+
 /**
  * @deprecated Legacy error code. Use `validation_failed` instead.
  */
@@ -581,8 +626,10 @@ export const CREDENCE_ERROR_REGISTRY = {
   'request_too_large': RequestTooLargeCredenceError,
   'unauthorized': UnauthorizedCredenceError,
   'forbidden': ForbiddenCredenceError,
+  'crawler_blocked': CrawlerBlockedCredenceError,
   'not_found': NotFoundCredenceError,
   'conflict': ConflictCredenceError,
+  'optimistic_lock_conflict': OptimisticLockConflictCredenceError,
   'idempotency_key_mismatch': IdempotencyKeyMismatchCredenceError,
   'insufficient_credits': InsufficientCreditsCredenceError,
   'ssrf_blocked': SsrfBlockedCredenceError,
@@ -591,6 +638,7 @@ export const CREDENCE_ERROR_REGISTRY = {
   'rate_limit_exceeded': RateLimitExceededCredenceError,
   'internal_server_error': InternalServerErrorCredenceError,
   'service_unavailable': ServiceUnavailableCredenceError,
+  'missing_security_header': MissingSecurityHeaderCredenceError,
   'invalid_input': InvalidInputCredenceError,
   'sdk_request_timeout': SdkRequestTimeoutCredenceError,
   'sdk_network_error': SdkNetworkErrorCredenceError,

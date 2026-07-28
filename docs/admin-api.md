@@ -281,45 +281,6 @@ curl -X POST http://localhost:3000/api/admin/replay-event \
 
 ---
 
-### POST /api/admin/replay-webhook
-
-Replay a specific failed webhook delivery from the DLQ on demand. Audit-logged.
-
-**Scope**: `admin:write`
-
-**Request body**:
-
-```json
-{
-  "id": "dlq-entry-uuid"
-}
-```
-
-**Example Request**:
-
-```bash
-curl -X POST http://localhost:3000/api/admin/replay-webhook \
-  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"dlq-entry-uuid"}'
-```
-
-**Example Response (200 OK)**
-
-```json
-{
-  "success": true,
-  "webhookId": "webhook-uuid",
-  "attempts": 2
-}
-```
-
-**Permissions**: Requires `admin` role.
-
-**Errors**: Returns 400 for validation errors, 404 if the DLQ entry or webhook is not found, 500 if replay fails.
-
----
-
 ### Replay Horizon Ledger Range
 
 **POST** `/api/admin/events/replay-range`
