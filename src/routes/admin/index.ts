@@ -53,6 +53,8 @@ import dotenv from "dotenv";
 import { WebhookService } from "../../services/webhooks/service.js";
 import { PostgresWebhookRepository } from "../../db/repositories/webhookRepository.js";
 import { PostgresDlqStore } from "../../services/webhooks/postgresDlqStore.js";
+import { ApiKeyRotationService } from "../../services/apiKeyRotationService.js";
+import { InMemoryApiKeyRepository } from "../../repositories/apiKeyRepository.js";
 
 
 /**
@@ -676,8 +678,69 @@ export function createAdminRouter(): Router {
     }
   });
 
+  /**
+   * POST /api/admin/regen-api-key
+   *
+   * Rotate (regenerate) the authenticated tenant's API key on demand.
+   * The old key is immediately revoked and a new key with identical scopes
+   * and tier is issued. The new raw key is returned exactly once.
+   * Every attempt (success or failure) is audit-logged.
+   */
+  router.post('/regen-api-key', requireUserAuth, async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const user = authReq.user!;
+      const requestId = (req as any).requestId;
+
+      if (!user.id) {
+        sendError(res, ErrorCode.FIELD_REQUIRED, 'Authenticated user ID is required');
+        return;
+      }
+
+      // Find the tenant's active API key(s)
+      const keyRepo = new InMemoryApiKeyRepository();
+      const rotationService = new ApiKeyRotationService(keyRepo, auditLogService);
+      const keys = await keyRepo.listByOwner(user.id);
+      const activeKey = keys.find((k: any) => k.active);
+
+      if (!activeKey) {
+        sendError(res, ErrorCode.NOT_FOUND, 'No active API key found for this tenant. Create one first.');
+        return;
+      }
+
+      // Rotate the key
+      const newKey = await rotationService.rotateKey(
+        activeKey.id,
+        user.id,
+        user.email,
+        req.ip
+      );
+
+      if (!newKey) {
+        sendError(res, ErrorCode.INTERNAL_ERROR, 'Failed to rotate API key. Please try again.');
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'API key rotated successfully. The old key is no longer valid.',
+        data: {
+          id: newKey.id,
+          key: newKey.key,
+          prefix: newKey.prefix,
+          scopes: newKey.scopes,
+          tier: newKey.tier,
+          createdAt: newKey.createdAt,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Mount erasure-proof sub-routes
   router.use(erasureProofRouter)
+
 
   // Mount audit chain status (read-only verifier state)
   router.use('/audit', auditChainStatusRouter)
