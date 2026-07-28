@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express'
 import { pool } from '../../db/pool.js'
 import { OutboxRepository } from '../../db/outbox/repository.js'
 import type { OutboxQuarantineEntry, OutboxQuarantineReason } from '../../db/outbox/types.js'
-import { buildPaginationMeta, parsePaginationParams } from '../../lib/pagination.js'
+import { buildPaginationLinks, buildPaginationMeta, parsePaginationParams } from '../../lib/pagination.js'
 import {
   ApiScope,
   AuthenticatedRequest,
@@ -85,10 +85,13 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
           reason as OutboxQuarantineReason | undefined
         )
 
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
         res.status(200).json({
           success: true,
           data: entries.map(serializeEntry),
           ...buildPaginationMeta(total, page, limit),
+          links: buildPaginationLinks(fullUrl, page, limit, total),
         })
       } catch (error) {
         next(error)

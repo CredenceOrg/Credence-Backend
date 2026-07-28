@@ -12,7 +12,8 @@ vi.mock('../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),
     set: vi.fn(),
-    delete: vi.fn()
+    delete: vi.fn(),
+    exists: vi.fn()
   }
 }))
 

@@ -3,7 +3,6 @@ import { newDb, type IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
 import crypto from 'crypto'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
-import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
 import { HorizonWithdrawalListener } from '../listeners/horizonWithdrawalEvents.js'
 
 describe('Horizon Cursor Checkpointing', () => {

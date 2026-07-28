@@ -18,7 +18,9 @@ import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
 import { cache } from "./cache/redis.js";
 import { pool } from "./db/pool.js";
+import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
+import { correlationIdMiddleware } from "./middleware/correlationId.js";
 import { latencyBudgetMiddleware } from "./middleware/latencyBudget.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { createRateLimitMiddleware } from "./middleware/rateLimit.js";
@@ -30,7 +32,7 @@ import { tenantContextMiddleware } from "./middleware/tenantContext.js";
 import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
 import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
-  createCompressionMiddleware,
+  compressionMiddleware,
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
@@ -43,7 +45,6 @@ import {
 import { createWsSubscriptionServer } from "./routes/ws.js";
 import reportRouter from "./routes/report.js";
 import cspReportRouter from "./routes/cspReport.js";
-
 import { idempotencyMiddleware } from "./middleware/idempotency.js";
 import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
 import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
@@ -53,6 +54,8 @@ import { RedisConnection } from "./cache/redis.js";
 import { createFaultInjectionRouter } from "./routes/faultInjection.js";
 import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
 import { createAuthRouter } from "./routes/auth.js";
+import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
+import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
 
 const app = express();
 
@@ -106,24 +109,23 @@ try {
 }
 const timeoutBudgetMiddleware = createTimeoutBudgetMiddleware(globalTimeoutMs);
 
-let jwksCacheMaxAge: number;
+// Resolve maintenance mode flag at startup; default to off when config is invalid.
+let maintenanceModeEnabled = false;
 try {
-  jwksCacheMaxAge = validateConfig(process.env).jwt.jwksCacheMaxAgeSeconds;
+  maintenanceModeEnabled = validateConfig(process.env).maintenanceMode.enabled;
 } catch {
-  jwksCacheMaxAge = 300;
+  // Fail-open for maintenance mode: an invalid config must not block startup.
+}
+const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
+
+let corsOrigin = "*";
+try {
+  corsOrigin = validateConfig(process.env).cors.origin;
+} catch {
+  // Default to wildcard when config is invalid (dev/test convenience).
 }
 
-let compressionOpts: {
-  enabled: boolean;
-  thresholdBytes: number;
-} = { enabled: true, thresholdBytes: 1024 };
-try {
-  compressionOpts = validateConfig(process.env).compression;
-} catch {
-  // keep defaults
-}
-const compressionMiddleware = createCompressionMiddleware(compressionOpts);
-
+app.use(responseTimeMiddleware);
 app.use(requestIdMiddleware);
 app.use(securityHeadersMiddleware);
 app.use(cacheHeaderMiddleware);
@@ -160,8 +162,11 @@ app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 app.use(gracefulDegradeMiddleware);
 
+applyRouteCorsPolicy(app, corsOrigin);
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+app.use(maintenanceModeMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
@@ -251,6 +256,7 @@ app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 app.use("/api/payouts", createPayoutsRouter());
 
 app.use("/api/reports", reportRouter);
+app.use("/api/export", createExportRouter());
 app.use(cspReportRouter);
 
 

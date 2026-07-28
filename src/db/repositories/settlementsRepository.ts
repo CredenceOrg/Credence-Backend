@@ -56,16 +56,54 @@ export class SettlementsRepository {
   constructor(private readonly db: Queryable) {}
 
   async upsert(input: CreateSettlementInput): Promise<UpsertSettlementResult> {
+    return this._upsert(this.db, input)
+  }
+
+  async upsertBatch(inputs: CreateSettlementInput[]): Promise<UpsertSettlementResult[]> {
+    const client = typeof (this.db as any).connect === 'function'
+      ? await (this.db as any).connect()
+      : null
+
+    const targetDb = client ?? this.db
+    const useTx = client !== null
+
+    if (useTx) {
+      await targetDb.query('BEGIN')
+    }
+
+    try {
+      const results: UpsertSettlementResult[] = []
+      for (const input of inputs) {
+        const res = await this._upsert(targetDb, input)
+        results.push(res)
+      }
+      if (useTx) {
+        await targetDb.query('COMMIT')
+      }
+      return results
+    } catch (err) {
+      if (useTx) {
+        await targetDb.query('ROLLBACK').catch(() => {})
+      }
+      throw err
+    } finally {
+      if (client) {
+        client.release()
+      }
+    }
+  }
+
+  private async _upsert(db: Queryable, input: CreateSettlementInput): Promise<UpsertSettlementResult> {
     const settledAt = input.settledAt ?? new Date()
     const status = input.status ?? 'pending'
 
-    const existing = await this.db.query<{ id: string }>(
+    const existing = await db.query<{ id: string }>(
       `SELECT id FROM settlements WHERE transaction_hash = $1`,
       [input.transactionHash],
     )
     const isDuplicate = existing.rows.length > 0
 
-    const result = await this.db.query<SettlementRow>(
+    const result = await db.query<SettlementRow>(
       `INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (transaction_hash)

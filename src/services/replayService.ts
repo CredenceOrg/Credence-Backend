@@ -3,6 +3,7 @@ import { auditLogService, AuditAction } from './audit/index.js'
 import { cache } from '../cache/redis.js'
 import { invalidateCache } from '../cache/invalidation.js'
 import { Horizon } from '@stellar/stellar-sdk'
+import { bondOperationSchema, bondWithdrawalOperationSchema, validateMessage } from '../listeners/messageValidator.js'
 
 const FAILED_EVENT_CACHE_TTL = 300 // 5 minutes
 
@@ -182,9 +183,15 @@ export class ReplayService {
           try {
             // Map operation types to registered handler keys
             if (anyOp.type === 'create_bond' && this.handlers.has('bond_creation')) {
+              const validation = validateMessage(bondOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('bond_creation', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
               const parsed = {
-                identity: { id: anyOp.source_account },
-                bond: { id: anyOp.id, address: anyOp.source_account, amount: anyOp.amount, duration: anyOp.duration ?? null },
+                identity: { id: validation.data.source_account },
+                bond: { id: validation.data.id, address: validation.data.source_account, amount: validation.data.amount, duration: validation.data.duration ?? null },
               }
               await this.handlers.get('bond_creation')!.handle(parsed)
               processed++
@@ -193,14 +200,20 @@ export class ReplayService {
 
             if (anyOp.type === 'payment' && this.handlers.has('withdrawal')) {
               const payment = anyOp
+              const validation = validateMessage(bondWithdrawalOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('withdrawal', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
               const parsed = {
-                id: anyOp.id,
+                id: validation.data.id,
                 pagingToken: anyOp.paging_token,
                 type: anyOp.type,
                 createdAt: new Date(anyOp.created_at),
                 bondId: `${payment.from || payment.source_account}-${anyOp.transaction_hash}`,
                 account: payment.from || payment.source_account,
-                amount: payment.amount,
+                amount: validation.data.amount,
                 assetType: payment.asset_type,
                 assetCode: payment.asset_code,
                 assetIssuer: payment.asset_issuer,
