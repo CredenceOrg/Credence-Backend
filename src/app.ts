@@ -56,6 +56,8 @@ import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
 import { createAuthRouter } from "./routes/auth.js";
 import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
 import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
+import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
+import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
 
 const app = express();
 
@@ -167,6 +169,7 @@ applyRouteCorsPolicy(app, corsOrigin);
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 app.use(maintenanceModeMiddleware);
+app.use(sunsetHeaderMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
@@ -242,6 +245,7 @@ app.use(
 app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());
+app.use("/api/admin/outbox", createOutboxAdminRouter());
 
 app.use("/api/orgs/:orgId/policies", createPolicyRouter());
 

@@ -60,3 +60,15 @@ export const PROVIDER_RECOVERY_BUFFER_MS = 5_000
  * Threshold in milliseconds after which a backup is considered stale (24 hours).
  */
 export const BACKUP_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000
+
+/**
+ * RFC-8594 Sunset header name.
+ * Indicates that an API endpoint is deprecated and will be removed on the given date.
+ */
+export const HEADER_SUNSET = 'Sunset'
+
+/**
+ * Default Sunset date for deprecated endpoints — 6 months from the current
+ * epoch, expressed as an HTTP-date (RFC-7231). Override per-endpoint as needed.
+ */
+export const DEFAULT_SUNSET_DATE = '2027-01-28T00:00:00Z'
