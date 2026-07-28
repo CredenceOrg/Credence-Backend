@@ -8,6 +8,13 @@ import { AttestationsRepository } from '../../db/repositories/attestationsReposi
 import { cache } from '../../cache/redis.js'
 import * as invalidation from '../../cache/invalidation.js'
 
+vi.mock('../../db/pool.js', () => ({
+  pool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  workerPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  replicaPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  withReplica: vi.fn(),
+}))
+
 vi.mock('../../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),

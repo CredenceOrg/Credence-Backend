@@ -50,6 +50,8 @@ The server **fails fast** on startup if any required environment variable is mis
 npm run dev
 ```
 
+`npm run dev` automatically checks for pending database migrations before starting the dev server. If any are found, a reminder to run `npm run migrate:dev` is printed. Set `DATABASE_URL` in your environment to enable this check.
+
 **Production:**
 
 ```bash
@@ -133,6 +135,8 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `REDIS_PORT`        | `6379`     | Host-exposed Redis port   |
 | `DATABASE_URL`      | (composed) | Full PG connection string |
 | `REDIS_URL`         | (composed) | Full Redis connection URL |
+| `MAINTENANCE_MODE_ENABLED` | `false` | Reject mutating requests with `503` and `Retry-After` while maintenance is active |
+| `MAINTENANCE_MODE_RETRY_AFTER_SECONDS` | `60` | Retry window to return on maintenance-mode responses |
 
 ---
 
@@ -140,7 +144,7 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 
 | Command                   | Description                                |
 | ------------------------- | ------------------------------------------ |
-| `npm run dev`             | Start with tsx watch                       |
+| `npm run dev`             | Check pending migrations, then start with tsx watch |
 | `npm run build`           | Compile TypeScript                         |
 | `npm start`               | Run compiled `dist/`                       |
 | `npm run lint`            | Run ESLint                                 |
@@ -153,6 +157,7 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `npm run migrate`         | Run pending migrations (CI/production)     |
 | `npm run migrate:down`    | Rollback last migration                    |
 | `npm run migrate:dry-run` | Preview pending migrations without running |
+| `npm run test:db:reset`   | Drop, recreate, and migrate local test DB  |
 
 ## Developer Setup
 
@@ -198,6 +203,7 @@ Both commands target `src/` and respect the ignore patterns in `eslint.config.js
 | GET    | `/api/verification/:address` | Verification proof (stub)                   |
 | GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
 | GET    | `/api/reports/top-talkers`   | Top N tenants by request count in last hour |
+| GET    | `/api/admin/system/backup-status` | Admin endpoint: Returns the backup job status (stale if > 24h) |
 
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
@@ -208,7 +214,9 @@ Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
 **API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**  
-**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**
+**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**  
+**API change log & format guide:** **[docs/API_CHANGELOG.md](docs/API_CHANGELOG.md)**  
+**Retry semantics:** **[docs/RETRY_SEMANTICS.md](docs/RETRY_SEMANTICS.md)**
 
 ### OpenAPI spec
 
@@ -219,6 +227,8 @@ docs/openapi.yaml
 Render with `npx @redocly/cli preview-docs docs/openapi.yaml` or paste into [editor.swagger.io](https://editor.swagger.io).
 
 For instructions on how to regenerate the spec after modifying schemas or routes, see **[docs/OPENAPI.md](docs/OPENAPI.md)**.
+
+The full request/response pipeline — from Zod schema definition to OpenAPI generation to frontend client types — is documented in **[docs/TYPE_SAFETY.md](docs/TYPE_SAFETY.md)**.
 
 ### Postman / Insomnia collection
 
@@ -369,11 +379,15 @@ The service includes a Redis-based caching layer with:
 - **Graceful fallback** - Continues working when Redis is unavailable
 - **Cache response header** - Appends `x-cache` header (`HIT`, `MISS`, or `STALE`) to responses for transparency
 
-See [docs/caching.md](./docs/caching.md) for detailed documentation.
+See [docs/caching.md](./docs/caching.md) for detailed documentation, and
+[docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
+cache namespaces and their TTLs.
 
-## Developer SDK
+## API Clients & SDKs
 
 A TypeScript/JavaScript SDK is available at `src/sdk/` for programmatic access to the API. See [docs/sdk.md](docs/sdk.md) for full documentation.
+
+For a complete list of recommended client libraries and guidance on generating clients for other languages, see **docs/API_CLIENTS.md**.
 
 ## Configuration
 
@@ -542,11 +556,13 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
 
 ### Environment Variables
 
-| Variable            | Description                        | Default        |
-| ------------------- | ---------------------------------- | -------------- |
-| `DATABASE_URL`      | PostgreSQL connection string       | Required       |
-| `MIGRATIONS_TABLE`  | Table name for tracking migrations | `pgmigrations` |
-| `MIGRATIONS_SCHEMA` | Schema for migrations table        | `public`       |
+| Variable                       | Description                                      | Default        |
+| ------------------------------ | ------------------------------------------------ | -------------- |
+| `DATABASE_URL`                 | PostgreSQL connection string                     | Required       |
+| `MIGRATIONS_TABLE`             | Table name for tracking migrations               | `pgmigrations` |
+| `MIGRATIONS_SCHEMA`            | Schema for migrations table                      | `public`       |
+| `MIGRATION_CHECKSUM_VALIDATE`  | Reject startup when applied migrations drift       | enabled        |
+| `MIGRATION_CHECKSUM_BOOTSTRAP` | Seed missing checksum records on first startup   | enabled        |
 
 ### CI/CD Integration
 
@@ -637,6 +653,7 @@ For observability, request tracing, metrics, and structured logging guidelines:
 - **Structured Logging Policy**: See [docs/LOGGING.md](docs/LOGGING.md) for logs, formats, and conventions.
 - **Log Retention**: See [docs/LOG_RETENTION.md](docs/LOG_RETENTION.md) for how long each log type is kept and where.
 - **Request Tracing & Metrics**: See [docs/observability.md](docs/observability.md) for request tracing, PII redaction rules, and the `req.log` request-scoped logger.
+- **Correlation ID Middleware**: See `src/middleware/correlationId.ts` — every request receives an `X-Correlation-ID` (propagated or auto-generated) for distributed tracing across services.
 
 ## Security
 

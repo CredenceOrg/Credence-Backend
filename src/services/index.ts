@@ -8,3 +8,9 @@ export { ReportStorageService } from './reportStorage.js'
 export { ReplayService } from './replayService.js'
 export { BondCacheService } from './bondCacheService.js'
 export { AttestationCacheService } from './attestationCacheService.js'
+export {
+  ExportService,
+  createDiscardExportWriter,
+  createNdjsonExportWriter,
+} from './exportService.js'
+export { ExportTooLargeError } from '../lib/errors.js'

@@ -3,30 +3,78 @@ import crypto from 'node:crypto'
 /**
  * Computes a SHA-256 hash of the request body to detect payload mismatches
  * for idempotent requests.
- * 
- * Uses a canonical JSON stringification (sorted keys) to ensure that
- * semantically identical payloads produce the same hash regardless of key order.
- * 
+ *
+ * Uses a canonical serialization strategy that sorts object keys recursively and
+ * preserves type distinctions for values like BigInt, Date, and undefined.
+ *
  * @param body - The request body object
  * @returns Hex-encoded SHA-256 hash
  */
 export function computeRequestHash(body: any): string {
-  const canonicalBody = canonicalStringify(body || {})
+  return computeStableHash(body || {})
+}
+
+/**
+ * Computes a stable SHA-256 hash for the provided value using canonical serialization.
+ */
+export function computeStableHash(value: any): string {
+  const canonicalBody = canonicalStringify(value)
   return crypto.createHash('sha256').update(canonicalBody).digest('hex')
 }
 
 /**
- * Simple canonical stringify that sorts object keys recursively.
+ * Canonical stringifier that sorts object keys recursively and preserves type distinctions.
  */
-function canonicalStringify(obj: any): string {
-  if (obj === null || typeof obj !== 'object') {
-    return JSON.stringify(obj)
+export function canonicalStringify(value: any): string {
+  return serializeValue(value)
+}
+
+function serializeValue(value: any): string {
+  if (value === undefined) {
+    return '{"$type":"undefined"}'
   }
 
-  if (Array.isArray(obj)) {
-    return '[' + obj.map(canonicalStringify).join(',') + ']'
+  if (value === null) {
+    return 'null'
   }
 
-  const keys = Object.keys(obj).sort()
-  return '{' + keys.map(k => `"${k}":${canonicalStringify(obj[k])}`).join(',') + '}'
+  if (typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'true' : 'false'
+  }
+
+  if (typeof value === 'number') {
+    if (Number.isNaN(value)) {
+      return '{"$type":"number","value":"NaN"}'
+    }
+
+    if (!Number.isFinite(value)) {
+      return `{"$type":"number","value":"${value > 0 ? 'Infinity' : '-Infinity'}"}`
+    }
+
+    return JSON.stringify(value)
+  }
+
+  if (typeof value === 'bigint') {
+    return `{"$type":"bigint","value":"${value.toString()}"}`
+  }
+
+  if (value instanceof Date) {
+    return `{"$type":"date","value":"${value.toISOString()}"}`
+  }
+
+  if (Array.isArray(value)) {
+    return '[' + value.map(serializeValue).join(',') + ']'
+  }
+
+  if (typeof value === 'object') {
+    const keys = Object.keys(value).sort()
+    const serializedEntries = keys.map(key => `${JSON.stringify(key)}:${serializeValue(value[key])}`)
+    return '{' + serializedEntries.join(',') + '}'
+  }
+
+  return JSON.stringify(value)
 }

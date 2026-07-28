@@ -10,6 +10,10 @@
  *    already exists for that (org, user) pair.
  *  - Invite is blocked if an active membership already exists; after
  *    soft-delete the partial unique index allows a fresh invite.
+ *
+ * Failure modes use typed sentinel classes from `./errors.js` so the
+ * route layer can map them to the right status code via `instanceof`
+ * instead of substring-matching on `err.message`.
  */
 
 import type { AuditLogService } from '../audit/index.js'
@@ -30,6 +34,8 @@ import type {
   MemberRole,
   PaginationOptions,
 } from './types.js'
+import { profileInvalidationHook } from '../../cache/invalidationHooks.js'
+import { logger } from '../../utils/logger.js'
 
 export class MemberService {
   constructor(
@@ -67,7 +73,7 @@ export class MemberService {
         undefined,
         requestId
       )
-      throw new Error('Member is already active in this organisation')
+      throw new MemberAlreadyActiveError()
     }
 
     const member = await this.repo.insert(orgId, userId, email, role as MemberRole)
@@ -82,6 +88,11 @@ export class MemberService {
       undefined,
       undefined,
       requestId
+    )
+
+    // Post-commit hook: invalidate profile caches
+    profileInvalidationHook.execute(orgId, member.id).catch((err) =>
+      logger.error({ err, msg: 'Failed to invalidate cache after inviteMember' }),
     )
 
     return {
@@ -142,12 +153,91 @@ export class MemberService {
 
     const existing = await this.repo.findActiveById(memberId)
     if (!existing) {
-      throw new Error(`Member not found or has been removed: ${memberId}`)
+      throw new MemberNotFoundError(`Member not found or has been removed: ${memberId}`)
+    }
+
+    // Authorisation invariant: the URL :orgId MUST match the row's org.
+    // An admin (even with global admin role) cannot mutate members
+    // belonging to a different organisation. Surface as NOT_FOUND rather
+    // than FORBIDDEN so we don't leak the existence of cross-org IDs.
+    if (existing.orgId !== request.orgId) {
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.UPDATE_MEMBER_ROLE,
+        existing.userId, existing.email,
+        { memberId, requestedOrgId: request.orgId, rowOrgId: existing.orgId, role },
+        'failure',
+        'Cross-organisation member operation denied',
+      )
+      throw new MemberNotFoundError(
+        `Member not found in organisation ${request.orgId}: ${memberId}`,
+      )
+    }
+
+    // Last-owner guard: if we are demoting an owner and they are the last
+    // active owner, refuse. Apply this BEFORE the mutation so a partial
+    // failure cannot leave the org unmanageable. Promoting to owner is
+    // always safe since it strictly increases the owner count.
+    if (existing.role === 'owner' && role !== 'owner') {
+      const ownerCount = await this.repo.countActiveOwners(request.orgId)
+      if (ownerCount <= 1) {
+        this.auditLog.logAction(
+          tenantId,
+          adminId, adminEmail,
+          AuditAction.UPDATE_MEMBER_ROLE,
+          existing.userId, existing.email,
+          { memberId, orgId: existing.orgId, oldRole: existing.role, newRole: role, ownerCount },
+          'failure',
+          'Cannot demote the last active owner',
+        )
+        throw new LastOwnerError(
+          `Cannot demote the last active owner in organisation ${request.orgId}`,
+        )
+      }
     }
 
     const oldRole = existing.role
     const updated = await this.repo.updateRole(memberId, role)
-    if (!updated) throw new Error('Failed to update member role')
+
+    // Post-condition race re-classification. `updateRole` only filters on
+    // `(id, deleted_at IS NULL)` so a 0-row outcome means a concurrent
+    // transaction soft-deleted the row between our `findActiveById` and
+    // the UPDATE. Re-counting active owners tells us whether we landed in
+    // a degraded state (LastOwnerError → 409) or simply lost a race to
+    // a peer admin's delete (MemberAlreadyDeletedError → 404). The 409
+    // path is what the upstream reviewer surfaced as the missing case
+    // — without this, the post-condition null was incorrectly surfaced
+    // as a 400 'UPDATE failed unexpectedly'.
+    if (!updated) {
+      const ownerCount = await this.repo.countActiveOwners(request.orgId)
+      if (ownerCount <= 0) {
+        this.auditLog.logAction(
+          tenantId,
+          adminId, adminEmail,
+          AuditAction.UPDATE_MEMBER_ROLE,
+          existing.userId, existing.email,
+            { memberId, orgId: existing.orgId, ownerCount },
+          'failure',
+          'Concurrent soft-delete left the organisation with no active owners',
+        )
+        throw new LastOwnerError(
+          `Organisation ${request.orgId} has no active owners after a concurrent soft-delete`,
+        )
+      }
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.UPDATE_MEMBER_ROLE,
+        existing.userId, existing.email,
+        { memberId, orgId: existing.orgId },
+        'failure',
+        'Member was concurrently soft-deleted',
+      )
+      throw new MemberAlreadyDeletedError(
+        `Member ${memberId} was concurrently soft-deleted`,
+      )
+    }
 
     this.auditLog.logAction(
       tenantId,
@@ -156,6 +246,11 @@ export class MemberService {
       existing.userId, existing.email,
       { memberId, oldRole, newRole: role, orgId: existing.orgId },
       'success',
+    )
+
+    // Post-commit hook: invalidate profile caches
+    profileInvalidationHook.execute(existing.orgId, memberId).catch((err) =>
+      logger.error({ err, msg: 'Failed to invalidate cache after updateMemberRole' }),
     )
 
     return {
@@ -186,23 +281,114 @@ export class MemberService {
         adminId, adminEmail,
         AuditAction.DELETE_MEMBER,
         memberId, 'unknown',
-        { memberId },
+        { memberId, orgId: request.orgId },
         'failure',
         'Member not found or already deleted',
       )
-      throw new Error(`Member not found or already deleted: ${memberId}`)
+      throw new MemberAlreadyDeletedError(
+        `Member not found or already deleted: ${memberId}`,
+      )
+    }
+
+    // Authorisation invariant: the URL :orgId MUST match the row's org.
+    // Refuse with MemberNotFoundError so cross-org probing does not leak
+    // the existence of member IDs in neighbouring organisations.
+    if (existing.orgId !== request.orgId) {
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.DELETE_MEMBER,
+        existing.userId, existing.email,
+        {
+          memberId,
+          requestedOrgId: request.orgId,
+          rowOrgId: existing.orgId,
+        },
+        'failure',
+        'Cross-organisation member operation denied',
+      )
+      throw new MemberNotFoundError(
+        `Member not found in organisation ${request.orgId}: ${memberId}`,
+      )
+    }
+
+    // Last-owner guard: refuse to soft-delete the last active owner so
+    // the org cannot accidentally be left unmanageable. Audited as a
+    // 'failure' so operators can see the attempt in the trail.
+    if (existing.role === 'owner') {
+      const ownerCount = await this.repo.countActiveOwners(request.orgId)
+      if (ownerCount <= 1) {
+        this.auditLog.logAction(
+          tenantId,
+          adminId, adminEmail,
+          AuditAction.DELETE_MEMBER,
+          existing.userId, existing.email,
+          { memberId, orgId: existing.orgId, ownerCount },
+          'failure',
+          'Cannot remove the last active owner',
+        )
+        throw new LastOwnerError(
+          `Cannot remove the last active owner in organisation ${request.orgId}`,
+        )
+      }
     }
 
     const deleted = await this.repo.softDelete(memberId, adminId)
-    if (!deleted) throw new Error('Soft-delete failed unexpectedly')
+
+    // Post-condition race re-classification. `softDelete` only filters
+    // on `(id, deleted_at IS NULL)` so a 0-row outcome means a peer
+    // transaction soft-deleted the row between our `findActiveById` and
+    // this UPDATE. Re-counting active owners distinguishes a degraded
+    // state (LastOwnerError → 409) from a benign lost-race
+    // (MemberAlreadyDeletedError → 404). See `updateMemberRole` for the
+    // mirror instance of this branch.
+    if (!deleted) {
+      const ownerCount = await this.repo.countActiveOwners(request.orgId)
+      if (ownerCount <= 0) {
+        this.auditLog.logAction(
+          tenantId,
+          adminId, adminEmail,
+          AuditAction.DELETE_MEMBER,
+          existing.userId, existing.email,
+          { memberId, orgId: existing.orgId, ownerCount },
+          'failure',
+          'Concurrent soft-delete left the organisation with no active owners',
+        )
+        throw new LastOwnerError(
+          `Organisation ${request.orgId} has no active owners after a concurrent soft-delete`,
+        )
+      }
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.DELETE_MEMBER,
+        existing.userId, existing.email,
+        { memberId, orgId: existing.orgId },
+        'failure',
+        'Member was concurrently soft-deleted',
+      )
+      throw new MemberAlreadyDeletedError(
+        `Member ${memberId} was concurrently soft-deleted`,
+      )
+    }
 
     this.auditLog.logAction(
       tenantId,
       adminId, adminEmail,
       AuditAction.DELETE_MEMBER,
       existing.userId, existing.email,
-      { memberId, orgId: existing.orgId, deletedAt: deleted.deletedAt },
+      {
+        memberId,
+        orgId: existing.orgId,
+        deletedAt: deleted.deletedAt,
+        deletedBy: adminId,
+      },
       'success',
+    )
+
+    // Post-commit hook: invalidate profile caches
+    profileInvalidationHook.execute(existing.orgId, memberId).catch((err) =>
+      logger.error({ err, msg: 'Failed to invalidate cache after deleteMember' }),
     )
 
     return { success: true, message: `Member ${existing.email} has been removed` }
@@ -224,9 +410,45 @@ export class MemberService {
     const { memberId } = request
 
     const existing = await this.repo.findById(memberId)
-    if (!existing) throw new Error(`Member not found: ${memberId}`)
+    if (!existing) {
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.RESTORE_MEMBER,
+        memberId, 'unknown',
+        { memberId, orgId: request.orgId },
+        'failure',
+        'Member not found',
+      )
+      throw new MemberNotFoundError(`Member not found: ${memberId}`)
+    }
     if (!existing.deletedAt) {
-      throw new Error(`Member ${memberId} is already active — nothing to restore`)
+      throw new MemberAlreadyDeletedError(
+        `Member ${memberId} is already active — nothing to restore`,
+      )
+    }
+
+    // Authorisation invariant: same as delete — the URL :orgId MUST match
+    // the row's org. Refuses cross-org restores as MemberNotFoundError so
+    // the existence of a deleted-but-restoreable member ID in a neighbour
+    // org cannot be probed.
+    if (existing.orgId !== request.orgId) {
+      this.auditLog.logAction(
+        tenantId,
+        adminId, adminEmail,
+        AuditAction.RESTORE_MEMBER,
+        existing.userId, existing.email,
+        {
+          memberId,
+          requestedOrgId: request.orgId,
+          rowOrgId: existing.orgId,
+        },
+        'failure',
+        'Cross-organisation member operation denied',
+      )
+      throw new MemberNotFoundError(
+        `Member not found in organisation ${request.orgId}: ${memberId}`,
+      )
     }
 
     const conflict = await this.repo.findActiveByOrgAndUser(existing.orgId, existing.userId)
@@ -240,21 +462,45 @@ export class MemberService {
         'failure',
         'An active membership already exists for this user in this organisation',
       )
-      throw new Error(
-        'Cannot restore: an active membership already exists for this user in this organisation',
-      )
+      throw new ActiveMembershipExistsError()
     }
 
+    // Forensic snapshot: the audit trail needs to retain *who* deleted
+    // the member and *when*, even after the row is re-activated. The
+    // soft-delete cleared the row's deleted_at/deleted_by columns on
+    // restore, so we capture them here BEFORE applying the change.
+    const previousDeletedBy = existing.deletedBy
+    const previousDeletedAt = existing.deletedAt
+    const deletedForSeconds = previousDeletedAt
+      ? Math.max(
+          0,
+          Math.floor(
+            (Date.now() - new Date(previousDeletedAt).getTime()) / 1000,
+          ),
+        )
+      : null
+
     const restored = await this.repo.restore(memberId)
-    if (!restored) throw new Error('Restore failed unexpectedly')
+    if (!restored) throw new MemberAlreadyDeletedError(`Member ${memberId} was concurrently hard-deleted before restore`)
 
     this.auditLog.logAction(
       tenantId,
       adminId, adminEmail,
       AuditAction.RESTORE_MEMBER,
       existing.userId, existing.email,
-      { memberId, orgId: existing.orgId },
+      {
+        memberId,
+        orgId: existing.orgId,
+        previousDeletedBy,
+        previousDeletedAt,
+        deletedForSeconds,
+      },
       'success',
+    )
+
+    // Post-commit hook: invalidate profile caches
+    profileInvalidationHook.execute(existing.orgId, memberId).catch((err) =>
+      logger.error({ err, msg: 'Failed to invalidate cache after restoreMember' }),
     )
 
     return {

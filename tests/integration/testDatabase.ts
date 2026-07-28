@@ -1,6 +1,7 @@
 import { Pool } from 'pg'
 import { GenericContainer, Wait, type StartedTestContainer } from 'testcontainers'
 import { createClient, type RedisClientType } from 'redis'
+import { DEFAULT_TEST_DATABASE_NAME } from '../../src/config/testDatabase.js'
 
 export interface TestDatabase {
   pool: Pool
@@ -34,7 +35,7 @@ export async function createTestDatabase(): Promise<TestDatabase> {
 
   const user = 'credence'
   const password = 'credence'
-  const database = 'credence_test'
+  const database = DEFAULT_TEST_DATABASE_NAME
 
   try {
     const container: StartedTestContainer = await new GenericContainer('postgres:16-alpine')

@@ -206,6 +206,7 @@ Global defaults plus optional per-provider overrides (`SOROBAN`, `WEBHOOK`):
 | --- | --- | --- |
 | `TRUST_SCORE_CACHE_TTL` | `600` | Seconds; 60–86400. |
 | `AUDIT_EXPORT_MAX_WINDOW_DAYS` | `90` | 1–3650. |
+| `EXPORT_MAX_ROWS` | `100000` | 1–10000000. Hard row cap for authenticated data exports; oversized requests return 413 before streaming. See [export.md](export.md). |
 | `REPORT_MAX_CONCURRENT_JOBS_PER_ORG` | `10` | 0–1000. |
 | `REPORT_DOWNLOAD_BASE_URL` | `https://credence.example.com` | Base URL embedded in signed report download links (`src/services/reportStorage.ts`). |
 | `METRICS_ALLOWED_CIDRS` | unset | Comma-separated IPv4 CIDRs allowed to scrape `/metrics`; unset = open. |
@@ -222,7 +223,7 @@ Consumed by `docker-compose.yml`, not by the app directly:
 | `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | `credence` | Container credentials; compose builds `DATABASE_URL` from them. |
 | `POSTGRES_PORT` | `5432` | Host-exposed Postgres port. |
 | `REDIS_PORT` | `6379` | Host-exposed Redis port. |
-| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). |
+| `TEST_DATABASE_URL` | unset | Integration tests connect directly to this URL instead of spinning up testcontainers (required in CI; matches `docker-compose.test.yml`). Reset locally with `npm run test:db:reset` (see [local-testing-guide.md](./local-testing-guide.md)). |
 
 ## Common pitfalls
 

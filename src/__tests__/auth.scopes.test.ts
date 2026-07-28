@@ -60,8 +60,13 @@ describe('ApiScope enum', () => {
     expect(ApiScope.REPORTS_GENERATE).toBe('reports:generate')
     expect(ApiScope.EXPORTS_READ).toBe('exports:read')
     expect(ApiScope.WEBHOOKS_ADMIN).toBe('webhooks:admin')
+    expect(ApiScope.OUTBOX_REINJECT).toBe('outbox:reinject')
     expect(ApiScope.ADMIN_READ).toBe('admin:read')
     expect(ApiScope.ADMIN_WRITE).toBe('admin:write')
+    expect(ApiScope.FLAGS_READ).toBe('flags:read')
+    expect(ApiScope.FLAGS_WRITE).toBe('flags:write')
+    expect(ApiScope.BOND_READ).toBe('bond:read')
+    expect(ApiScope.BOND_WRITE).toBe('bond:write')
   })
 
   it('retains legacy backward-compat values', () => {
@@ -84,6 +89,8 @@ describe('SCOPE_SETS', () => {
     expect(pub.has(ApiScope.WEBHOOKS_ADMIN)).toBe(false)
     expect(pub.has(ApiScope.ADMIN_READ)).toBe(false)
     expect(pub.has(ApiScope.ADMIN_WRITE)).toBe(false)
+    expect(pub.has(ApiScope.BOND_READ)).toBe(false)
+    expect(pub.has(ApiScope.BOND_WRITE)).toBe(false)
   })
 
   it('ENTERPRISE set contains every granular scope', () => {
@@ -96,8 +103,13 @@ describe('SCOPE_SETS', () => {
       ApiScope.REPORTS_GENERATE,
       ApiScope.EXPORTS_READ,
       ApiScope.WEBHOOKS_ADMIN,
+      ApiScope.OUTBOX_REINJECT,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.FLAGS_READ,
+      ApiScope.FLAGS_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
     for (const scope of granular) {
       expect(ent.has(scope)).toBe(true)
@@ -130,8 +142,13 @@ describe('scopeSatisfies()', () => {
         ApiScope.REPORTS_GENERATE,
         ApiScope.EXPORTS_READ,
         ApiScope.WEBHOOKS_ADMIN,
+        ApiScope.OUTBOX_REINJECT,
         ApiScope.ADMIN_READ,
         ApiScope.ADMIN_WRITE,
+        ApiScope.FLAGS_READ,
+        ApiScope.FLAGS_WRITE,
+        ApiScope.BOND_READ,
+        ApiScope.BOND_WRITE,
       ]
       for (const scope of granular) {
         expect(scopeSatisfies([ApiScope.ENTERPRISE], scope)).toBe(true)
@@ -159,6 +176,8 @@ describe('scopeSatisfies()', () => {
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.WEBHOOKS_ADMIN)).toBe(false)
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.ADMIN_READ)).toBe(false)
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.ADMIN_WRITE)).toBe(false)
+      expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.BOND_READ)).toBe(false)
+      expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.BOND_WRITE)).toBe(false)
     })
   })
 
@@ -311,6 +330,33 @@ describe('requireApiKey() middleware', () => {
       expect(next).not.toHaveBeenCalled()
     })
 
+    it('returns 403 when bond:read key is used on bond:write endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-bond-read-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.BOND_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when bond:read key is used on payouts:write endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-bond-read-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when flags:read key is used on flags:write endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-flags-read-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.FLAGS_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
     it('response body includes grantedScopes for debugging', () => {
       const req = makeReq({ 'x-api-key': 'test-trust-read-key' })
       const { res, json } = makeRes()
@@ -405,6 +451,51 @@ describe('requireApiKey() middleware', () => {
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
+
+    it('flags:read key passes flags:read endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-flags-read-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.FLAGS_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('flags:write key passes flags:write endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-flags-write-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.FLAGS_WRITE)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:read key passes bond:read endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-bond-read-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.BOND_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:write key passes bond:read endpoint (superset)', () => {
+      const req = makeReq({ 'x-api-key': 'test-bond-write-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.BOND_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:write key passes bond:write endpoint', () => {
+      const req = makeReq({ 'x-api-key': 'test-bond-write-key' })
+      const { res, status } = makeRes()
+      requireApiKey(ApiScope.BOND_WRITE)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
   })
 
   // ── ENTERPRISE superset ────────────────────────────────────────────────────
@@ -420,8 +511,13 @@ describe('requireApiKey() middleware', () => {
       ApiScope.REPORTS_GENERATE,
       ApiScope.EXPORTS_READ,
       ApiScope.WEBHOOKS_ADMIN,
+      ApiScope.OUTBOX_REINJECT,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.FLAGS_READ,
+      ApiScope.FLAGS_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
 
     for (const scope of allGranularScopes) {
@@ -485,6 +581,8 @@ describe('requireApiKey() middleware', () => {
       ApiScope.WEBHOOKS_ADMIN,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
 
     for (const scope of writeScopes) {

@@ -11,6 +11,50 @@ function createMockQueryable(rows: any[] = []): Queryable {
     query: vi.fn().mockResolvedValue({ rows, rowCount: rows.length }),
   } as unknown as Queryable
 }
+interface SessionRow {
+  id: string
+  expiresAt: Date
+}
+
+function createSessionQueryable(initialRows: SessionRow[], now: Date) {
+  const rows = [...initialRows]
+  const query = vi.fn(async (text: string, params?: readonly unknown[]) => {
+    const expiresAtOrBeforeNow = text.includes('expires_at <= NOW()')
+    const isExpired = (row: SessionRow) => expiresAtOrBeforeNow
+      ? row.expiresAt.getTime() <= now.getTime()
+      : row.expiresAt.getTime() < now.getTime()
+
+    if (text.includes('SELECT COUNT(*)')) {
+      return {
+        rows: [{ count: String(rows.filter(isExpired).length) }],
+        rowCount: 1,
+      }
+    }
+
+    if (text.includes('DELETE FROM idempotent_job_attempts')) {
+      const batchSize = params?.[0]
+      if (typeof batchSize !== 'number') {
+        throw new Error('Expected the delete query to receive a numeric batch size')
+      }
+
+      const idsToDelete = new Set(
+        rows.filter(isExpired).slice(0, batchSize).map((row) => row.id),
+      )
+      const retainedRows = rows.filter((row) => !idsToDelete.has(row.id))
+      const deletedCount = rows.length - retainedRows.length
+      rows.splice(0, rows.length, ...retainedRows)
+      return { rows: [], rowCount: deletedCount }
+    }
+
+    throw new Error(`Unexpected query: ${text}`)
+  })
+
+  return {
+    db: { query } as unknown as Queryable,
+    remainingIds: () => rows.map((row) => row.id),
+    query,
+  }
+}
 
 describe('ExpiredSessionsSweeper', () => {
   let mockDb: Queryable
@@ -73,6 +117,71 @@ describe('ExpiredSessionsSweeper', () => {
 
       expect(result.expiredCount).toBe(15000)
       expect(result.deletedCount).toBe(15000)
+    })
+    it('deletes_a_session_expiring_exactly_at_the_ttl_boundary', async () => {
+      const now = new Date('2026-07-27T12:00:00.000Z')
+      vi.useFakeTimers()
+      vi.setSystemTime(now)
+      const database = createSessionQueryable(
+        [{ id: 'at-boundary', expiresAt: now }],
+        now,
+      )
+
+      const result = await new ExpiredSessionsSweeper(database.db, {
+        batchSize: 1,
+        logger,
+      }).run()
+
+      expect(result).toMatchObject({ expiredCount: 1, deletedCount: 1 })
+      expect(database.remainingIds()).toEqual([])
+      expect(database.query).toHaveBeenCalledTimes(2)
+    })
+
+    it('deletes_only_expired_sessions_across_batches', async () => {
+      const now = new Date('2026-07-27T12:00:00.000Z')
+      vi.useFakeTimers()
+      vi.setSystemTime(now)
+      const database = createSessionQueryable(
+        [
+          { id: 'expired-1', expiresAt: new Date('2026-07-27T11:00:00.000Z') },
+          { id: 'live-1', expiresAt: new Date('2026-07-27T12:00:00.001Z') },
+          { id: 'expired-2', expiresAt: new Date('2026-07-27T11:30:00.000Z') },
+          { id: 'live-2', expiresAt: new Date('2026-07-28T12:00:00.000Z') },
+          { id: 'expired-3', expiresAt: new Date('2026-07-27T11:59:59.999Z') },
+        ],
+        now,
+      )
+
+      const result = await new ExpiredSessionsSweeper(database.db, {
+        batchSize: 2,
+        logger,
+      }).run()
+
+      expect(result).toMatchObject({ expiredCount: 3, deletedCount: 3 })
+      expect(database.remainingIds()).toEqual(['live-1', 'live-2'])
+      expect(database.query).toHaveBeenCalledTimes(3)
+    })
+
+    it('leaves_live_sessions_untouched', async () => {
+      const now = new Date('2026-07-27T12:00:00.000Z')
+      vi.useFakeTimers()
+      vi.setSystemTime(now)
+      const database = createSessionQueryable(
+        [
+          { id: 'live-1', expiresAt: new Date('2026-07-27T12:00:00.001Z') },
+          { id: 'live-2', expiresAt: new Date('2026-07-28T12:00:00.000Z') },
+        ],
+        now,
+      )
+
+      const result = await new ExpiredSessionsSweeper(database.db, {
+        batchSize: 1,
+        logger,
+      }).run()
+
+      expect(result).toMatchObject({ expiredCount: 0, deletedCount: 0 })
+      expect(database.remainingIds()).toEqual(['live-1', 'live-2'])
+      expect(database.query).toHaveBeenCalledTimes(1)
     })
 
     it('should handle no expired rows', async () => {

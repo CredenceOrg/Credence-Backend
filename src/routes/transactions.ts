@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { SettlementsRepository } from '../db/repositories/settlementsRepository.js'
-import { encodeCursor } from '../lib/pagination.js'
+import { encodeCursor, buildCursorPaginationLinks } from '../lib/pagination.js'
 import { pool } from '../db/pool.js'
 import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import { validate, type ValidatedRequest } from '../middleware/validate.js'
@@ -44,10 +44,13 @@ export function createTransactionsRouter(): Router {
           nextCursor = encodeCursor(last.settledAt.toISOString(), last.id)
         }
 
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
         res.status(200).json({
           success: true,
           data: settlements,
           next_cursor: nextCursor,
+          links: buildCursorPaginationLinks(fullUrl, limit, nextCursor),
         })
       } catch (error) {
         next(error)

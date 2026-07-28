@@ -208,6 +208,61 @@ Multiple errors may appear in a single response. See [docs/VALIDATION.md](VALIDA
 
 ---
 
+## HATEOAS pagination links
+
+Every paginated response includes a `links` object with fully qualified URLs following the
+[HATEOAS](https://en.wikipedia.org/wiki/HATEOAS) constraint. Clients SHOULD navigate through
+pages using these links instead of constructing URLs manually.
+
+The table below describes each relation that may appear:
+
+| Rel    | Offset / page | Cursor | Description                           |
+|--------|---------------|--------|---------------------------------------|
+| `self` | always        | always | The current page                      |
+| `first`| if pages > 1  | —      | The first page (page = 1)            |
+| `prev` | if page > 1   | —      | The previous page                     |
+| `next` | if more pages | if more results | The next page              |
+| `last` | if pages > 1  | —      | The last page                         |
+
+### Offset / page example
+
+```json
+{
+  "data": [ ... ],
+  "page":    2,
+  "limit":   20,
+  "total":   87,
+  "hasNext": true,
+  "links": {
+    "self":  "https://api.credence.org/v1/attestations/0xabcd?page=2&limit=20",
+    "first": "https://api.credence.org/v1/attestations/0xabcd?page=1&limit=20",
+    "prev":  "https://api.credence.org/v1/attestations/0xabcd?page=1&limit=20",
+    "next":  "https://api.credence.org/v1/attestations/0xabcd?page=3&limit=20",
+    "last":  "https://api.credence.org/v1/attestations/0xabcd?page=5&limit=20"
+  }
+}
+```
+
+### Cursor example
+
+```json
+{
+  "data": [ ... ],
+  "next_cursor": "eyJ0IjoiMjAyNC0wMS0xNVQwMDowMDowMC4wMDBaIiwiaSI6IjEyMzQifQ",
+  "links": {
+    "self": "https://api.credence.org/v1/transactions/history?limit=20",
+    "next": "https://api.credence.org/v1/transactions/history?cursor=eyJ0...&limit=20"
+  }
+}
+```
+
+The `self` link always reflects the current page (offset mode) or strips the
+cursor (cursor mode) so clients can bookmark or share the current result set.
+Query parameters unrelated to pagination (e.g. `status=active`, `bondId=abc`)
+are preserved in every link.
+
+---
+
 ## Quick reference
 
 ```

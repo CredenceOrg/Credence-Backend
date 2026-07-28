@@ -8,18 +8,22 @@ import disputesRouter from "./routes/disputes.js";
 import evidenceRouter from "./routes/evidence.js";
 import { loadConfig } from "./config/index.js";
 import { pool, workerPool, replicaPool } from "./db/pool.js";
+import {
+  validateMigrationChecksums,
+  resolveMigrationsDir,
+} from "./migrations/index.js";
 import { redisConnection } from "./cache/redis.js";
 import { createShutdownMetrics } from "./observability/shutdownMetrics.js";
 import { AnalyticsService } from "./services/analytics/service.js";
-import {
-  AnalyticsRefreshWorker,
-  getAnalyticsRefreshIntervalMs,
-} from "./jobs/analyticsRefreshWorker.js";
+import { createAnalyticsRefreshWorker } from "./jobs/analyticsRefreshWorker.js";
 import { AnalyticsRefreshScheduler } from "./jobs/analyticsRefreshScheduler.js";
 import { createAnalyticsRefreshMetrics } from "./jobs/analyticsRefreshMetrics.js";
 import { SettlementReconciler } from "./jobs/settlementReconciler.js";
 import { createScheduler } from "./jobs/scheduler.js";
 import { keyManager } from "./services/keyManager/index.js";
+import { initializeAuth } from "./lifecycle.js";
+import { KeyRotationScheduler } from "./jobs/keyRotationScheduler.js";
+import { validateConfig } from "./config/index.js";
 import { GracefulShutdownManager } from "./gracefulShutdown.js";
 import { FailedInboundEventsSweeper } from "./jobs/failedInboundEventsSweeper.js";
 import { PgStatActivitySnapshotJob } from "./jobs/pgStatActivitySnapshotJob.js";
@@ -60,6 +64,7 @@ let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
 let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
 let idempotencyKeySweeper: IdempotencyKeySweeper | null = null;
 let expiredSessionsSweeper: ExpiredSessionsSweeper | null = null;
+let keyRotationScheduler: KeyRotationScheduler | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -106,6 +111,47 @@ if (process.env.NODE_ENV !== "test") {
   try {
     const config = loadConfig();
 
+    if (process.env.MIGRATION_CHECKSUM_VALIDATE !== "false") {
+      const bootstrapMissing = process.env.MIGRATION_CHECKSUM_BOOTSTRAP !== "false";
+      try {
+        const checksumResult = await validateMigrationChecksums(
+          pool,
+          {
+            migrationsDir: resolveMigrationsDir(),
+            migrationsTable: process.env.MIGRATIONS_TABLE ?? "pgmigrations",
+            migrationsSchema: process.env.MIGRATIONS_SCHEMA ?? "public",
+          },
+          { bootstrapMissing },
+        );
+        if (checksumResult.bootstrapped.length > 0) {
+          logger.info(
+            `[Main] Bootstrapped migration checksums for: ${checksumResult.bootstrapped.join(", ")}`,
+          );
+        }
+      } catch (checksumErr) {
+        logger.error(
+          `[Main] Aborting startup — migration checksum validation failed: ${
+            checksumErr instanceof Error ? checksumErr.message : String(checksumErr)
+          }`,
+          checksumErr,
+        );
+        process.exit(1);
+      }
+    }
+
+    // Bootstrap the JWT signing key BEFORE accepting traffic so the
+    // `/.well-known/jwks.json` endpoint and JWT signing respond with
+    // real data from the first request. Failure is fatal.
+    await initializeAuth().catch((bootstrapErr) => {
+      logger.error(
+        `[Main] Aborting startup — KeyManager bootstrap failed: ${
+          bootstrapErr instanceof Error ? bootstrapErr.message : String(bootstrapErr)
+        }`,
+        bootstrapErr,
+      );
+      process.exit(1);
+    });
+
     server = app.listen(config.port, () => {
       logger.info(`Credence API listening on port ${config.port}`);
     });
@@ -142,24 +188,37 @@ if (process.env.NODE_ENV !== "test") {
     installShutdownHandlers();
 
     if (process.env.DATABASE_URL) {
+      const analyticsConfig = config.analyticsRefresh;
       const thresholdSeconds = Number(
         process.env.ANALYTICS_STALENESS_SECONDS ?? "300",
       );
       const analyticsService = new AnalyticsService(pool, thresholdSeconds);
       const metrics = createAnalyticsRefreshMetrics();
-      const refreshWorker = new AnalyticsRefreshWorker(
-        analyticsService,
-        logger.info,
+
+      // The refresh worker uses the workerPool so background refresh
+      // traffic never starves the API/replica pools of connections.
+      const refreshWorker = createAnalyticsRefreshWorker({
+        pool: workerPool,
+        maxAttemptsPerView: analyticsConfig.maxAttemptsPerView,
+        retryBackoffMs: analyticsConfig.retryBackoffMs,
         metrics,
-      );
-      const intervalMs = getAnalyticsRefreshIntervalMs();
+        logger: logger.info,
+      });
 
       const refreshScheduler = new AnalyticsRefreshScheduler(refreshWorker, {
-        intervalMs,
-        runOnStart: true,
+        intervalMs: analyticsConfig.intervalMs,
+        runOnStart: analyticsConfig.enabled,
         logger: logger.info,
         metrics,
+        lockTtlMs: analyticsConfig.lockTtlMs,
+        failCooldownThreshold: analyticsConfig.failCooldownThreshold,
+        failCooldownMs: analyticsConfig.failCooldownMs,
       });
+      if (!analyticsConfig.enabled) {
+        logger.info(
+          "[Main] Analytics refresh is disabled by config (ANALYTICS_REFRESH_ENABLED=false)",
+        );
+      }
 
       const reconcilerJob = new SettlementReconciler(pool);
       const reconcilerScheduler = createScheduler(reconcilerJob, {
@@ -315,6 +374,26 @@ if (process.env.NODE_ENV !== "test") {
       logger.error(`Failed to start cache invalidation bus: ${message}`, error);
     }
 
+    // Start JWT signing-key rotation scheduler.
+    // Rotation interval is configurable (KEY_ROTATION_INTERVAL_SECONDS, default 24h).
+    // The pruning tick is hourly so retired keys are GC'd even if rotation halts.
+    try {
+      const jwtConfig = validateConfig(process.env).jwt;
+      const rotationIntervalMs = jwtConfig.keyRotationIntervalSeconds * 1000;
+      keyRotationScheduler = new KeyRotationScheduler({
+        rotationIntervalMs,
+        pruneIntervalMs: 60 * 60 * 1000,
+        logger: logger.info,
+      });
+      keyRotationScheduler.start();
+      logger.info(
+        `[Main] Key Rotation Scheduler started (rotate every ${jwtConfig.keyRotationIntervalSeconds}s, prune every 3600s)`,
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown error";
+      logger.error(`Failed to start Key Rotation Scheduler: ${message}`, error);
+    }
+
     shutdownManager?.setScheduler(scheduler);
     shutdownManager?.setOutboxJob(outboxJob);
     shutdownManager?.setWss(wss);
@@ -339,6 +418,10 @@ if (process.env.NODE_ENV !== "test") {
         if (longTransactionReaper) {
           logger.info("[Main] Stopping Long Transaction Reaper");
           longTransactionReaper.stop();
+        }
+        if (keyRotationScheduler) {
+          logger.info("[Main] Stopping Key Rotation Scheduler");
+          keyRotationScheduler.stop();
         }
         return originalShutdown(signal ?? "SIGTERM");
       };
