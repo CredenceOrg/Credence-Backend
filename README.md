@@ -135,6 +135,8 @@ All configuration is driven by environment variables. Copy `.env.example` to `.e
 | `REDIS_PORT`        | `6379`     | Host-exposed Redis port   |
 | `DATABASE_URL`      | (composed) | Full PG connection string |
 | `REDIS_URL`         | (composed) | Full Redis connection URL |
+| `MAINTENANCE_MODE_ENABLED` | `false` | Reject mutating requests with `503` and `Retry-After` while maintenance is active |
+| `MAINTENANCE_MODE_RETRY_AFTER_SECONDS` | `60` | Retry window to return on maintenance-mode responses |
 
 ---
 

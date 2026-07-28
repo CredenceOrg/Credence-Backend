@@ -1,3 +1,6 @@
+/** Response header carrying the server-side processing time in milliseconds. */
+export const HEADER_RESPONSE_TIME_MS = 'x-response-time-ms'
+
 /** Header echoed from request to response to help clients debug retry loops. */
 export const HEADER_REQUEST_ATTEMPT = 'x-request-attempt'
 

@@ -216,6 +216,15 @@ export const envSchema = z.object({
     .string()
     .default('false')
     .transform((val: string) => val === 'true'),
+  MAINTENANCE_MODE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val: string) => val === 'true'),
+  MAINTENANCE_MODE_RETRY_AFTER_SECONDS: z
+    .string()
+    .default('60')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(86400)),
 
   // Outbox
   OUTBOX_ENABLED: z
@@ -653,6 +662,10 @@ export interface Config {
     trustScoring: boolean
     bondEvents: boolean
   }
+  maintenanceMode: {
+    enabled: boolean
+    retryAfterSeconds: number
+  }
   outbox: {
     enabled: boolean
     pollIntervalMs: number
@@ -910,6 +923,10 @@ function mapEnvToConfig(env: Env): Config {
     features: {
       trustScoring: env.ENABLE_TRUST_SCORING,
       bondEvents: env.ENABLE_BOND_EVENTS,
+    },
+    maintenanceMode: {
+      enabled: env.MAINTENANCE_MODE_ENABLED,
+      retryAfterSeconds: env.MAINTENANCE_MODE_RETRY_AFTER_SECONDS,
     },
     outbox: {
       enabled: env.OUTBOX_ENABLED,

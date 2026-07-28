@@ -35,7 +35,8 @@
     "test:db:reset": "npm run build && tsx scripts/reset-test-db.ts",
     "generate:openapi": "npx tsx scripts/generate-openapi.ts",
     "drill:horizon": "tsx scripts/horizon-failover-drill.ts",
-    "drill:restore": "tsx scripts/restore-verify.ts"
+    "drill:restore": "tsx scripts/restore-verify.ts",
+    "cache:invalidate-tenant": "tsx src/cli/invalidateTenantCache.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.7.0",

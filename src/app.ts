@@ -18,6 +18,7 @@ import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
 import { cache } from "./cache/redis.js";
 import { pool } from "./db/pool.js";
+import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
 import { correlationIdMiddleware } from "./middleware/correlationId.js";
 import { latencyBudgetMiddleware } from "./middleware/latencyBudget.js";
@@ -42,18 +43,7 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
-import reportRouter from "./routes/report.js";
-import cspReportRouter from "./routes/cspReport.js";
-
-import { idempotencyMiddleware } from "./middleware/idempotency.js";
-import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
-import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
-import { clientVersionEchoMiddleware } from "./middleware/clientVersionEcho.js";
-import { requestAttemptEchoMiddleware } from "./middleware/requestAttemptEcho.js";
-import { RedisConnection } from "./cache/redis.js";
-import { createFaultInjectionRouter } from "./routes/faultInjection.js";
-import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
-import { createAuthRouter } from "./routes/auth.js";
+import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
 
 const app = express();
 
@@ -81,49 +71,14 @@ try {
 }
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
-let authRateLimitConfig: {
-  enabled: boolean;
-  windowSec: number;
-  maxPerTenant: number;
-  failOpen: boolean;
-};
+// Resolve maintenance mode flag at startup; default to off when config is invalid.
+let maintenanceModeEnabled = false;
 try {
-  authRateLimitConfig = validateConfig(process.env).authRateLimit;
+  maintenanceModeEnabled = validateConfig(process.env).maintenanceMode.enabled;
 } catch {
-  const isProd = process.env.NODE_ENV === "production";
-  authRateLimitConfig = {
-    enabled: true,
-    windowSec: 60,
-    maxPerTenant: 20,
-    failOpen: !isProd,
-  };
+  // Fail-open for maintenance mode: an invalid config must not block startup.
 }
-
-let globalTimeoutMs: number;
-try {
-  globalTimeoutMs = validateConfig(process.env).timeouts.global;
-} catch {
-  globalTimeoutMs = 30000;
-}
-const timeoutBudgetMiddleware = createTimeoutBudgetMiddleware(globalTimeoutMs);
-
-let jwksCacheMaxAge: number;
-try {
-  jwksCacheMaxAge = validateConfig(process.env).jwt.jwksCacheMaxAgeSeconds;
-} catch {
-  jwksCacheMaxAge = 300;
-}
-
-let compressionOpts: {
-  enabled: boolean;
-  thresholdBytes: number;
-} = { enabled: true, thresholdBytes: 1024 };
-try {
-  compressionOpts = validateConfig(process.env).compression;
-} catch {
-  // keep defaults
-}
-const compressionMiddleware = createCompressionMiddleware(compressionOpts);
+const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
 
 app.use(correlationIdMiddleware);
 app.use(requestIdMiddleware);
@@ -164,6 +119,7 @@ app.use(gracefulDegradeMiddleware);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+app.use(maintenanceModeMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();

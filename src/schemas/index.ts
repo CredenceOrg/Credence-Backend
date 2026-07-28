@@ -202,10 +202,6 @@ export {
   type MigrationsDryRunBody,
   type MigrationsDryRunResponse,
   type ReplayEventBody,
-  resetCacheBodySchema,
-  resetCacheResponseSchema,
-  type ResetCacheBody,
-  type ResetCacheResponse,
 } from './admin.js'
 export {
   redirectTargetSchema,

@@ -42,13 +42,8 @@ import {
   revokeApiKeyBodySchema,
   issueImpersonationTokenBodySchema,
   replayEventBodySchema,
-  replayWebhookBodySchema,
-  purgeCacheBodySchema,
-  resetCacheBodySchema,
 } from '../../schemas/admin.js'
-import type { ReplayEventBody, ReplayWebhookBody, PurgeCacheBody, ResetCacheBody } from '../../schemas/admin.js'
-import { cache } from '../../cache/redis.js'
-import { invalidateCache, invalidatePattern } from '../../cache/invalidation.js'
+import type { ReplayEventBody } from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
 import { validateConfig, ConfigValidationError } from "../../config/index.js";
@@ -579,6 +574,40 @@ export function createAdminRouter(): Router {
         const result = await webhookService.replayWebhook(
           id,
           { id: admin.id, email: admin.email, tenantId: admin.tenantId },
+          requestId
+        )
+
+        res.status(200).json(result)
+      } catch (error: any) {
+        next(error)
+      }
+    }
+  )
+
+  /**
+   * POST /api/admin/replay-event
+   *
+   * Replay a specific failed inbound event by id (passed in body).
+   * Audit-logged via ReplayService.replayEvent.
+   */
+  router.post(
+    '/replay-event',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: replayEventBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+        const { id } = req.body as ReplayEventBody
+
+        const result = await replayService.replayEvent(
+          id,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip,
           requestId
         )
 
