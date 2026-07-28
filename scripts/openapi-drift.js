@@ -42,6 +42,7 @@ function getRegisteredRoutes() {
     { path: '/api/version', method: 'get' },
     { path: '/api/wallets', method: 'post' },
     { path: '/api/wallets/:id/debit', method: 'post' },
+    { path: '/api/dev/fault-injection', method: 'post' },
   ];
   return routes.filter(r => !isAdminRoute(r.path));
 }
