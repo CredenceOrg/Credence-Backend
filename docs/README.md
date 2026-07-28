@@ -17,3 +17,5 @@ This directory contains additional documentation for the Credence Backend.
 - **[Cache Inventory](CACHE_INVENTORY.md)** – every cache namespace in the codebase and its TTL, in one table.
 - **[Rate Limiting Design](RATE_LIMITING_DESIGN.md)** – tenant/IP/key rate-limiting windows and tiers.
 - **[Input Validation Guide](INPUT_VALIDATION.md)** – how we validate request inputs (path params, query, body) and surface errors.
+- **[API Change Log](API_CHANGELOG.md)** – format guide and single source of truth for every API change with impact notes.
+- **[Retry Semantics](RETRY_SEMANTICS.md)** – which endpoints are idempotent-safe to retry and how to use idempotency keys.

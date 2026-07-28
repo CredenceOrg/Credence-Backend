@@ -213,7 +213,9 @@ Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
 **API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**  
-**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**
+**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**  
+**API change log & format guide:** **[docs/API_CHANGELOG.md](docs/API_CHANGELOG.md)**  
+**Retry semantics:** **[docs/RETRY_SEMANTICS.md](docs/RETRY_SEMANTICS.md)**
 
 ### OpenAPI spec
 
