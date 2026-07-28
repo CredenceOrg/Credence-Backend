@@ -17,3 +17,4 @@ This directory contains additional documentation for the Credence Backend.
 - **[Cache Inventory](CACHE_INVENTORY.md)** – every cache namespace in the codebase and its TTL, in one table.
 - **[Rate Limiting Design](RATE_LIMITING_DESIGN.md)** – tenant/IP/key rate-limiting windows and tiers.
 - **[Input Validation Guide](INPUT_VALIDATION.md)** – how we validate request inputs (path params, query, body) and surface errors.
+- **[Per-Route CORS Policy](CORS_POLICY.md)** – allowed origins and HTTP methods per route group, enforcement middleware, and negative-test guidance.

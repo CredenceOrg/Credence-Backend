@@ -150,6 +150,9 @@ router.get(
  * Downloads a report artifact using a signed URL.
  * The signature, expires, and key are validated before serving the data.
  *
+ * **CORS policy:** Open — signed URLs are the credential; cross-origin
+ * `GET` is allowed. See `docs/CORS_POLICY.md`.
+ *
  * @param {string} key - Encoded storage key
  * @query {number} expires - Expiration timestamp (ms)
  * @query {string} signature - HMAC-SHA256 signature

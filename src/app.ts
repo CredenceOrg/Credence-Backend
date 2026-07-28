@@ -31,7 +31,7 @@ import { tenantContextMiddleware } from "./middleware/tenantContext.js";
 import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
 import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
-  createCompressionMiddleware,
+  compressionMiddleware,
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
@@ -42,7 +42,19 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
+import reportRouter from "./routes/report.js";
+import cspReportRouter from "./routes/cspReport.js";
+import { idempotencyMiddleware } from "./middleware/idempotency.js";
+import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
+import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
+import { clientVersionEchoMiddleware } from "./middleware/clientVersionEcho.js";
+import { requestAttemptEchoMiddleware } from "./middleware/requestAttemptEcho.js";
+import { RedisConnection } from "./cache/redis.js";
+import { createFaultInjectionRouter } from "./routes/faultInjection.js";
+import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
+import { createAuthRouter } from "./routes/auth.js";
 import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
+import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
 
 const app = express();
 
@@ -70,6 +82,32 @@ try {
 }
 const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
 
+let authRateLimitConfig: {
+  enabled: boolean;
+  windowSec: number;
+  maxPerTenant: number;
+  failOpen: boolean;
+};
+try {
+  authRateLimitConfig = validateConfig(process.env).authRateLimit;
+} catch {
+  const isProd = process.env.NODE_ENV === "production";
+  authRateLimitConfig = {
+    enabled: true,
+    windowSec: 60,
+    maxPerTenant: 20,
+    failOpen: !isProd,
+  };
+}
+
+let globalTimeoutMs: number;
+try {
+  globalTimeoutMs = validateConfig(process.env).timeouts.global;
+} catch {
+  globalTimeoutMs = 30000;
+}
+const timeoutBudgetMiddleware = createTimeoutBudgetMiddleware(globalTimeoutMs);
+
 // Resolve maintenance mode flag at startup; default to off when config is invalid.
 let maintenanceModeEnabled = false;
 try {
@@ -79,6 +117,14 @@ try {
 }
 const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
 
+let corsOrigin = "*";
+try {
+  corsOrigin = validateConfig(process.env).cors.origin;
+} catch {
+  // Default to wildcard when config is invalid (dev/test convenience).
+}
+
+app.use(responseTimeMiddleware);
 app.use(requestIdMiddleware);
 app.use(securityHeadersMiddleware);
 app.use(cacheHeaderMiddleware);
@@ -114,6 +160,8 @@ app.use(jsonBodyParser);
 app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 app.use(gracefulDegradeMiddleware);
+
+applyRouteCorsPolicy(app, corsOrigin);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
