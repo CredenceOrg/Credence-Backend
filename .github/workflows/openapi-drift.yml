@@ -5,6 +5,10 @@ on:
 jobs:
   check-drift:
     runs-on: ubuntu-latest
+    env:
+      DB_URL: postgresql://user:pass@localhost:5432/credence_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: test-jwt-secret-32-characters-long!
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

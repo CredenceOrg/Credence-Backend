@@ -47,16 +47,25 @@ jobs:
 
       - name: Run integration tests
         env:
+          DB_URL: postgresql://credence:credence@localhost:5432/credence_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-jwt-secret-32-characters-long!
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm test
 
       - name: Run tests with coverage
         env:
+          DB_URL: postgresql://credence:credence@localhost:5432/credence_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-jwt-secret-32-characters-long!
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm run coverage
 
       - name: Enforce 95% coverage on audit-sensitive flows
         env:
+          DB_URL: postgresql://credence:credence@localhost:5432/credence_test
+          REDIS_URL: redis://localhost:6379
+          JWT_SECRET: test-jwt-secret-32-characters-long!
           TEST_DATABASE_URL: postgresql://credence:credence@localhost:5432/credence_test
         run: npm run coverage:audit
 
