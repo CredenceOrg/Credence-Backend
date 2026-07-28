@@ -58,6 +58,7 @@ import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js
 import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
 import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
 import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
+import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
 
 const app = express();
 
@@ -129,6 +130,8 @@ try {
 
 app.use(responseTimeMiddleware);
 app.use(requestIdMiddleware);
+app.use(correlationIdMiddleware);
+app.use(structuredLoggingMiddleware);
 app.use(securityHeadersMiddleware);
 app.use(cacheHeaderMiddleware);
 app.use(clientVersionEchoMiddleware);
