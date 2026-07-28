@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import express, { Request, Response, NextFunction } from 'express'
 import request from 'supertest'
 import { createOutboxAdminRouter } from './outbox.js'
-import { errorHandler } from '../../middleware/errorHandler.js'
+import { resetWorkerHealthState } from '../../services/health/runtimeState.js'
 
 const { mockUserRef, mockAuditLogService } = vi.hoisted(() => ({
   mockUserRef: { current: null as { id: string; email: string; role: string; tenantId: string } | null },
@@ -34,18 +34,13 @@ vi.mock('../../middleware/auth.ts', () => ({
   AuthenticatedRequest: class {},
 }))
 
-vi.mock('../../middleware/errorHandler.js', () => ({
-  errorHandler: (err: any, _req: Request, res: Response, _next: NextFunction) => {
-    res.status(500).json({ error: 'Internal Server Error', code: 'internal_server_error' })
-  },
-}))
-
 vi.mock('../../services/audit/index.js', () => ({
   auditLogService: mockAuditLogService,
   AuditAction: {
     LIST_OUTBOX_QUARANTINE: 'LIST_OUTBOX_QUARANTINE',
     OUTBOX_REINJECT: 'OUTBOX_REINJECT',
     OUTBOX_PAUSE: 'OUTBOX_PAUSE',
+    OUTBOX_RESUME: 'OUTBOX_RESUME',
   },
 }))
 
@@ -56,9 +51,10 @@ function setup() {
   return app
 }
 
-describe('Admin Outbox Router - POST /pause', () => {
+describe('Admin Outbox Router', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    resetWorkerHealthState()
     mockUserRef.current = {
       id: 'admin-1',
       email: 'admin@test.com',
@@ -67,56 +63,198 @@ describe('Admin Outbox Router - POST /pause', () => {
     }
   })
 
-  it('returns_401_when_unauthenticated', async () => {
-    mockUserRef.current = null
-
-    const res = await request(setup())
-      .post('/api/admin/outbox/pause')
-      .send()
-
-    expect(res.status).toBe(401)
-    expect(res.body.error).toBe('Unauthorized')
+  afterEach(() => {
+    resetWorkerHealthState()
   })
 
-  it('returns_403_when_not_admin', async () => {
-    mockUserRef.current = {
-      id: 'user-1',
-      email: 'user@test.com',
-      role: 'user',
-      tenantId: 'tenant-1',
-    }
+  describe('POST /pause', () => {
+    it('returns_401_when_unauthenticated', async () => {
+      mockUserRef.current = null
 
-    const res = await request(setup())
-      .post('/api/admin/outbox/pause')
-      .send()
+      const res = await request(setup())
+        .post('/api/admin/outbox/pause')
+        .send()
 
-    expect(res.status).toBe(403)
-    expect(res.body.error).toBe('Forbidden')
+      expect(res.status).toBe(401)
+      expect(res.body.error).toBe('Unauthorized')
+    })
+
+    it('returns_403_when_not_admin', async () => {
+      mockUserRef.current = {
+        id: 'user-1',
+        email: 'user@test.com',
+        role: 'user',
+        tenantId: 'tenant-1',
+      }
+
+      const res = await request(setup())
+        .post('/api/admin/outbox/pause')
+        .send()
+
+      expect(res.status).toBe(403)
+      expect(res.body.error).toBe('Forbidden')
+    })
+
+    it('returns_200_on_successful_pause', async () => {
+      const res = await request(setup())
+        .post('/api/admin/outbox/pause')
+        .send()
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ success: true, message: 'Outbox publisher paused' })
+    })
+
+    it('returns_200_even_when_called_twice', async () => {
+      // Pause is unconditional — calling it multiple times is safe
+      await request(setup()).post('/api/admin/outbox/pause').send()
+
+      const res = await request(setup())
+        .post('/api/admin/outbox/pause')
+        .send()
+
+      expect(res.status).toBe(200)
+    })
+
+    it('writes_audit_log_entry_on_pause', async () => {
+      await request(setup())
+        .post('/api/admin/outbox/pause')
+        .send()
+
+      expect(mockAuditLogService.logAction).toHaveBeenCalledTimes(1)
+
+      const callArgs = mockAuditLogService.logAction.mock.calls[0]
+      expect(callArgs[0]).toBe('tenant-1')
+      expect(callArgs[1]).toBe('admin-1')
+      expect(callArgs[2]).toBe('admin@test.com')
+      expect(callArgs[3]).toBe('OUTBOX_PAUSE')
+      expect(callArgs[4]).toBe('admin-1')
+      expect(callArgs[7]).toBe('success')
+      expect(callArgs[9]).toBeDefined()
+    })
   })
 
-  it('returns_200_on_successful_pause', async () => {
-    const res = await request(setup())
-      .post('/api/admin/outbox/pause')
-      .send()
+  describe('POST /resume', () => {
+    it('returns_200_on_successful_resume_after_pause', async () => {
+      // Pause first (sets running = false)
+      await request(setup()).post('/api/admin/outbox/pause').send()
 
-    expect(res.status).toBe(200)
-    expect(res.body).toEqual({ success: true, message: 'Outbox publisher paused' })
+      // Then resume
+      const res = await request(setup())
+        .post('/api/admin/outbox/resume')
+        .send()
+
+      expect(res.status).toBe(200)
+      expect(res.body).toEqual({ success: true, message: 'Outbox publisher resumed' })
+    })
+
+    it('returns_409_when_already_running', async () => {
+      // Running is initially false. Pause sets to false. Resume sets to true.
+      // A second resume should fail.
+      await request(setup()).post('/api/admin/outbox/pause').send()
+      await request(setup()).post('/api/admin/outbox/resume').send()
+
+      const res = await request(setup())
+        .post('/api/admin/outbox/resume')
+        .send()
+
+      expect(res.status).toBe(409)
+      expect(res.body.message).toBe('Outbox publisher is already running')
+    })
+
+    it('returns_401_when_unauthenticated', async () => {
+      mockUserRef.current = null
+
+      const res = await request(setup())
+        .post('/api/admin/outbox/resume')
+        .send()
+
+      expect(res.status).toBe(401)
+      expect(res.body.error).toBe('Unauthorized')
+    })
+
+    it('returns_403_when_not_admin', async () => {
+      mockUserRef.current = {
+        id: 'user-1',
+        email: 'user@test.com',
+        role: 'user',
+        tenantId: 'tenant-1',
+      }
+
+      const res = await request(setup())
+        .post('/api/admin/outbox/resume')
+        .send()
+
+      expect(res.status).toBe(403)
+      expect(res.body.error).toBe('Forbidden')
+    })
+
+    it('writes_audit_log_entry_on_successful_resume', async () => {
+      // Pause first
+      await request(setup()).post('/api/admin/outbox/pause').send()
+
+      // Then resume
+      await request(setup()).post('/api/admin/outbox/resume').send()
+
+      // Should have 2 log calls: pause + resume
+      expect(mockAuditLogService.logAction).toHaveBeenCalledTimes(2)
+
+      const resumeCallArgs = mockAuditLogService.logAction.mock.calls[1]
+      expect(resumeCallArgs[3]).toBe('OUTBOX_RESUME')
+      expect(resumeCallArgs[7]).toBe('success')
+    })
   })
 
-  it('writes_audit_log_entry_on_successful_pause', async () => {
-    await request(setup())
-      .post('/api/admin/outbox/pause')
-      .send()
+  describe('GET /status', () => {
+    it('returns_200_with_current_status', async () => {
+      const res = await request(setup())
+        .get('/api/admin/outbox/status')
+        .send()
 
-    expect(mockAuditLogService.logAction).toHaveBeenCalledTimes(1)
+      expect(res.status).toBe(200)
+      expect(res.body.success).toBe(true)
+      expect(res.body.data).toHaveProperty('running')
+      expect(res.body.data).toHaveProperty('configured')
+      expect(res.body.data).toHaveProperty('lastHeartbeatAt')
+    })
 
-    const callArgs = mockAuditLogService.logAction.mock.calls[0]
-    expect(callArgs[0]).toBe('tenant-1')
-    expect(callArgs[1]).toBe('admin-1')
-    expect(callArgs[2]).toBe('admin@test.com')
-    expect(callArgs[3]).toBe('OUTBOX_PAUSE')
-    expect(callArgs[4]).toBe('admin-1')
-    expect(callArgs[7]).toBe('success')
-    expect(callArgs[9]).toBeDefined()
+    it('shows_running_false_after_reset', async () => {
+      const res = await request(setup())
+        .get('/api/admin/outbox/status')
+        .send()
+
+      // Default state after resetWorkerHealthState is running: false
+      expect(res.body.data.running).toBe(false)
+    })
+
+    it('shows_running_false_after_pause', async () => {
+      await request(setup()).post('/api/admin/outbox/pause').send()
+
+      const res = await request(setup())
+        .get('/api/admin/outbox/status')
+        .send()
+
+      expect(res.body.data.running).toBe(false)
+    })
+
+    it('shows_running_true_after_resume', async () => {
+      await request(setup()).post('/api/admin/outbox/pause').send()
+      await request(setup()).post('/api/admin/outbox/resume').send()
+
+      const res = await request(setup())
+        .get('/api/admin/outbox/status')
+        .send()
+
+      expect(res.body.data.running).toBe(true)
+    })
+
+    it('returns_401_when_unauthenticated', async () => {
+      mockUserRef.current = null
+
+      const res = await request(setup())
+        .get('/api/admin/outbox/status')
+        .send()
+
+      expect(res.status).toBe(401)
+    })
   })
 })

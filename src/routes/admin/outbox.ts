@@ -12,6 +12,10 @@ import {
 } from '../../middleware/auth.js'
 import { auditLogService, AuditAction } from '../../services/audit/index.js'
 import { sendError, ErrorCode } from '../../lib/errors.js'
+import {
+  setOutboxPublisherRunning,
+  getOutboxPublisherState,
+} from '../../services/health/runtimeState.js'
 
 const quarantineReasons = new Set<OutboxQuarantineReason>([
   'malformed_json',
@@ -157,6 +161,10 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
    *
    * Pause the outbox publisher. Requires admin authentication.
    * Logs an audit entry on success.
+   * Uses runtime state to signal the outbox publisher to stop processing.
+   *
+   * This handler sets `running = false` unconditionally, so calling it
+   * when already paused is a safe no-op (only the audit entry is written).
    */
   router.post(
     '/pause',
@@ -167,6 +175,8 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
         const authReq = req as AuthenticatedRequest
         const admin = authReq.user!
         const requestId = (req as any).requestId
+
+        setOutboxPublisherRunning(false)
 
         await auditLogService.logAction(
           admin.tenantId,
@@ -183,6 +193,80 @@ export function createOutboxAdminRouter(repository = new OutboxRepository()): Ro
         )
 
         res.status(200).json({ success: true, message: 'Outbox publisher paused' })
+      } catch (error) {
+        next(error)
+      }
+    }
+  )
+
+  /**
+   * POST /resume
+   *
+   * Resume the outbox publisher. Requires admin authentication.
+   * Logs an audit entry on success.
+   * Guards against resuming when already running to avoid redundant audit entries.
+   */
+  router.post(
+    '/resume',
+    requireUserAuth,
+    requireAdminRole,
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+
+        const state = getOutboxPublisherState()
+        if (state.running) {
+          res.status(409).json({ success: false, message: 'Outbox publisher is already running' })
+          return
+        }
+
+        setOutboxPublisherRunning(true)
+
+        await auditLogService.logAction(
+          admin.tenantId,
+          admin.id,
+          admin.email,
+          AuditAction.OUTBOX_RESUME,
+          admin.id,
+          undefined,
+          undefined,
+          'success',
+          undefined,
+          req.ip,
+          requestId
+        )
+
+        res.status(200).json({ success: true, message: 'Outbox publisher resumed' })
+      } catch (error) {
+        next(error)
+      }
+    }
+  )
+
+  /**
+   * GET /status
+   *
+   * Returns the current outbox publisher status (running/paused).
+   * Requires admin authentication.
+   */
+  router.get(
+    '/status',
+    requireUserAuth,
+    requireAdminRole,
+    async (_req: Request, res: Response, next: NextFunction) => {
+      try {
+        const state = getOutboxPublisherState()
+
+        res.status(200).json({
+          success: true,
+          data: {
+            running: state.running,
+            configured: state.configured,
+            lastHeartbeatAt: state.lastHeartbeatAt,
+          },
+        })
       } catch (error) {
         next(error)
       }
