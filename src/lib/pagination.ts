@@ -283,63 +283,91 @@ export function buildCursorEnvelope<T>(
   }
 }
 
-export interface LinkHeaderOptions {
-  baseUrl: string
-  page: number
-  limit: number
-  total: number
+/**
+ * HATEOAS pagination links for offset-based pagination.
+ * Maps relation names to fully qualified URLs.
+ */
+export interface PaginationLinks {
+  self: string
+  first?: string
+  prev?: string
+  next?: string
+  last?: string
 }
 
 /**
- * Builds an RFC 5988 Link header string for page/limit based pagination.
+ * Build HATEOAS pagination links for offset/page-based responses.
  *
- * Rules:
- * - First page (page <= 1) has NO 'prev' link.
- * - Last page (page * limit >= total) has NO 'next' link.
- * - 'first' and 'last' links are always included when total > 0.
- *
- * Example:
- * `<http://api.example.com/items?page=1&limit=10>; rel="first", <http://api.example.com/items?page=3&limit=10>; rel="next", <http://api.example.com/items?page=5&limit=10>; rel="last"`
+ * @param requestUrl - The full URL of the current request (protocol + host + path + query).
+ * @param page       - The current page number.
+ * @param limit      - The page size.
+ * @param total      - Total number of matching records.
+ * @returns A PaginationLinks object with self, first, prev, next, and last links as applicable.
  */
-export function buildLinkHeader(options: LinkHeaderOptions): string | null {
-  const { baseUrl, page, limit, total } = options
+export function buildPaginationLinks(
+  requestUrl: string,
+  page: number,
+  limit: number,
+  total: number,
+): PaginationLinks {
+  const url = new URL(requestUrl)
+  url.searchParams.set('page', String(page))
+  url.searchParams.set('limit', String(limit))
+  url.searchParams.delete('offset')
+  const self = url.toString()
 
-  if (total <= 0) {
-    return null
+  const totalPages = Math.ceil(total / limit)
+  const links: PaginationLinks = { self }
+
+  if (total <= 0) return links
+
+  if (totalPages > 1) {
+    url.searchParams.set('page', String(1))
+    links.first = url.toString()
   }
 
-  const lastPage = Math.max(1, Math.ceil(total / limit))
-  const links: string[] = []
-
-  // Helper to format URL with page and limit
-  const formatUrl = (p: number) => {
-    const url = new URL(baseUrl, 'http://localhost')
-    url.searchParams.set('page', String(p))
-    url.searchParams.set('limit', String(limit))
-    // Return relative or full URL path + query string based on baseUrl input
-    if (baseUrl.startsWith('http://') || baseUrl.startsWith('https://')) {
-      return url.toString()
-    }
-    return `${url.pathname}${url.search}`
-  }
-
-  // 'first' link
-  links.push(`<${formatUrl(1)}>; rel="first"`)
-
-  // 'prev' link: only included if page > 1
   if (page > 1) {
-    const prevPage = Math.min(page - 1, lastPage)
-    links.push(`<${formatUrl(prevPage)}>; rel="prev"`)
+    url.searchParams.set('page', String(page - 1))
+    links.prev = url.toString()
   }
 
-  // 'next' link: only included if page < lastPage
-  if (page < lastPage) {
-    links.push(`<${formatUrl(page + 1)}>; rel="next"`)
+  if (page < totalPages) {
+    url.searchParams.set('page', String(page + 1))
+    links.next = url.toString()
   }
 
-  // 'last' link
-  links.push(`<${formatUrl(lastPage)}>; rel="last"`)
+  if (totalPages > 1) {
+    url.searchParams.set('page', String(totalPages))
+    links.last = url.toString()
+  }
 
-  return links.join(', ')
+  return links
 }
 
+/**
+ * Build HATEOAS pagination links for cursor-based responses.
+ *
+ * @param requestUrl - The full URL of the current request (protocol + host + path + query).
+ * @param limit      - The page size.
+ * @param nextCursor - The cursor for the next page, or null/undefined if there are no more results.
+ * @returns A PaginationLinks object with self and optionally next links.
+ */
+export function buildCursorPaginationLinks(
+  requestUrl: string,
+  limit: number,
+  nextCursor?: string | null,
+): PaginationLinks {
+  const url = new URL(requestUrl)
+  url.searchParams.set('limit', String(limit))
+  url.searchParams.delete('cursor')
+  const self = url.toString()
+
+  const links: PaginationLinks = { self }
+
+  if (nextCursor) {
+    url.searchParams.set('cursor', nextCursor)
+    links.next = url.toString()
+  }
+
+  return links
+}

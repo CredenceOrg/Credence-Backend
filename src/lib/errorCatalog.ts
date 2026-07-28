@@ -179,6 +179,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'Automated crawling of admin surfaces is forbidden.',
     category: 'authorization',
   },
+  CORS_BLOCKED: {
+    code: 'cors_blocked',
+    sdkClassName: 'CorsBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 403,
+    defaultMessage: 'Cross-origin request blocked by per-route CORS policy',
+    category: 'authorization',
+  },
   NOT_FOUND: {
     code: 'not_found',
     sdkClassName: 'NotFoundCredenceError',
@@ -193,6 +201,14 @@ export const ERROR_CATALOG = freezeCatalog({
     kind: 'api',
     httpStatus: 409,
     defaultMessage: 'The request conflicts with the current resource state',
+    category: 'resource',
+  },
+  OPTIMISTIC_LOCK_CONFLICT: {
+    code: 'optimistic_lock_conflict',
+    sdkClassName: 'OptimisticLockConflictCredenceError',
+    kind: 'api',
+    httpStatus: 409,
+    defaultMessage: 'The resource was modified by another request. Fetch the latest version and retry.',
     category: 'resource',
   },
   IDEMPOTENCY_KEY_MISMATCH: {

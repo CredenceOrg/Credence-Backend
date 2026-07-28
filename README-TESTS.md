@@ -4,7 +4,46 @@ This document provides comprehensive guidance for running tests locally and ensu
 
 ## Overview
 
-The Credence Backend includes multiple test suites that validate different aspects of the system:
+The Credence Backend includes multiple test suites that validate different aspects of the system.
+
+## Quickstart: local test commands and CI parity
+
+Use the same npm scripts locally that CI runs, and point the suite at a PostgreSQL 16 instance that matches the CI environment when you want to reproduce parity issues exactly.
+
+### Fast path for the full suite
+
+```bash
+# 1) Install dependencies
+npm install
+
+# 2) Start the test services used by the integration suite
+docker compose -f docker-compose.test.yml up -d
+
+# 3) Run the full backend test suite
+npm test
+```
+
+### Integration suite specifically
+
+```bash
+# Run the repository and integration suites explicitly
+npm test -- tests/integration tests/repositories
+
+# Reset the test database before a fresh integration run
+npm run test:db:reset
+```
+
+### CI-parity commands
+
+CI runs on Ubuntu with Node.js 20 and a managed PostgreSQL 16 service. To mirror that setup locally, use the same scripts and override the database connection to a Postgres 16 instance:
+
+```bash
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test npm test
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test npm run coverage
+TEST_DATABASE_URL=postgresql://credence:credence@localhost:5432/credence_test npm run coverage:audit
+```
+
+If you are using the local Docker-based test services instead of an external database, the default compose file exposes Postgres on port 5433, so keep that in mind when matching CI settings.
 
 ### Test Categories
 

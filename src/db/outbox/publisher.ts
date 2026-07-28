@@ -21,6 +21,10 @@ import {
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
 } from '../../observability/index.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 import { trace, context, SpanContext, TraceFlags, SpanStatusCode, createTraceState } from '@opentelemetry/api'
 
 /**
@@ -390,7 +394,18 @@ export class OutboxPublisher {
                 .replace(/[^A-Z0-9_]/g, '_')
                 .slice(0, 50)
               incrementOutboxDeadLetter(code)
-              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter`)
+              // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
+              // `result.retryCount` is the FINAL attempt count of the event
+              // just moved to dead-letter: `markFailed` incremented retry_count
+              // and transitioned the row when `retry_count + 1 >= max_retries`,
+              // so the value here is exactly the budget the event consumed.
+              // Threading the real count (instead of 1) prevents the
+              // `jobs_terminal_attempt_count{domain="outbox"}` histogram
+              // from skewing toward the `1` bucket and misleading SREs.
+              const finalAttempts = result?.retryCount ?? 1
+              recordJobDeadLetter('outbox', code)
+              recordJobTerminalOutcome('outbox', 'dead_letter', finalAttempts)
+              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter after ${finalAttempts} attempt(s)`)
             }
           } catch (err) {
             logger.error('[OutboxPublisher] Error marking event failed', err)

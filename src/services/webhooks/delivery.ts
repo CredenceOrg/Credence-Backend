@@ -2,12 +2,16 @@ const emitMetric = (name: string, val: number, tags: any) => console.log(`METRIC
 import { createHmac, randomBytes } from 'crypto'
 import https from 'https'
 import {
-  getBackoffDelayMs,
-  resolveProviderRetryPolicy,
   type ProviderRetryPolicies,
   type RetryJitterStrategy,
   type RetryPolicyOverrides,
 } from '../../lib/retryPolicy.js'
+import {
+  resolveExtendedProviderRetryPolicy,
+  executeWithRetry,
+  type ExtendedRetryPolicy,
+  type ExtendedRetryPolicyOverrides,
+} from '../../clients/retryExecutor.js'
 import { noopRetryObserver, type RetryObserver } from '../../observability/retryMetrics.js'
 import { webhookPayloadBytes } from '../../observability/customMetrics.js'
 import { checkHostBlocked } from '../../lib/ssrfProtection.js'
@@ -65,18 +69,35 @@ export interface DeliveryOptions {
   }
 }
 
-const DEFAULT_WEBHOOK_RETRY = {
+const DEFAULT_WEBHOOK_RETRY: ExtendedRetryPolicy = {
   maxAttempts: 4,
   baseDelayMs: 1_000,
   maxDelayMs: 10_000,
   backoffMultiplier: 2,
   jitterStrategy: 'none',
-} as const
+  retryableErrors: [
+    'UNABLE_TO_VERIFY_LEAF_SIGNATURE',
+    'CERT_UNTRUSTED',
+    'mTLS handshake failed',
+    'WEBHOOK_MTLS_FAILURE',
+    'unable to verify the first certificate',
+    'unable to get local issuer certificate',
+    'CERT_HAS_EXPIRED',
+    'certificate has expired',
+    'Network error',
+    'network error',
+    'Failed to fetch',
+    'fetch failed',
+  ],
+}
 
 /**
  * Generate HMAC-SHA256 signature for webhook payload.
  */
 export function signPayload(payload: string, secret: string): string {
+  if (typeof secret !== 'string' || !secret) {
+    throw new TypeError('signPayload: secret must be a non-empty string')
+  }
   return createHmac('sha256', secret).update(payload).digest('hex')
 }
 
@@ -84,6 +105,7 @@ export function signPayload(payload: string, secret: string): string {
  * Constant-time comparison to prevent timing attacks on certificate pinning.
  */
 function constantTimeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false
   if (a.length !== b.length) return false
   let result = 0
   for (let i = 0; i < a.length; i++) {
@@ -228,6 +250,20 @@ function chunkListPayload(
 /**
  * Deliver single webhook payload (internal function).
  */
+class NonRetryableError extends Error {
+  errorCode?: string
+  status?: number
+  constructor(message: string, errorCode?: string, status?: number) {
+    super(message)
+    this.name = 'NonRetryableError'
+    this.errorCode = errorCode
+    this.status = status
+  }
+}
+
+/**
+ * Deliver single webhook payload (internal function).
+ */
 async function deliverSingleWebhook(
   webhook: WebhookConfig,
   payload: WebhookPayload,
@@ -265,12 +301,13 @@ async function deliverSingleWebhook(
     jitterStrategy,
   }
 
-  const policy = resolveProviderRetryPolicy(provider, DEFAULT_WEBHOOK_RETRY, {
+  const policy = resolveExtendedProviderRetryPolicy(provider, DEFAULT_WEBHOOK_RETRY, {
     providerPolicies: retryPolicies,
     overrides: {
       ...legacyOverrides,
       ...(retryPolicy ?? {}),
       maxAttempts: webhook.maxAttempts ?? legacyOverrides.maxAttempts,
+      timeoutMs: webhook.timeoutMs ?? timeout,
     },
   })
 
@@ -312,7 +349,6 @@ async function deliverSingleWebhook(
   let attempts = 0
   let lastError: string | undefined
   let lastStatusCode: number | undefined
-  let lastResponseBodySnippet: string | undefined
   let lastErrorCode: string | undefined
   const startMs = Date.now()
 
@@ -339,115 +375,113 @@ async function deliverSingleWebhook(
         agent,
       }
 
-      const response = await fetchFn(webhook.url, fetchOptions)
+  try {
+    const response = await executeWithRetry(
+      provider,
+      async (signal) => {
+        attempts += 1
+        const fetchStart = Date.now()
+        
+        let res: Response
+        try {
+          res = await fetchFn(webhook.url, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Webhook-Signature': signatureHeader,
+              'X-Webhook-Event': payload.event,
+            },
+            body: payloadStr,
+            signal,
+            // @ts-ignore - agent is not in standard RequestInit but supported by Node.js fetch
+            agent,
+          })
+        } catch (err: any) {
+          if (err?.name === 'AbortError' || err?.message?.includes('timeout')) {
+            emitMetric('webhook_timeout_total', 1, { url: webhook.url })
+          }
 
-      emitMetric('webhook_delivery_duration', Date.now() - fetchStart, { url: webhook.url })
-      
-      if (response.ok) {
-        // Validate server certificate pinning if configured
-        if (webhook.pinnedServerCertSha256) {
-          // In a real implementation, we'd extract the actual server certificate
-          // For now, this is a placeholder for the validation logic
-          // Production would need to access the TLS socket to get the peer certificate
-          const validation = validateServerCertificatePin(
-            'placeholder_actual_cert', // Would be actual cert in production
-            webhook.pinnedServerCertSha256
-          )
-          
-          if (!validation.valid) {
-            lastError = validation.error
-            lastErrorCode = 'WEBHOOK_MTLS_FAILURE'
+          // Check for TLS-specific errors
+          if (err?.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || 
+              err?.code === 'CERT_UNTRUSTED' ||
+              (err?.code === 'ECONNREFUSED' && webhook.clientCertPem)) {
             emitMetric('webhook_mtls_failure_total', 1, { 
               subscriber: webhook.id,
-              reason: 'cert_pin_mismatch' 
+              reason: 'handshake_failure' 
             })
-            
-            // Don't retry on certificate pin mismatch
-            retryObserver.onRetryExhausted?.({
-              provider,
-              attempts: attempt,
-              errorCode: lastErrorCode,
-            })
-            break
+            const mtlsErr = new Error(`mTLS handshake failed: ${err.message}`)
+            ;(mtlsErr as any).errorCode = 'WEBHOOK_MTLS_FAILURE'
+            throw mtlsErr
           }
+          throw err
         }
 
-        retryObserver.onSuccess?.({
-          provider,
-          attempt,
-          durationMs: Date.now() - startMs,
-        })
-        return {
-          webhookId: webhook.id,
-          success: true,
-          statusCode: response.status,
-          attempts,
+        emitMetric('webhook_delivery_duration', Date.now() - fetchStart, { url: webhook.url })
+
+        if (res.ok) {
+          // Validate server certificate pinning if configured
+          if (webhook.pinnedServerCertSha256) {
+            const validation = validateServerCertificatePin(
+              'placeholder_actual_cert',
+              webhook.pinnedServerCertSha256
+            )
+            
+            if (!validation.valid) {
+              emitMetric('webhook_mtls_failure_total', 1, { 
+                subscriber: webhook.id,
+                reason: 'cert_pin_mismatch' 
+              })
+              // Don't retry on certificate pin mismatch
+              throw new NonRetryableError(validation.error || 'Server certificate pin mismatch', 'WEBHOOK_MTLS_FAILURE')
+            }
+          }
+          return res
         }
-      }
 
-      lastStatusCode = response.status
-      lastError = `HTTP ${response.status}`
+        // Check if 4xx (client error) - non-retryable by default
+        if (res.status >= 400 && res.status < 500) {
+          throw new NonRetryableError(`HTTP ${res.status}`, `HTTP_${res.status}`, res.status)
+        }
 
-      // Don't retry on 4xx errors (client errors)
-      if (response.status >= 400 && response.status < 500) {
-        retryObserver.onRetryExhausted?.({
-          provider,
-          attempts: attempt,
-          errorCode: `HTTP_${response.status}`,
-        })
-        break
+        const httpErr = new Error(`HTTP ${res.status}`)
+        ;(httpErr as any).status = res.status
+        throw httpErr
+      },
+      {
+        policy,
+        retryObserver,
+        sleepFn,
+        randomFn,
       }
-    } catch (err: any) {
-      if (err?.name === 'AbortError' || err?.message?.includes('timeout')) {
-        emitMetric('webhook_timeout_total', 1, { url: webhook.url })
-      }
+    )
 
-      // Check for TLS-specific errors
-      if (err?.code === 'UNABLE_TO_VERIFY_LEAF_SIGNATURE' || 
-          err?.code === 'CERT_UNTRUSTED' ||
-          err?.code === 'ECONNREFUSED' && webhook.clientCertPem) {
-        lastErrorCode = 'WEBHOOK_MTLS_FAILURE'
-        lastError = `mTLS handshake failed: ${err.message}`
-        emitMetric('webhook_mtls_failure_total', 1, { 
-          subscriber: webhook.id,
-          reason: 'handshake_failure' 
-        })
-      } else {
-        lastError = err instanceof Error ? err.message : 'Unknown error'
-      }
-    } finally {
-      clearTimeout(timeoutId)
+    return {
+      webhookId: webhook.id,
+      success: true,
+      statusCode: response.status,
+      attempts,
+    }
+  } catch (err: any) {
+    lastError = err.message || String(err)
+    lastStatusCode = err.status ?? err.statusCode
+    lastErrorCode = err.errorCode || err.code
+
+    // Normalize error code for return value if needed
+    if (lastStatusCode) {
+      lastErrorCode = `HTTP_${lastStatusCode}`
+    } else if (err.name === 'AbortError' || err.message.includes('timeout')) {
+      lastErrorCode = 'TIMEOUT_ERROR'
     }
 
-    if (attempt < policy.maxAttempts) {
-      const delay = getBackoffDelayMs(policy, attempt, randomFn)
-      retryObserver.onRetryAttempt?.({
-        provider,
-        attempt,
-        delayMs: delay,
-        errorCode: lastStatusCode ? `HTTP_${lastStatusCode}` : lastErrorCode ?? 'NETWORK_ERROR',
-      })
-      logger.info(
-        `Retrying outbound request provider=${provider} attempt=${attempt + 1}/${policy.maxAttempts} delayMs=${delay} webhookId=${webhook.id} error=${lastError ?? 'unknown'}`,
-      )
-      await sleepFn(delay)
-    } else {
-      retryObserver.onRetryExhausted?.({
-        provider,
-        attempts: attempt,
-        errorCode: lastStatusCode ? `HTTP_${lastStatusCode}` : lastErrorCode ?? 'NETWORK_ERROR',
-      })
+    return {
+      webhookId: webhook.id,
+      success: false,
+      error: lastError,
+      attempts,
+      statusCode: lastStatusCode,
+      responseBodySnippet: undefined,
+      errorCode: lastErrorCode,
     }
-  }
-
-  return {
-    webhookId: webhook.id,
-    success: false,
-    error: lastError,
-    attempts,
-    statusCode: lastStatusCode,
-    responseBodySnippet: lastResponseBodySnippet,
-    errorCode: lastErrorCode,
   }
 }
 

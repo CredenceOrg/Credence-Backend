@@ -13,6 +13,7 @@ import {
 import {
   parsePaginationParams,
   buildCursorEnvelope,
+  buildCursorPaginationLinks,
   encodeCursor,
   MAX_LIMIT,
   PaginationValidationError,
@@ -99,15 +100,22 @@ router.get('/', requireUserAuth, (req: Request, res: Response) => {
     { limit: pag.limit, cursor: pag.decodedCursor }
   )
 
+  const nextCursor = result.hasMore && result.data.length > 0
+    ? encodeCursor(result.data[result.data.length - 1].createdAt, result.data[result.data.length - 1].id)
+    : null
+
   const envelope = buildCursorEnvelope(result.data, {
     limit: pag.limit,
     hasMore: result.hasMore,
-    nextCursor: result.hasMore && result.data.length > 0
-      ? encodeCursor(result.data[result.data.length - 1].createdAt, result.data[result.data.length - 1].id)
-      : null,
+    nextCursor,
   })
 
-  res.status(200).json(envelope)
+  const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
+  res.status(200).json({
+    ...envelope,
+    links: buildCursorPaginationLinks(fullUrl, pag.limit, nextCursor),
+  })
 })
 
 router.get('/:id', requireUserAuth, (req: Request, res: Response) => {

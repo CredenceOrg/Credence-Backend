@@ -4,6 +4,7 @@ To facilitate debugging in our distributed environment, every request is assigne
 
 - **X-Request-ID**: Unique identifier for the HTTP call. If provided in the incoming request headers, we preserve it. We also propagate it to downstream RPC calls (using Connect-RPC interceptors) and emit it automatically in every log line during the request lifecycle.
 - **X-Correlation-ID**: Persists across services. If an upstream service sends one, we propagate it.
+- **X-Response-Time-Ms**: Every response carries the server-side wall-clock processing time in milliseconds (`x-response-time-ms`). This makes per-request latency observable for operators and automated canaries without parsing the response body.
 
 ## Log Format
 
@@ -350,6 +351,35 @@ const result = await txManager.withTransaction(
 ```
 
 The span is created via the `withSpan` utility and exported by the configured `SpanProcessor` (ConsoleSpanExporter in dev; OTLP in production).
+
+## Database Query Spans
+
+Every database query executed through the connection pools (`pool`, `workerPool`, `replicaPool`) generates an OpenTelemetry span named `db.query` with the following attributes:
+
+| Attribute | Type | Description |
+|-----------|------|-------------|
+| `db.system` | string | Set to `"postgresql"`. |
+| `db.statement` | string | The SQL query string executed. |
+| `db.pool` | string | Which pool ran the query (`"api"`, `"worker"`, or `"replica"`). |
+| `db.row_count` | number | The row count returned by the query (if successful). |
+
+If the query throws an exception, the span status is set to `ERROR`, and the exception is captured/recorded on the span.
+
+## Prepared Statement Cache
+
+Each connection pool (`pool`, `workerPool`, `replicaPool`) keeps its own bounded LRU cache — `instrumentPreparedStatementCache` in `src/db/pool.ts` — mapping exact query text to a stable, deterministic prepared-statement `name`. The name is derived from a hash of the query text, never from an incrementing counter, so an evicted-then-reintroduced query always maps back to the same name; this is what makes the cache safe to bound and evict from without ever causing a connection to reuse a name for the wrong SQL.
+
+When a query's text is already in the cache, the query is sent to Postgres with that `name` so the server can skip re-parsing on repeat executions on the same physical connection. Calls that already specify their own `name`, use the callback style, or contain multiple semicolon-separated statements (which Postgres cannot `PREPARE` as one command) pass through unmodified and are never cached.
+
+### Configuration
+
+| Variable | Default | Description |
+|----------|---------|--------------|
+| `DB_PREPARED_STATEMENT_CACHE_MAX` | `200` | Maximum distinct query-text shapes tracked per pool. Evicted queries still work — they just fall back to being re-parsed each call until they're queried often enough to re-enter the cache. |
+
+### Metrics
+
+- **`db_prepared_statement_cache_size`** (Gauge, labeled by `pool`): current number of distinct query shapes tracked in the cache, sampled at scrape time. Sustained values at `DB_PREPARED_STATEMENT_CACHE_MAX` indicate cache-miss thrash — more distinct query shapes are hitting that pool than the cache can retain, so queries are being evicted before they're ever reused. Widening `DB_PREPARED_STATEMENT_CACHE_MAX` (or reducing the number of distinct dynamic query shapes issued) relieves the pressure.
 
 ## Slow Query Logging
 

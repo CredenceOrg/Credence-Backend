@@ -1,5 +1,6 @@
 import { Router, type Request, type Response } from 'express'
 import { faultInjectionRequestSchema } from '../schemas/faultInjection.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
 
 export interface FaultInjectionRouterOptions {
   /** When true the fault-injection endpoint is active; otherwise it returns 404. */
@@ -21,16 +22,13 @@ export function createFaultInjectionRouter(options: FaultInjectionRouterOptions)
 
   router.post('/', (req: Request, res: Response) => {
     if (!options.devMode) {
-      res.status(404).json({ error: 'Not found' })
+      sendError(res, ErrorCode.NOT_FOUND, 'Not found')
       return
     }
 
     const parsed = faultInjectionRequestSchema.safeParse(req.body)
     if (!parsed.success) {
-      res.status(400).json({
-        error: 'Invalid request',
-        details: parsed.error.issues,
-      })
+      sendError(res, ErrorCode.VALIDATION_FAILED, 'Invalid request', parsed.error.issues)
       return
     }
 

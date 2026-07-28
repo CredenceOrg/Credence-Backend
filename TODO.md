@@ -1,15 +1,17 @@
-# TODO
+# TODO: Add docs/CORS_POLICY.md documenting per-route policy
 
-- [x] Read authoritative outbox lifecycle states/transitions from code (types/schema/emitter/repository/publisher)
-- [x] Read webhook DLQ store implementation for cross-linking (postgresDlqStore)
+## Steps
 
-- [ ] Update `src/db/outbox/README.md` with:
-  - [ ] Emit-in-transaction contract
-  - [ ] Publisher leasing/claim loop
-  - [ ] Retry/backoff logic + exact formula used
-  - [ ] DLQ routing on exhaustion (outbox `dead_letter`) and cross-link webhook `webhook_dlq`
-  - [ ] Mermaid sequence diagram (emit → claim/lease → publish → ack/markPublished OR markFailed → dead_letter)
-  - [ ] State diagram with exact status names
-  - [ ] Metrics list with exact metric names/labels
-- [ ] Run `npm run lint` and `npm run build`
-
+- [x] 1. Analyze codebase — read all route files, middleware, config, and existing security docs
+- [x] 2. Create comprehensive plan and get user approval
+- [x] 3. Create `docs/CORS_POLICY.md` with:
+  - [x] Threat model section
+  - [x] Route classification table (all route groups)
+  - [x] Default policy section
+  - [x] Per-route exceptions
+  - [x] Implementation guidance
+  - [x] Negative test section
+  - [x] Deployment guidance
+  - [x] References to related docs
+- [x] 4. Run `npx tsc --noEmit` to verify no TypeScript errors
+- [ ] 5. Run `npm test` to ensure existing tests pass

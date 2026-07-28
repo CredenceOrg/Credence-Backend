@@ -161,7 +161,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/preview',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     (req: Request, res: Response, next: NextFunction) => {
       upload.single('file')(req, res, (err: unknown) => {
         if (err !== undefined) {
@@ -206,7 +206,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/preview/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     (req: Request, res: Response, next: NextFunction) => {
       upload.single('file')(req, res, (err: unknown) => {
         if (err !== undefined) {
@@ -267,7 +267,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/dry-run',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -288,7 +288,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/dry-run/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -324,7 +324,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/commit',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -372,7 +372,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/commit/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -447,7 +447,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.get(
     '/presets',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     async (_req: Request, res: Response) => {
       const orgId = getTenantId()
       if (!orgId) {
@@ -469,7 +469,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/presets',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const orgId = getTenantId()
       if (!orgId) {
@@ -516,7 +516,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.get(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     async (req: Request, res: Response) => {
       const preset = await presetRepo.findById(req.params.id)
       if (!preset) {
@@ -537,7 +537,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.put(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const { name, columnMappings } = req.body
 
@@ -585,7 +585,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.delete(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const deleted = await presetRepo.delete(req.params.id)
       if (!deleted) {

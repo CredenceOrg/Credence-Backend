@@ -43,56 +43,14 @@ export interface ValidateOptions {
 
 /**
  * Format Zod errors into a consistent structure.
+ * Maps every Zod v4 issue code to a stable error catalog code.
  * @param error - ZodError from schema.safeParse()
  * @returns Array of { path, message, code } for client consumption
  */
 export function formatZodErrors(error: ZodError): Array<{ path: string; message: string; code: string }> {
   return error.issues.map((e) => {
-    let code: ErrorCode = ErrorCode.VALIDATION_FAILED
+    const code = mapZodIssueCode(e)
     const pathStr = e.path?.length ? e.path.join('.') : '(root)'
-    const lowerPath = pathStr.toLowerCase()
-    const lowerMessage = e.message.toLowerCase()
-
-    switch (e.code) {
-      case 'custom':
-        if (e.message === 'INVALID_STELLAR_ADDRESS') {
-          code = ErrorCode.INVALID_STELLAR_ADDRESS
-        } else if (lowerMessage.includes('stellar') && lowerMessage.includes('address')) {
-          code = ErrorCode.INVALID_STELLAR_ADDRESS
-        } else if (lowerPath.includes('address') || lowerMessage.includes('address')) {
-          code = ErrorCode.INVALID_ADDRESS
-        }
-        break
-      case 'invalid_type':
-        // If a required field is missing (value is undefined)
-        if ((e as any).received === 'undefined' || lowerMessage.includes('received undefined') || lowerMessage.includes('required')) {
-          code = ErrorCode.FIELD_REQUIRED
-        } else {
-          code = ErrorCode.INVALID_TYPE
-        }
-        break
-      case 'invalid_format':
-        // String format validations (email, uuid, etc.) in Zod 4
-        if (lowerPath.includes('address') || (lowerMessage.includes('address') && !lowerMessage.includes('email'))) {
-          code = ErrorCode.INVALID_ADDRESS
-        } else {
-          code = ErrorCode.INVALID_FORMAT
-        }
-        break
-      case 'invalid_value':
-        // Enum validation in Zod 4
-        code = ErrorCode.INVALID_TYPE
-        break
-      case 'too_small':
-        code = ErrorCode.VALUE_TOO_SMALL
-        break
-      case 'too_big':
-        code = ErrorCode.VALUE_TOO_LARGE
-        break
-      case 'unrecognized_keys':
-        code = ErrorCode.UNEXPECTED_FIELD
-        break
-    }
 
     return {
       path: pathStr,
@@ -100,6 +58,88 @@ export function formatZodErrors(error: ZodError): Array<{ path: string; message:
       code,
     }
   })
+}
+
+function mapZodIssueCode(issue: Record<string, unknown>): ErrorCode {
+  const e = issue as Record<string, unknown>
+  const code = e.code as string
+  const pathArr = e.path as Array<string | number>
+  const pathStr = pathArr?.length ? pathArr.join('.') : '(root)'
+  const lowerPath = pathStr.toLowerCase()
+  const lowerMessage = (e.message as string)?.toLowerCase() ?? ''
+
+  switch (code) {
+    case 'invalid_type': {
+      const received = e.received as string | undefined
+      if (
+        received === 'undefined' ||
+        lowerMessage.includes('received undefined') ||
+        lowerMessage.includes('required')
+      ) {
+        return ErrorCode.FIELD_REQUIRED
+      }
+      return ErrorCode.INVALID_TYPE
+    }
+
+    case 'invalid_value':
+    case 'invalid_literal':
+    case 'invalid_enum_value':
+      return ErrorCode.INVALID_TYPE
+
+    case 'invalid_string':
+    case 'invalid_format': {
+      if (
+        lowerPath.includes('address') ||
+        (lowerMessage.includes('address') && !lowerMessage.includes('email'))
+      ) {
+        return ErrorCode.INVALID_ADDRESS
+      }
+      return ErrorCode.INVALID_FORMAT
+    }
+
+    case 'invalid_date':
+      return ErrorCode.INVALID_FORMAT
+
+    case 'invalid_union':
+    case 'invalid_union_discriminator':
+      return ErrorCode.INVALID_TYPE
+
+    case 'invalid_arguments':
+    case 'invalid_return_type':
+      return ErrorCode.VALIDATION_FAILED
+
+    case 'too_small':
+      return ErrorCode.VALUE_TOO_SMALL
+
+    case 'too_big':
+      return ErrorCode.VALUE_TOO_LARGE
+
+    case 'unrecognized_keys':
+      return ErrorCode.UNEXPECTED_FIELD
+
+    case 'not_multiple_of':
+      return ErrorCode.INVALID_FORMAT
+
+    case 'invalid_key':
+      return ErrorCode.INVALID_FORMAT
+
+    case 'custom': {
+      const message = e.message as string
+      if (message === 'INVALID_STELLAR_ADDRESS') {
+        return ErrorCode.INVALID_STELLAR_ADDRESS
+      }
+      if (lowerMessage.includes('stellar') && lowerMessage.includes('address')) {
+        return ErrorCode.INVALID_STELLAR_ADDRESS
+      }
+      if (lowerPath.includes('address') || lowerMessage.includes('address')) {
+        return ErrorCode.INVALID_ADDRESS
+      }
+      return ErrorCode.VALIDATION_FAILED
+    }
+
+    default:
+      return ErrorCode.VALIDATION_FAILED
+  }
 }
 
 /**

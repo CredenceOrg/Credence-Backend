@@ -6,6 +6,14 @@ export interface SchedulableJob {
   run(): Promise<unknown>
 }
 
+/**
+ * Minimal Redis interface for idempotency checks — only needs get/set.
+ */
+export interface IdempotencyRedisClient {
+  get(key: string): Promise<string | null>
+  set(key: string, value: string, opts?: { PX: number }): Promise<string | null>
+}
+
 
 /**
  * Scheduler options.
@@ -33,6 +41,19 @@ export interface SchedulerOptions {
    * @default 5 × intervalMs (capped at 10 minutes)
    */
   lockTtlMs?: number
+  /**
+   * Redis client for idempotency checks. When provided together with
+   * enableIdempotency, the scheduler sets a "lastRun" marker after each
+   * successful job completion and skips execution if the marker exists
+   * (i.e. the job was already run within the interval window).
+   */
+  redisClient?: IdempotencyRedisClient
+  /**
+   * Enable idempotency guard using Redis lastRun markers.
+   * Requires redisClient to be set.
+   * @default false
+   */
+  enableIdempotency?: boolean
 }
 
 /**
@@ -61,6 +82,9 @@ export class JobScheduler {
   private readonly distributedLock?: DistributedLock
   private readonly lockKey: string
   private readonly lockTtlMs: number
+  private readonly redisClient?: IdempotencyRedisClient
+  private readonly enableIdempotency: boolean
+  private readonly idempotencyKeyBase: string
 
   constructor(
     private readonly job: SchedulableJob,
@@ -71,6 +95,8 @@ export class JobScheduler {
       distributedLock?: DistributedLock
       lockKey?: string
       lockTtlMs?: number
+      redisClient?: IdempotencyRedisClient
+      enableIdempotency?: boolean
     }
   ) {
     this.intervalMs = options.intervalMs
@@ -79,6 +105,9 @@ export class JobScheduler {
     this.distributedLock = options.distributedLock
     this.lockKey = options.lockKey ?? 'cron:score-snapshot'
     this.lockTtlMs = options.lockTtlMs ?? Math.min(options.intervalMs * 5, 600_000)
+    this.redisClient = options.redisClient
+    this.enableIdempotency = options.enableIdempotency ?? false
+    this.idempotencyKeyBase = `${this.lockKey}:lastRun`
   }
 
   /**
@@ -146,9 +175,19 @@ export class JobScheduler {
     // (via the shared tracing context) can still be traced back to the
     // specific run that caused them.
     const jobRunCorrelationId = randomUUID()
+    // Idempotency guard: check if job was recently completed
+    if (this.enableIdempotency && this.redisClient) {
+      const lastRun = await this.redisClient.get(this.idempotencyKeyBase)
+      if (lastRun) {
+        this.logger(
+          `[Idempotency] Skipping job "${this.lockKey}" — last run at ${lastRun} (within interval)`
+        )
+        return
+      }
+    }
 
     if (this.distributedLock) {
-      const { executed } = await this.distributedLock.withLock(
+      const { executed, result } = await this.distributedLock.withLock(
         this.lockKey,
         async () => {
           this.isRunning = true
@@ -158,6 +197,9 @@ export class JobScheduler {
               () => this.job.run()
             )
             this.logger(`Job completed: ${JSON.stringify(result)}`)
+            const jobResult = await this.job.run()
+            this.logger(`Job completed: ${JSON.stringify(jobResult)}`)
+            return jobResult
           } finally {
             this.isRunning = false
           }
@@ -169,6 +211,16 @@ export class JobScheduler {
         const metrics = this.distributedLock.getMetrics()
         this.logger(
           `Job skipped (lock held by another worker) — contentions: ${metrics.contentions}`
+        )
+        return
+      }
+
+      // Set idempotency marker after successful execution
+      if (this.enableIdempotency && this.redisClient) {
+        await this.redisClient.set(
+          this.idempotencyKeyBase,
+          new Date().toISOString(),
+          { PX: this.intervalMs }
         )
       }
       return

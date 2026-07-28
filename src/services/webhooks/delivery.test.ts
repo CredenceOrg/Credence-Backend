@@ -27,6 +27,18 @@ describe('signPayload', () => {
     const sig2 = signPayload('{"event":"bond.slashed"}', secret)
     expect(sig1).not.toBe(sig2)
   })
+
+  it('throws TypeError when secret is null', () => {
+    expect(() => signPayload('{}', null as unknown as string)).toThrow(TypeError)
+  })
+
+  it('throws TypeError when secret is undefined', () => {
+    expect(() => signPayload('{}', undefined as unknown as string)).toThrow(TypeError)
+  })
+
+  it('throws TypeError when secret is empty string', () => {
+    expect(() => signPayload('{}', '')).toThrow(TypeError)
+  })
 })
 
 describe('deliverWebhook', () => {
