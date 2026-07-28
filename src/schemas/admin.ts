@@ -134,6 +134,18 @@ export const replayEventBodySchema = z
 export type ReplayEventBody = z.infer<typeof replayEventBodySchema>
 
 /**
+ * Request body schema for replaying a failed webhook delivery
+ * POST /api/admin/replay-webhook
+ */
+export const replayWebhookBodySchema = z
+  .object({
+    id: z.string().min(1, 'id is required'),
+  })
+  .strict()
+
+export type ReplayWebhookBody = z.infer<typeof replayWebhookBodySchema>
+
+/**
  * Response schema for GET /api/admin/system/backup-status
  */
 export const backupStatusResponseSchema = z.object({

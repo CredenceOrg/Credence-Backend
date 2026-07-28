@@ -462,6 +462,37 @@ components:
         - valid
         - break_detected
         - never_run
+    auditLogExportQuerySchema:
+      def:
+        type: object
+        shape:
+          from:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
+          to:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     bondCreationEventSchema:
       def:
         type: object
@@ -4289,6 +4320,24 @@ components:
             maxLength: null
       type: object
     replayEventBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    replayWebhookBodySchema:
       def:
         type: object
         shape:
@@ -8177,95 +8226,6 @@ components:
       scheme: bearer
       description: "API key sent as `Authorization: Bearer <key>`"
   parameters: {}
-  Attestation:
-    type: object
-    description: A persisted attestation record
-    properties:
-      id:
-        type: integer
-        description: Unique attestation ID
-      bondId:
-        type: integer
-        description: ID of the bonded relationship
-      attesterAddress:
-        type: string
-        description: Ethereum address of the attester (lowercased)
-      subjectAddress:
-        type: string
-        description: Ethereum address of the subject (lowercased)
-      score:
-        type: integer
-        minimum: 0
-        maximum: 100
-        description: Attestation score
-      note:
-        type: string
-        nullable: true
-        description: JSON-encoded note containing key and value
-      createdAt:
-        type: string
-        format: date-time
-        description: ISO 8601 timestamp
-    required:
-      - id
-      - bondId
-      - attesterAddress
-      - subjectAddress
-      - score
-      - createdAt
-  CursorPaginationPage:
-    type: object
-    description: Cursor-based pagination metadata
-    properties:
-      nextCursor:
-        type: string
-        nullable: true
-        description: Opaque cursor for the next page, or null if no more results
-      hasMore:
-        type: boolean
-        description: Whether more results exist beyond this page
-      limit:
-        type: integer
-        description: Page size
-    required:
-      - nextCursor
-      - hasMore
-      - limit
-  PaginationLinks:
-    type: object
-    description: HATEOAS pagination links
-    properties:
-      self:
-        type: string
-        format: uri
-        description: Link to the current page
-      next:
-        type: string
-        format: uri
-        nullable: true
-        description: Link to the next page
-    required:
-      - self
-  ErrorResponse:
-    type: object
-    properties:
-      error:
-        type: string
-        description: Human-readable error message
-      code:
-        type: string
-        description: Machine-readable error code
-      details:
-        type: array
-        items:
-          type: object
-          properties:
-            path:
-              type: string
-            message:
-              type: string
-    required:
-      - error
 paths:
   /api/health:
     get:
@@ -8463,64 +8423,27 @@ paths:
   /api/attestations/{address}:
     get:
       summary: List attestations
-      description: Returns attestations for a subject address using cursor-based pagination.
+      description: Returns attestations for a subject address.
       tags:
         - Attestations
       parameters:
         - schema:
             type: string
-            pattern: "^0x[0-9a-fA-F]{40}$"
+            minLength: 1
           required: true
           name: address
           in: path
-          description: Ethereum address (normalised to lowercase)
-        - schema:
-            type: integer
-            minimum: 1
-            maximum: 100
-            default: 20
-          name: limit
-          in: query
-          description: Number of results per page
-        - schema:
-            type: string
-          name: cursor
-          in: query
-          description: Opaque cursor from a previous response
       responses:
         "200":
-          description: Attestation page
+          description: Attestations
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - address
-                  - data
-                  - page
-                  - links
-                properties:
-                  address:
-                    type: string
-                    description: Normalised subject address
-                  data:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Attestation"
-                  page:
-                    $ref: "#/components/schemas/CursorPaginationPage"
-                  links:
-                    $ref: "#/components/schemas/PaginationLinks"
-        "400":
-          description: Invalid address or pagination params
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                nullable: true
   /api/attestations:
     post:
       summary: Create attestation
-      description: Creates an attestation, persists it via the repository, invalidates attestation caches, and emits an `attestation.created` outbox event.
+      description: Creates an attestation and emits events.
       tags:
         - Attestations
       requestBody:
@@ -8532,37 +8455,28 @@ paths:
               properties:
                 bondId:
                   type: integer
-                  exclusiveMinimum: true
                   minimum: 0
-                  description: ID of the bonded relationship
+                  exclusiveMinimum: true
                 attesterAddress:
                   type: string
                   minLength: 1
-                  description: Ethereum address of the attester
                 subject:
                   type: string
-                  pattern: "^0x[0-9a-fA-F]{40}$"
-                  description: Ethereum address of the subject
+                  minLength: 1
                 value:
                   type: string
                   minLength: 1
                   maxLength: 2048
-                  description: Attestation value
                 key:
                   type: string
                   minLength: 1
                   maxLength: 128
-                  description: Optional attestation key (e.g. "kyc")
                 score:
                   type: integer
                   nullable: true
                   minimum: 0
                   maximum: 100
-                  default: 100
-                  description: Attestation score (0-100), defaults to 100
               required:
-                - bondId
-                - attesterAddress
                 - subject
                 - value
               additionalProperties: false
@@ -8572,19 +8486,19 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Attestation"
+                nullable: true
         "400":
           description: Validation error
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                nullable: true
         "409":
           description: Duplicate attestation
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/ErrorResponse"
+                nullable: true
   /api/bulk:
     post:
       summary: Bulk operations
