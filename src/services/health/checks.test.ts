@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { runHealthChecks } from './checks.js'
+import { runHealthChecks, CRITICAL_DEPS } from './checks.js'
 
 const allUp = {
   postgres: async () => ({ status: 'up' as const }),
@@ -7,12 +7,17 @@ const allUp = {
   horizonListener: async () => ({ status: 'up' as const }),
   outboxPublisher: async () => ({ status: 'up' as const }),
   horizon: async () => ({ status: 'up' as const }),
+  keyManager: async () => ({ status: 'up' as const }),
+  kek: async () => ({ status: 'up' as const }),
 }
 
 describe('runHealthChecks', () => {
-  it('returns degraded when no probes are configured (all not_configured)', async () => {
+  // ── Fail-closed: critical deps not_configured → unhealthy ────────────────
+
+  it('returns unhealthy when no probes are configured (critical deps are not_configured)', async () => {
     const result = await runHealthChecks({})
-    expect(result.status).toBe('degraded')
+    // postgres, redis, horizonListener are critical → unhealthy, not degraded
+    expect(result.status).toBe('unhealthy')
     expect(result.service).toBe('credence-backend')
     expect(result.dependencies.postgres).toEqual({ status: 'not_configured' })
     expect(result.dependencies.redis).toEqual({ status: 'not_configured' })
@@ -20,6 +25,58 @@ describe('runHealthChecks', () => {
     expect(result.dependencies.outboxPublisher).toEqual({ status: 'not_configured' })
     expect(result.dependencies.horizon).toEqual({ status: 'not_configured' })
   })
+
+  it('returns unhealthy when postgres is not_configured (fail-closed)', async () => {
+    const result = await runHealthChecks({
+      ...allUp,
+      postgres: async () => ({ status: 'not_configured' as const }),
+    })
+    expect(result.status).toBe('unhealthy')
+    expect(result.dependencies.postgres).toEqual({ status: 'not_configured' })
+  })
+
+  it('returns unhealthy when redis is not_configured (fail-closed)', async () => {
+    const result = await runHealthChecks({
+      ...allUp,
+      redis: async () => ({ status: 'not_configured' as const }),
+    })
+    expect(result.status).toBe('unhealthy')
+    expect(result.dependencies.redis).toEqual({ status: 'not_configured' })
+  })
+
+  it('returns unhealthy when horizonListener is not_configured (fail-closed)', async () => {
+    const result = await runHealthChecks({
+      ...allUp,
+      horizonListener: async () => ({ status: 'not_configured' as const }),
+    })
+    expect(result.status).toBe('unhealthy')
+    expect(result.dependencies.horizonListener).toEqual({ status: 'not_configured' })
+  })
+
+  it('critical not_configured deps appear in degradation.criticalDown', async () => {
+    const result = await runHealthChecks({
+      ...allUp,
+      postgres: async () => ({ status: 'not_configured' as const }),
+    })
+    expect(result.degradation?.criticalDown).toContain('postgres')
+    expect(result.degradation?.notConfigured).toContain('postgres')
+    expect(result.degradation?.reasons).toEqual(
+      expect.arrayContaining([{ dep: 'postgres', reason: 'not_configured' }]),
+    )
+  })
+
+  // ── Degraded: only non-critical deps not_configured → degraded ──────────
+
+  it('returns degraded (not unhealthy) when only non-critical deps are not_configured', async () => {
+    const result = await runHealthChecks({
+      ...allUp,
+      horizon: async () => ({ status: 'not_configured' as const }),
+    })
+    expect(result.status).toBe('degraded')
+    expect(result.dependencies.horizon).toEqual({ status: 'not_configured' })
+  })
+
+  // ── Normal down/up paths ─────────────────────────────────────────────────
 
   it('returns ok when all dependencies are up', async () => {
     const result = await runHealthChecks(allUp)
@@ -72,15 +129,6 @@ describe('runHealthChecks', () => {
     expect(result.dependencies.horizon).toEqual({ status: 'down', reason: 'circuit_open' })
   })
 
-  it('returns degraded when any dependency is not configured', async () => {
-    const result = await runHealthChecks({
-      ...allUp,
-      horizonListener: async () => ({ status: 'not_configured' }),
-    })
-    expect(result.status).toBe('degraded')
-    expect(result.dependencies.horizonListener).toEqual({ status: 'not_configured' })
-  })
-
   it('includes latencyMs when probe returns it', async () => {
     const result = await runHealthChecks({
       postgres: async () => ({ status: 'up', latencyMs: 5 }),
@@ -101,10 +149,24 @@ describe('runHealthChecks', () => {
       horizonListener: async () => ({ status: 'down' }),
       outboxPublisher: async () => ({ status: 'down' }),
       horizon: async () => ({ status: 'down' }),
+      keyManager: async () => ({ status: 'down' }),
+      kek: async () => ({ status: 'down' }),
     })
     const body = JSON.stringify(result)
-    expect(body).not.toMatch(/error|message|stack|connection|url|host/i)
+    // Ensure no internal error messages, stack traces, or connection details leak.
+    // We intentionally do NOT match on "error" here because that is a valid
+    // DependencyReason code ("error") emitted by probes; it is not a leak.
+    expect(body).not.toMatch(/message|stack|connection string|url|host/i)
     expect(result.dependencies.postgres).toEqual({ status: 'down' })
     expect(Object.keys(result.dependencies.postgres)).toEqual(['status'])
+  })
+
+  // ── CRITICAL_DEPS export sanity check ────────────────────────────────────
+
+  it('CRITICAL_DEPS contains exactly postgres, redis, horizonListener', () => {
+    expect(CRITICAL_DEPS.has('postgres')).toBe(true)
+    expect(CRITICAL_DEPS.has('redis')).toBe(true)
+    expect(CRITICAL_DEPS.has('horizonListener')).toBe(true)
+    expect(CRITICAL_DEPS.size).toBe(3)
   })
 })

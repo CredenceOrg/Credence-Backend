@@ -134,67 +134,14 @@ export const replayEventBodySchema = z
 export type ReplayEventBody = z.infer<typeof replayEventBodySchema>
 
 /**
- * Request body schema for purging cache
- * POST /api/admin/purge-cache
+ * Response schema for GET /api/admin/system/backup-status
  */
-export const purgeCacheBodySchema = z
-  .object({
-    namespace: z.string().min(1, 'namespace is required'),
-    key: z.string().optional(),
-    pattern: z.string().optional(),
-  })
-  .strict()
-
-/**
- * Response schema for POST /api/admin/purge-cache
- */
-export const purgeCacheResponseSchema = z.object({
+export const backupStatusResponseSchema = z.object({
   success: z.boolean(),
-  message: z.string(),
   data: z.object({
-    namespace: z.string(),
-    clearedCount: z.number(),
+    isStale: z.boolean(),
+    lastSuccessfulBackup: z.string().datetime().nullable(),
   }),
 })
 
-export type PurgeCacheBody = z.infer<typeof purgeCacheBodySchema>
-export type PurgeCacheResponse = z.infer<typeof purgeCacheResponseSchema>
-
-/**
- * Request body schema for replaying a failed webhook delivery
- * POST /api/admin/replay-webhook
- */
-export const replayWebhookBodySchema = z
-  .object({
-    id: z.string().min(1, 'id is required'),
-  })
-  .strict()
-
-export type ReplayWebhookBody = z.infer<typeof replayWebhookBodySchema>
-
-/**
- * Request body schema for resetting a cache namespace
- * POST /api/admin/reset-cache
- */
-export const resetCacheBodySchema = z
-  .object({
-    namespace: z.string().min(1, 'namespace is required'),
-  })
-  .strict()
-
-/**
- * Response schema for POST /api/admin/reset-cache
- */
-export const resetCacheResponseSchema = z.object({
-  success: z.boolean(),
-  message: z.string(),
-  data: z.object({
-    namespace: z.string(),
-    clearedCount: z.number(),
-  }),
-})
-
-export type ResetCacheBody = z.infer<typeof resetCacheBodySchema>
-export type ResetCacheResponse = z.infer<typeof resetCacheResponseSchema>
-
-
+export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>
