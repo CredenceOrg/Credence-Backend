@@ -4,9 +4,13 @@
 
 export {
   normalizeRoute,
+  getRouteTemplate,
   httpRequestDurationHistogram,
   httpRequestStatusTotal,
   registerLatencyMetrics,
+  MAX_ROUTE_CARDINALITY,
+  OVERFLOW_ROUTE_LABEL,
+  _resetSeenRoutes,
 } from './latencyMetrics.js'
 
 export {

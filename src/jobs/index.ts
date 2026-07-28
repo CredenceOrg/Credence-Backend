@@ -23,3 +23,4 @@ export * from "./idempotencyKeySweeper.js";
 export * from "./failedInboundEventsSweeper.js";
 export * from "./pgStatActivitySnapshotJob.js";
 export * from "./longTransactionReaper.js";
+export * from "./backfill/index.js";

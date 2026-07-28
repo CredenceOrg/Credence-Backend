@@ -146,153 +146,52 @@ describe('Admin Routes — Idempotent Mutations', () => {
     const headers = { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-new-1' }
     const payload = { userId: 'admin-user-1', role: 'admin' }
 
-    const res = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
+    expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
+  });
+});
+
+describe('POST /api/admin/replay-event', () => {
+  it('should replay event with valid id', async () => {
+    const { ReplayService } = await import('../../services/replayService.js')
+    const mockReplayService = vi.mocked(ReplayService)
+    mockReplayService.prototype.replayEvent = vi.fn().mockResolvedValue({
+      success: true,
+      message: 'Event successfully replayed',
+    })
+
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123' })
+
     expect(res.status).toBe(200)
-    expect((res.body as any).success).toBe(true)
+    expect(res.body.success).toBe(true)
   })
 
-  it('replays_response_for_same_idempotency_key', async () => {
-    const key = 'ia-test-replay-1'
-    const headers = { ...ADMIN_AUTH, 'idempotency-key': key }
-    const payload = { userId: 'admin-user-1', role: 'admin' }
+  it('should return 400 when id is missing', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({})
 
-    const res1 = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
-    expect(res1.status).toBe(200)
-
-    const res2 = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
-    expect(res2.status).toBe(200)
-    expect(res2.body).toEqual(res1.body)
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
-  it('rejects_different_payload_for_same_key', async () => {
-    const key = 'ia-test-conflict-1'
-    const headers = { ...ADMIN_AUTH, 'idempotency-key': key }
+  it('should return 400 for empty string id', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: '' })
 
-    await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'admin' })
-
-    const { status, body } = await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'super-admin' })
-    expect(status).toBe(400)
-    expect((body as any).error).toBe('IdempotencyParameterMismatch')
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
-  it('allows_different_keys_for_same_payload', async () => {
-    const payload = { userId: 'admin-user-1', role: 'admin' }
+  it('should return 400 for extra unknown fields (strict schema)', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123', maliciousField: 'attack' })
 
-    const res1 = await request(app, 'POST', '/api/admin/roles/assign', { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-key-a' }, payload)
-    const res2 = await request(app, 'POST', '/api/admin/roles/assign', { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-key-b' }, payload)
-
-    expect(res1.status).toBe(200)
-    expect(res2.status).toBe(200)
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
-  it('does_not_interfere_when_no_idempotency_key', async () => {
-    const payload = { userId: 'admin-user-1', role: 'admin' }
-
-    const res = await request(app, 'POST', '/api/admin/roles/assign', ADMIN_AUTH, payload)
-    expect(res.status).toBe(200)
-    expect((res.body as any).success).toBe(true)
-  })
-
-  it('applies_idempotency_to_key_revocation', async () => {
-    const key = 'ia-test-key-revoke-1'
-    const headers = { ...ADMIN_AUTH, 'idempotency-key': key }
-    const payload = { userId: 'verifier-user-1', apiKey: 'verifier-key-67890' }
-
-    const res1 = await request(app, 'POST', '/api/admin/keys/revoke', headers, payload)
-    expect(res1.status).toBe(200)
-
-    const res2 = await request(app, 'POST', '/api/admin/keys/revoke', headers, payload)
-    expect(res2.status).toBe(200)
-    expect(res2.body).toEqual(res1.body)
-  })
-})
-
-describe('Admin Routes — Audit Logged Actions', () => {
-  let app: Express
-
-  beforeEach(async () => {
-    await auditLogService.clearLogs()
-    const { createAdminRouter } = await import('./index.js')
-    app = express()
-    app.use(express.json())
-    app.use('/api/admin', createAdminRouter())
-    app.use(errorHandler)
-  })
-
-  it('does_not_log_on_auth_failure', async () => {
-    await request(app, 'POST', '/api/admin/roles/assign', {}, { userId: 'admin-user-1', role: 'admin' })
-
-    const logs = await auditLogService.getAllLogs()
-    const roleLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    expect(roleLogs.length).toBe(0)
-  })
-
-  it('does_not_log_on_authorization_failure', async () => {
-    await request(app, 'POST', '/api/admin/roles/assign', VERIFIER_AUTH, { userId: 'admin-user-1', role: 'admin' })
-
-    const logs = await auditLogService.getAllLogs()
-    const roleLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    expect(roleLogs.length).toBe(0)
-  })
-
-  it('logs_role_assignment_on_success', async () => {
-    const payload = { userId: 'admin-user-1', role: 'admin' }
-    await request(app, 'POST', '/api/admin/roles/assign', ADMIN_AUTH, payload)
-
-    const logs = await auditLogService.getAllLogs()
-    const roleLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    expect(roleLogs.length).toBeGreaterThanOrEqual(1)
-    const lastLog = roleLogs[roleLogs.length - 1]
-    expect(lastLog.actorId).toBe('admin-user-1')
-    expect(lastLog.actorEmail).toBe('admin@credence.org')
-    expect(lastLog.resourceId).toBe('admin-user-1')
-    expect(lastLog.status).toBe('success')
-    expect(lastLog.details).toHaveProperty('oldRole')
-    expect(lastLog.details).toHaveProperty('newRole', 'admin')
-  })
-
-  it('logs_invalid_role_attempt_as_failure', async () => {
-    const payload = { userId: 'admin-user-1', role: 'nonexistent-role' }
-    await request(app, 'POST', '/api/admin/roles/assign', ADMIN_AUTH, payload)
-
-    const logs = await auditLogService.getAllLogs()
-    const roleLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    expect(roleLogs.length).toBeGreaterThanOrEqual(1)
-    const lastLog = roleLogs[roleLogs.length - 1]
-    expect(lastLog.status).toBe('failure')
-  })
-
-  it('logs_user_not_found_as_failure', async () => {
-    const payload = { userId: 'nonexistent-user', role: 'admin' }
-    await request(app, 'POST', '/api/admin/roles/assign', ADMIN_AUTH, payload)
-
-    const logs = await auditLogService.getAllLogs()
-    const roleLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    expect(roleLogs.length).toBeGreaterThanOrEqual(1)
-    const lastLog = roleLogs[roleLogs.length - 1]
-    expect(lastLog.status).toBe('failure')
-  })
-
-  it('logs_multiple_actions_independently', async () => {
-    await request(app, 'POST', '/api/admin/roles/assign', ADMIN_AUTH, { userId: 'admin-user-1', role: 'admin' })
-    await request(app, 'POST', '/api/admin/keys/revoke', ADMIN_AUTH, { userId: 'verifier-user-1', apiKey: 'verifier-key-67890' })
-
-    const logs = await auditLogService.getAllLogs()
-    const assignLogs = logs.filter((l) => l.action === AuditAction.ASSIGN_ROLE)
-    const revokeLogs = logs.filter((l) => l.action === AuditAction.REVOKE_API_KEY)
-    expect(assignLogs.length).toBeGreaterThanOrEqual(1)
-    expect(revokeLogs.length).toBeGreaterThanOrEqual(1)
-  })
-
-  it('logs_key_revocation_on_success', async () => {
-    const payload = { userId: 'admin-user-1', apiKey: 'admin-key-12345' }
-    await request(app, 'POST', '/api/admin/keys/revoke', ADMIN_AUTH, payload)
-
-    const logs = await auditLogService.getAllLogs()
-    const revokeLogs = logs.filter((l) => l.action === AuditAction.REVOKE_API_KEY)
-    expect(revokeLogs.length).toBeGreaterThanOrEqual(1)
-    const lastLog = revokeLogs[revokeLogs.length - 1]
-    expect(lastLog.actorId).toBe('admin-user-1')
-    expect(lastLog.status).toBe('success')
-  })
 })

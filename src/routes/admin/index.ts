@@ -11,6 +11,7 @@ import { rotateSigningKeyBodySchema } from '../../schemas/admin.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
 import migrationsRouter from './migrations.js'
+import systemRouter from './system.js'
 import {
   buildCursorPaginationLinks,
   buildPaginationLinks,
@@ -42,13 +43,8 @@ import {
   revokeApiKeyBodySchema,
   issueImpersonationTokenBodySchema,
   replayEventBodySchema,
-  replayWebhookBodySchema,
-  purgeCacheBodySchema,
-  resetCacheBodySchema,
 } from '../../schemas/admin.js'
-import type { ReplayEventBody, ReplayWebhookBody, PurgeCacheBody, ResetCacheBody } from '../../schemas/admin.js'
-import { cache } from '../../cache/redis.js'
-import { invalidateCache, invalidatePattern } from '../../cache/invalidation.js'
+import type { ReplayEventBody } from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
 import { validateConfig, ConfigValidationError } from "../../config/index.js";
@@ -199,14 +195,14 @@ export function createAdminRouter(): Router {
 
       res.status(200).json({
         success: true,
-        message: result.message,
-        data: result.user,
+        message: 'Configuration reloaded successfully from Vault',
       })
     } catch (error) {
       next(error)
     }
-  },
-  )
+  }
+
+  router.post('/config/reload', requireUserAuth, requireAdminRole, handleReloadConfig)
 
   /**
    * POST /api/admin/keys/revoke
@@ -233,16 +229,6 @@ export function createAdminRouter(): Router {
       next(error);
     }
   });
-
-      res.status(200).json({
-        success: true,
-        message: result.message,
-      })
-    } catch (error) {
-      next(error)
-    }
-  },
-  )
 
   /**
    * POST /api/admin/impersonate
@@ -590,6 +576,40 @@ export function createAdminRouter(): Router {
   )
 
   /**
+   * POST /api/admin/replay-event
+   *
+   * Replay a specific failed inbound event by id (passed in body).
+   * Audit-logged via ReplayService.replayEvent.
+   */
+  router.post(
+    '/replay-event',
+    requireUserAuth,
+    requireAdminRole,
+    validate({ body: replayEventBodySchema }),
+    async (req: Request, res: Response, next: NextFunction) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const admin = authReq.user!
+        const requestId = (req as any).requestId
+        const { id } = req.body as ReplayEventBody
+
+        const result = await replayService.replayEvent(
+          id,
+          admin.id,
+          admin.email,
+          admin.tenantId,
+          req.ip,
+          requestId
+        )
+
+        res.status(200).json(result)
+      } catch (error: any) {
+        next(error)
+      }
+    }
+  )
+
+  /**
    * POST /api/admin/replay
    * Replays a request by requestId against captured snapshot and returns diff.
    */
@@ -657,6 +677,9 @@ export function createAdminRouter(): Router {
 
   // Mount migrations sub-router (dry-run)
   router.use('/migrations', migrationsRouter)
+
+  // Mount system status sub-router
+  router.use('/system', systemRouter)
 
   return router
 }

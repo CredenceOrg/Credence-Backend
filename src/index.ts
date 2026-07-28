@@ -8,6 +8,10 @@ import disputesRouter from "./routes/disputes.js";
 import evidenceRouter from "./routes/evidence.js";
 import { loadConfig } from "./config/index.js";
 import { pool, workerPool, replicaPool } from "./db/pool.js";
+import {
+  validateMigrationChecksums,
+  resolveMigrationsDir,
+} from "./migrations/index.js";
 import { redisConnection } from "./cache/redis.js";
 import { createShutdownMetrics } from "./observability/shutdownMetrics.js";
 import { AnalyticsService } from "./services/analytics/service.js";
@@ -106,6 +110,34 @@ if (process.env.NODE_ENV !== "test") {
 
   try {
     const config = loadConfig();
+
+    if (process.env.MIGRATION_CHECKSUM_VALIDATE !== "false") {
+      const bootstrapMissing = process.env.MIGRATION_CHECKSUM_BOOTSTRAP !== "false";
+      try {
+        const checksumResult = await validateMigrationChecksums(
+          pool,
+          {
+            migrationsDir: resolveMigrationsDir(),
+            migrationsTable: process.env.MIGRATIONS_TABLE ?? "pgmigrations",
+            migrationsSchema: process.env.MIGRATIONS_SCHEMA ?? "public",
+          },
+          { bootstrapMissing },
+        );
+        if (checksumResult.bootstrapped.length > 0) {
+          logger.info(
+            `[Main] Bootstrapped migration checksums for: ${checksumResult.bootstrapped.join(", ")}`,
+          );
+        }
+      } catch (checksumErr) {
+        logger.error(
+          `[Main] Aborting startup — migration checksum validation failed: ${
+            checksumErr instanceof Error ? checksumErr.message : String(checksumErr)
+          }`,
+          checksumErr,
+        );
+        process.exit(1);
+      }
+    }
 
     // Bootstrap the JWT signing key BEFORE accepting traffic so the
     // `/.well-known/jwks.json` endpoint and JWT signing respond with

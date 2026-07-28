@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
 import { tracingContext, createRequestLogger } from '../utils/logger.js'
+import { HEADER_CORRELATION_ID } from '../config/constants.js'
 
 /**
  * Middleware to handle Request ID, Correlation ID, Trace ID, and context for distributed tracing.
@@ -10,8 +11,9 @@ export const requestIdMiddleware = (
   res: Response,
   next: NextFunction
 ) => {
-  // 1. Handle Correlation ID
-  const correlationId = req.header('x-correlation-id') || randomUUID()
+  // 1. Handle Correlation ID — prefer value already set by correlationIdMiddleware
+  const correlationId = (req['correlationId'] as string) || req.header(HEADER_CORRELATION_ID) || randomUUID()
+  req['correlationId'] = correlationId
 
   // 2. Handle Request ID
   const requestId = (req.header('x-request-id') as string) || randomUUID()

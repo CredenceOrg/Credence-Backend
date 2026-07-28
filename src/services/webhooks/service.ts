@@ -7,6 +7,7 @@ import {
   recordJobDeadLetter,
   recordJobTerminalOutcome,
 } from '../../jobs/retryMetrics.js'
+import { recordWebhookDeliveryOutcome } from '../../metrics/webhookLagDashboard.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -119,6 +120,8 @@ export class WebhookService {
       ))
     )
 
+    const flatResults = rawResults.flat()
+
     if (this.dlq) {
       // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
       // We compute the exhausted-result list exactly once and reuse it for
@@ -128,7 +131,7 @@ export class WebhookService {
       // `errorCode`, then to `UNKNOWN`. The boundedReason helper inside
       // retryMetrics.ts normalizes the label to a low-cardinality
       // ASCII-uppercase-underscore identifier.
-      const exhaustedResults = rawResults.flat().filter(r => !r.success)
+      const exhaustedResults = flatResults.filter(r => !r.success)
       for (const r of exhaustedResults) {
         const reasonText = r.error ?? r.errorCode ?? 'UNKNOWN'
         // WebhookDeliveryResult.attempts is REQUIRED by the type but the
@@ -142,6 +145,12 @@ export class WebhookService {
       await Promise.all(
         exhaustedResults.map(r => this.dlq!.push(buildDlqEntry(r, payload)))
       )
+    }
+
+    // Compact lag-dashboard success-rate counters (no high-cardinality labels).
+    // See docs/WEBHOOK_LAG_DASHBOARD.md / src/metrics/webhookLagDashboard.ts.
+    for (const r of flatResults) {
+      recordWebhookDeliveryOutcome(r.success ? 'success' : 'failure')
     }
 
     return rawResults.map(webhookResults => 

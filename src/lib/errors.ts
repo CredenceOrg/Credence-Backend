@@ -170,6 +170,19 @@ export class RequestTooLargeError extends AppError {
 }
 
 /**
+ * Specific error for authenticated exports that would exceed the row/payload cap.
+ * Rejected before streaming or other expensive export work begins.
+ */
+export class ExportTooLargeError extends AppError {
+  constructor(
+    message: string = 'Export exceeds the maximum allowed size',
+    details?: { rowCount: number; maxRows: number },
+  ) {
+    super(message, ErrorCodeRegistry.REQUEST_TOO_LARGE, undefined, details)
+  }
+}
+
+/**
  * Specific error for missing required security headers.
  */
 export class MissingSecurityHeaderError extends AppError {

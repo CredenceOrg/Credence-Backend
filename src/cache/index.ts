@@ -10,7 +10,10 @@ export {
   invalidatePattern,
   withCacheInvalidation,
   createCacheKey,
-  type InvalidationOptions
+  invalidateTenantCache,
+  isValidTenantId,
+  type InvalidationOptions,
+  type TenantCacheInvalidationResult
 } from './invalidation.js';
 export {
   InvalidationBus,

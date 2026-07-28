@@ -35,7 +35,8 @@
     "test:db:reset": "npm run build && tsx scripts/reset-test-db.ts",
     "generate:openapi": "npx tsx scripts/generate-openapi.ts",
     "drill:horizon": "tsx scripts/horizon-failover-drill.ts",
-    "drill:restore": "tsx scripts/restore-verify.ts"
+    "drill:restore": "tsx scripts/restore-verify.ts",
+    "cache:invalidate-tenant": "tsx src/cli/invalidateTenantCache.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.7.0",
@@ -46,11 +47,13 @@
     "@opentelemetry/sdk-trace-base": "^1.26.0",
     "@opentelemetry/sdk-trace-node": "^1.26.0",
     "@opentelemetry/semantic-conventions": "^1.27.0",
+    "@rolldown/binding-win32-x64-msvc": "^1.2.0",
     "@stellar/stellar-sdk": "^14.5.0",
     "asynckit": "^0.5.0",
     "better-sqlite3": "^12.6.2",
     "combined-stream": "^1.0.8",
     "compression": "^1.8.1",
+    "cors": "^2.8.6",
     "csv-parse": "^6.2.1",
     "delayed-stream": "^1.0.0",
     "dotenv": "^17.3.1",
@@ -74,6 +77,7 @@
     "@cyclonedx/cyclonedx-npm": "^5.0.0",
     "@types/better-sqlite3": "^7.6.13",
     "@types/compression": "^1.8.1",
+    "@types/cors": "^2.8.19",
     "@types/express": "^4.17.25",
     "@types/jest": "^30.0.0",
     "@types/multer": "^2.1.0",

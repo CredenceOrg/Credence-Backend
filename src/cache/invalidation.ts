@@ -9,6 +9,7 @@ import { cache, CacheService } from './redis.js'
 import { recordStaleCacheRead } from '../middleware/metrics.js'
 import { getInvalidationBus } from './invalidationBus.js'
 import { logger } from '../utils/logger.js'
+import { ValidationError, ServiceUnavailableError } from '../lib/errors.js'
 
 export interface InvalidationOptions {
   /**
@@ -82,9 +83,9 @@ export async function invalidateCache(
     
     if (staleCheck) {
       // Use custom verification function or default comparison
-      const isStale = verifyFn 
+      const isStale = verifyFn
         ? verifyFn(staleCheck, freshData)
-        : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+        : computeStableHash(staleCheck) !== computeStableHash(freshData)
       
       if (isStale) {
         recordStaleCacheRead(namespace)
@@ -226,7 +227,7 @@ export function withCacheInvalidation<T extends (...args: any[]) => Promise<any>
 
 /**
  * Helper to create a cache key from multiple parts.
- * 
+ *
  * @param parts - Parts to join into a cache key
  * @returns Cache key string
  */
@@ -242,4 +243,61 @@ export function createCacheKey(...parts: (string | number | Record<string, strin
       return String(p)
     })
     .join(':')
+}
+
+/**
+ * Tenant IDs are UUIDs throughout the schema (see
+ * src/migrations/007_add_tenant_id_and_rls.ts). Restricting invalidation to
+ * this shape also stops a caller-supplied tenantId from smuggling Redis KEYS
+ * glob characters (e.g. `*`) into the invalidation pattern, which could
+ * otherwise wipe far more than the intended tenant's entries.
+ */
+const TENANT_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+export function isValidTenantId(tenantId: unknown): tenantId is string {
+  return typeof tenantId === 'string' && TENANT_ID_PATTERN.test(tenantId)
+}
+
+export interface TenantCacheInvalidationResult {
+  tenantId: string
+  keysCleared: number
+}
+
+/**
+ * Invalidate every cache entry scoped to a tenant, without requiring a
+ * service restart. Tenant-scoped cache entries are stored under a namespace
+ * equal to the tenant's ID (e.g. `cache.set(tenantId, key, value)`), so this
+ * clears the tenant's entire Redis + L1 footprint in one call.
+ *
+ * Only key counts are ever logged or returned — never cached values — so
+ * this is safe to call from support tooling without risking a leak of
+ * tenant data into logs.
+ *
+ * @param tenantId - Tenant identifier (UUID)
+ * @returns The tenant ID and number of keys cleared (0 if the tenant had no cached entries)
+ * @throws {ValidationError} If tenantId is missing or not a valid UUID
+ * @throws {ServiceUnavailableError} If the cache backend cannot be reached
+ */
+export async function invalidateTenantCache(
+  tenantId: unknown
+): Promise<TenantCacheInvalidationResult> {
+  if (!isValidTenantId(tenantId)) {
+    throw new ValidationError('tenantId must be a valid UUID')
+  }
+
+  const health = await cache.healthCheck()
+  if (!health.healthy) {
+    logger.error(`Tenant cache invalidation aborted: cache backend unavailable for tenant ${tenantId}`)
+    throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
+  }
+
+  const keysCleared = await cache.clearNamespace(tenantId)
+
+  logger.info({
+    message: 'Tenant cache invalidated',
+    tenantId,
+    keysCleared
+  })
+
+  return { tenantId, keysCleared }
 }

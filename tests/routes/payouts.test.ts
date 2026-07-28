@@ -115,4 +115,96 @@ describe('Payouts route validation (#325)', () => {
     
     expect(res.status).toBe(201)
   })
+
+  it('accepts bondId as number', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      bondId: 456,
+      amount: '10.5',
+      transactionHash: '0x456',
+      status: 'settled',
+    })
+    
+    expect(res.status).toBe(201)
+  })
+
+  it('accepts payload without optional fields', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      bondId: '789',
+      amount: '10.5',
+      transactionHash: '0x789',
+    })
+    
+    expect(res.status).toBe(201)
+  })
+
+  it('rejects empty body', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({})
+    
+    expect(res.status).toBe(400)
+  })
+
+  it('rejects missing bondId', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      amount: '10.5',
+      transactionHash: '0x123',
+    })
+    
+    expect(res.status).toBe(400)
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'bondId' })
+      ])
+    )
+  })
+
+  it('rejects missing transactionHash', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      bondId: '123',
+      amount: '10.5',
+    })
+    
+    expect(res.status).toBe(400)
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'transactionHash' })
+      ])
+    )
+  })
+
+  it('rejects amount exceeding 1e18', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      bondId: '123',
+      amount: '1e18',
+      transactionHash: '0x123',
+    })
+    
+    expect(res.status).toBe(400)
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'amount' })
+      ])
+    )
+  })
+
+  it('rejects amount with too many decimal places', async () => {
+    const app = appWithPayouts()
+    const res = await request(app).post('/api/payouts').send({
+      bondId: '123',
+      amount: '10.1234567890123456789',
+      transactionHash: '0x123',
+    })
+    
+    expect(res.status).toBe(400)
+    expect(res.body.details).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: 'amount' })
+      ])
+    )
+  })
 })
