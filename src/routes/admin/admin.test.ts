@@ -178,27 +178,40 @@ describe('Admin Routes — Idempotent Mutations', () => {
     const headers = { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-new-1' }
     const payload = { userId: 'admin-user-1', role: 'admin' }
 
-    const res = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
+    expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
+  });
+});
+
+describe('POST /api/admin/replay-event', () => {
+  it('should replay event with valid id', async () => {
+    const { ReplayService } = await import('../../services/replayService.js')
+    const mockReplayService = vi.mocked(ReplayService)
+    mockReplayService.prototype.replayEvent = vi.fn().mockResolvedValue({
+      success: true,
+      message: 'Event successfully replayed',
+    })
+
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123' })
+
     expect(res.status).toBe(200)
-    expect((res.body as any).success).toBe(true)
+    expect(res.body.success).toBe(true)
   })
 
-  it('replays_response_for_same_idempotency_key', async () => {
-    const key = 'ia-test-replay-1'
-    const headers = { ...ADMIN_AUTH, 'idempotency-key': key }
-    const payload = { userId: 'admin-user-1', role: 'admin' }
+  it('should return 400 when id is missing', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({})
 
-    const res1 = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
-    expect(res1.status).toBe(200)
-
-    const res2 = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
-    expect(res2.status).toBe(200)
-    expect(res2.body).toEqual(res1.body)
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
-  it('rejects_different_payload_for_same_key', async () => {
-    const key = 'ia-test-conflict-1'
-    const headers = { ...ADMIN_AUTH, 'idempotency-key': key }
+  it('should return 400 for empty string id', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: '' })
 
     await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'admin' })
 
@@ -207,14 +220,13 @@ describe('Admin Routes — Idempotent Mutations', () => {
     expect((body as any).code).toBe('idempotency_key_mismatch')
   })
 
-  it('allows_different_keys_for_same_payload', async () => {
-    const payload = { userId: 'admin-user-1', role: 'admin' }
+  it('should return 400 for extra unknown fields (strict schema)', async () => {
+    const res = await request(setup())
+      .post('/api/admin/replay-event')
+      .send({ id: 'evt-123', maliciousField: 'attack' })
 
-    const res1 = await request(app, 'POST', '/api/admin/roles/assign', { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-key-a' }, payload)
-    const res2 = await request(app, 'POST', '/api/admin/roles/assign', { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-key-b' }, payload)
-
-    expect(res1.status).toBe(200)
-    expect(res2.status).toBe(200)
+    expect(res.status).toBe(400)
+    expect(res.body.code).toBe('validation_failed')
   })
 
   it('does_not_interfere_when_no_idempotency_key', async () => {

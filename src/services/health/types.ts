@@ -27,6 +27,7 @@ export type DependencyReason =
   | 'unreachable'
   | 'not_initialized'
   | 'lag_exceeded'
+  | 'not_configured'
   | 'error'
 
 export interface DependencyHealth {

@@ -238,3 +238,4 @@ Key metrics for webhook delivery:
 - `webhook_mtls_failure_total` - Count of mTLS-specific failures (with `subscriber` and `reason` labels)
 - `webhook_dlq_size` - Current size of the dead letter queue
 - `webhook_payload_bytes` - Histogram of webhook payload sizes in bytes (with `subscriber` label)
+- `webhook_queued_oldest_age_seconds` / `webhook_delivery_outcome_total` - Compact operator summary for queue lag and success rate (see [WEBHOOK_LAG_DASHBOARD.md](WEBHOOK_LAG_DASHBOARD.md))

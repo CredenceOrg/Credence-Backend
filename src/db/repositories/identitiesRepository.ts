@@ -1,5 +1,6 @@
 import type { Queryable } from "./queryable.js";
 import { BaseRepository } from "./baseRepository.js";
+import { OptimisticLockError } from "../../lib/errors.js";
 
 export interface Identity {
   address: string;
@@ -107,14 +108,19 @@ export class IdentitiesRepository extends BaseRepository {
 
   /**
    * Updates an identity with optimistic locking.
-   * Only updates if the current version matches the expected version.
-   * Returns null if the version has changed (concurrent modification detected).
-   * On success, increments the version and returns the updated identity.
+   *
+   * Only proceeds when the row's current `version` matches
+   * `input.expectedVersion`. On success the version is atomically incremented
+   * and the updated identity is returned.
+   *
+   * @throws {OptimisticLockError} when the version has been changed by a
+   *   concurrent writer (the resource must be re-fetched before retrying).
+   * @throws {Error} when no row exists for the given address.
    */
   async updateWithOptimisticLocking(
     address: string,
     input: UpdateIdentityWithVersionInput,
-  ): Promise<Identity | null> {
+  ): Promise<Identity> {
     this.assertTenant();
     const result = await this.db.query<IdentityRow>(
       `
@@ -128,7 +134,24 @@ export class IdentitiesRepository extends BaseRepository {
       [address, input.displayName, input.expectedVersion],
     );
 
-    return result.rows[0] ? mapIdentity(result.rows[0]) : null;
+    if (!result.rows[0]) {
+      // Distinguish between "row does not exist" and "version mismatch" so we
+      // surface the right error.  The extra read is only on the conflict path so
+      // it does not affect the hot path.
+      const existing = await this.db.query<{ version: number }>(
+        `SELECT version FROM identities WHERE address = $1`,
+        [address],
+      );
+
+      if (!existing.rows[0]) {
+        throw new Error(`Identity not found: ${address}`);
+      }
+
+      // Row exists but version did not match → optimistic lock conflict.
+      throw new OptimisticLockError(address, input.expectedVersion);
+    }
+
+    return mapIdentity(result.rows[0]);
   }
 
   async delete(address: string): Promise<boolean> {

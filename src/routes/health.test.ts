@@ -69,16 +69,18 @@ describe('Health routes', () => {
       expect(typeof res.body.dependencies.horizon.latencyMs).toBe('number')
     })
 
-    it('returns 200 degraded when no deps configured', async () => {
+    it('returns 503 unhealthy when no deps configured (critical deps fail closed)', async () => {
       const app = appWithHealth({})
       const res = await request(app).get('/api/health')
-      expect(res.status).toBe(200)
-      expect(res.body.status).toBe('degraded')
+      expect(res.status).toBe(503)
+      expect(res.body.status).toBe('unhealthy')
       expect(res.body.dependencies.postgres.status).toBe('not_configured')
       expect(res.body.dependencies.redis.status).toBe('not_configured')
       expect(res.body.dependencies.horizonListener.status).toBe('not_configured')
-      expect(res.body.dependencies.outboxPublisher.status).toBe('not_configured')
-      expect(res.body.dependencies.horizon.status).toBe('not_configured')
+      // degradation block should list the missing critical deps
+      expect(res.body.degradation.criticalDown).toEqual(
+        expect.arrayContaining(['postgres', 'redis', 'horizonListener']),
+      )
     })
 
     it('returns 503 when postgres is down', async () => {
@@ -181,10 +183,13 @@ describe('Health routes', () => {
       expect(res.body.dependencies.keyManager.reason).toBe('not_initialized')
     })
 
-    it('reports not_configured when no keyManager probe supplied', async () => {
-      // Empty fixture: no probe supplied, router falls back to
-      // not_configured (which makes status === 'degraded', not 'unhealthy').
-      const app = appWithHealth({})
+    it('reports not_configured when no keyManager probe supplied (only non-critical dep missing)', async () => {
+      // All critical deps are up; only keyManager is absent → degraded (not unhealthy).
+      const app = appWithHealth({
+        postgres: async () => ({ status: 'up' as const }),
+        redis: async () => ({ status: 'up' as const }),
+        horizonListener: async () => ({ status: 'up' as const }),
+      })
       const res = await request(app).get('/api/health')
       expect(res.body.dependencies.keyManager.status).toBe('not_configured')
       expect(res.body.status).toBe('degraded')
@@ -218,7 +223,12 @@ describe('Health routes', () => {
     })
 
     it('reports not_configured when no kek probe supplied', async () => {
-      const app = appWithHealth({})
+      // All critical deps up; kek absent → degraded (not unhealthy).
+      const app = appWithHealth({
+        postgres: async () => ({ status: 'up' as const }),
+        redis: async () => ({ status: 'up' as const }),
+        horizonListener: async () => ({ status: 'up' as const }),
+      })
       const res = await request(app).get('/api/health')
       expect(res.body.dependencies.kek.status).toBe('not_configured')
     })
@@ -317,11 +327,14 @@ describe('Health routes', () => {
       )
     })
 
-    it('returns 200 with status=degraded and reasons when only deps are not_configured', async () => {
+    it('returns 200 with status=unhealthy when critical deps are not_configured', async () => {
+      // No probes → critical deps not_configured → unhealthy (fail-closed).
+      // /degraded always 200 even when unhealthy, so this verifies both rules.
       const app = appWithHealth({})
       const res = await request(app).get('/api/health/degraded')
       expect(res.status).toBe(200)
-      expect(res.body.status).toBe('degraded')
+      expect(res.body.status).toBe('unhealthy')
+      expect(res.body.degradation.criticalDown.length).toBeGreaterThan(0)
       expect(res.body.degradation.notConfigured.length).toBeGreaterThan(0)
     })
 
