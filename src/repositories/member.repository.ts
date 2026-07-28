@@ -104,22 +104,22 @@ export class MemberRepository {
   ): Promise<{ members: Member[]; total: number }> {
     const deleteFilter = includeDeleted ? '' : 'AND deleted_at IS NULL'
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) FROM org_members
-        WHERE org_id = $1 ${deleteFilter}`,
-      [orgId],
-    )
-    const total = parseInt(countResult.rows[0].count, 10)
-
     const { rows } = await this.pool.query(
-      `SELECT * FROM org_members
+      `SELECT *, COUNT(*) OVER() AS total_count
+        FROM org_members
         WHERE org_id = $1 ${deleteFilter}
         ORDER BY created_at ASC
         LIMIT $2 OFFSET $3`,
       [orgId, limit, offset],
     )
 
-    return { members: rows.map(rowToMember), total }
+    const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0
+    const members = rows.map((r) => {
+      const { total_count: _tc, ...memberRow } = r
+      return rowToMember(memberRow)
+    })
+
+    return { members, total }
   }
 
   /**
