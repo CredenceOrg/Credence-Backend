@@ -47,7 +47,7 @@ import {
 import type { ReplayEventBody } from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
-import { validateConfig, ConfigValidationError } from "../../config/index.js";
+import { validateConfig, ConfigValidationError, loadConfig } from "../../config/index.js";
 import fs from "fs";
 import dotenv from "dotenv";
 import { WebhookService } from "../../services/webhooks/service.js";
@@ -71,7 +71,7 @@ export function createAdminRouter(): Router {
   const replayService = new ReplayService(replayRepo)
 
   const identityRepo = new IdentityRepository(pool)
-  const bondsRepo = new BondsRepository(pool)
+  const bondsRepo = new BondsRepository(pool, pool, loadConfig().db.lockTimeouts)
 
   // Register handlers
   registerAllReplayHandlers(replayService, identityRepo, bondsRepo);
