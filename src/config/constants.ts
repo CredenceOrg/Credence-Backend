@@ -15,6 +15,13 @@ export const MAX_TOP_TALKERS_LIMIT = 100
 /** Default time window in minutes for top talkers request aggregation (1 hour). */
 export const DEFAULT_TOP_TALKERS_WINDOW_MINUTES = 60
 
+/**
+ * Hard cap on rows included in a single authenticated data export.
+ * Oversized exports are rejected before streaming begins.
+ * Override via EXPORT_MAX_ROWS.
+ */
+export const DEFAULT_EXPORT_MAX_ROWS = 100_000
+
 /** Header name used to trigger graceful degradation / read-only mode */
 export const READ_ONLY_HEADER = 'x-read-only'
 
