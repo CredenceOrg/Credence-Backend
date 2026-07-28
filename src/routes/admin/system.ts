@@ -2,8 +2,11 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { requireUserAuth, requireAdminRole } from '../../middleware/auth.js'
 import { pool } from '../../db/pool.js'
 import { BACKUP_STALE_THRESHOLD_MS } from '../../config/constants.js'
+import { BackfillProgressRepository } from '../../db/repositories/backfillProgressRepository.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 const router = Router()
+const backfillRepo = new BackfillProgressRepository(pool)
 
 /**
  * GET /api/admin/system/backup-status
@@ -37,6 +40,58 @@ router.get(
           isStale,
           lastSuccessfulBackup,
         },
+      })
+    } catch (error) {
+      next(error)
+    }
+  },
+)
+
+/**
+ * GET /api/admin/system/backfill-status
+ *
+ * Returns the status of all backfill progress markers.
+ * Useful for operators to check whether database backfills are in flight.
+ *
+ * Response shape:
+ *   {
+ *     success: true,
+ *     data: [
+ *       {
+ *         jobName: string,
+ *         cursorValue: string,
+ *         rowsProcessed: number,
+ *         totalRows: number | null,
+ *         status: 'pending' | 'running' | 'completed' | 'failed',
+ *         lastError: string | null,
+ *         createdAt: string (ISO),
+ *         updatedAt: string (ISO)
+ *       }
+ *     ]
+ *   }
+ */
+router.get(
+  '/backfill-status',
+  requireUserAuth,
+  requireAdminRole,
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const markers = await backfillRepo.findAll()
+
+      const data = markers.map((m) => ({
+        jobName: m.jobName,
+        cursorValue: m.cursorValue,
+        rowsProcessed: m.rowsProcessed,
+        totalRows: m.totalRows,
+        status: m.status,
+        lastError: m.lastError,
+        createdAt: m.createdAt.toISOString(),
+        updatedAt: m.updatedAt.toISOString(),
+      }))
+
+      res.status(200).json({
+        success: true,
+        data,
       })
     } catch (error) {
       next(error)
