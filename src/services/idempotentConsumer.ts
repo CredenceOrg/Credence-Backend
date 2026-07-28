@@ -1,4 +1,6 @@
 import type { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
+import { withRetryableTransaction } from '../db/retry.js'
+import { pool } from '../db/pool.js'
 
 export interface IdempotentMessage<T = unknown> {
   messageId: string
@@ -44,51 +46,62 @@ export class IdempotentConsumer<T = unknown, R = unknown> {
     messageId: string,
     handler: () => Promise<R>
   ): Promise<IdempotentResult<R>> {
-    const existing = await this.repository.findByKey(messageId)
+    // Wrap the entire idempotency check + handler + save in a retryable transaction
+    // to handle concurrent message processing conflicts
+    return await withRetryableTransaction(
+      pool,
+      async (client) => {
+        const existing = await this.repository.findByKey(messageId)
 
-    if (existing) {
-      return {
-        success: existing.responseCode < 400,
-        result: existing.responseBody,
-        processedAt: existing.createdAt,
+        if (existing) {
+          return {
+            success: existing.responseCode < 400,
+            result: existing.responseBody,
+            processedAt: existing.createdAt,
+          }
+        }
+
+        try {
+          const result = await handler()
+
+          await this.repository.save({
+            key: messageId,
+            actorId: this.actorId,
+            requestHash: messageId,
+            responseCode: 200,
+            responseBody: result,
+            ttlSeconds: this.ttlSeconds,
+          })
+
+          return {
+            success: true,
+            result,
+            processedAt: new Date(),
+          }
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error)
+
+          await this.repository.save({
+            key: messageId,
+            actorId: this.actorId,
+            requestHash: messageId,
+            responseCode: 500,
+            responseBody: { error: errorMessage },
+            ttlSeconds: this.ttlSeconds,
+          })
+
+          return {
+            success: false,
+            error: errorMessage,
+            processedAt: new Date(),
+          }
+        }
+      },
+      {
+        maxRetries: 3,
+        operationName: `process-idempotent-message-${messageId}`,
       }
-    }
-
-    try {
-      const result = await handler()
-
-      await this.repository.save({
-        key: messageId,
-        actorId: this.actorId,
-        requestHash: messageId,
-        responseCode: 200,
-        responseBody: result,
-        ttlSeconds: this.ttlSeconds,
-      })
-
-      return {
-        success: true,
-        result,
-        processedAt: new Date(),
-      }
-    } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : String(error)
-
-      await this.repository.save({
-        key: messageId,
-        actorId: this.actorId,
-        requestHash: messageId,
-        responseCode: 500,
-        responseBody: { error: errorMessage },
-        ttlSeconds: this.ttlSeconds,
-      })
-
-      return {
-        success: false,
-        error: errorMessage,
-        processedAt: new Date(),
-      }
-    }
+    )
   }
 
   async isProcessed(messageId: string): Promise<boolean> {

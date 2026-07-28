@@ -4,6 +4,8 @@ import { invalidateCache } from '../cache/invalidation.js'
 import { recordSettlementDuplicate } from '../middleware/metrics.js'
 import { getFlag } from '../config/featureFlags.js'
 import { executeShadowWrite } from './shadowWrite.js'
+import { withRetryableTransaction } from '../db/retry.js'
+import { pool } from '../db/pool.js'
 /**
  * Issue #325: Import the schema-inferred type to ensure the service input
  * is aligned with the validated Zod schema. CreateSettlementInput from the
@@ -48,26 +50,42 @@ export class SettlementService {
    * 
    * When SHADOW_WRITE_MODE is enabled (and NEW_PIPELINE is true), writes go to both
    * old and new pipelines; results are diffed in metrics to validate the new pipeline.
+   * 
+   * Wrapped in withRetryableTransaction to handle transient PostgreSQL errors
+   * (serialization failures, deadlocks) with exponential backoff retry.
    */
   async upsertSettlementStatus(input: CreateSettlementInput): Promise<Settlement> {
-    let settlement: Settlement
-    let isDuplicate: boolean
+    // Wrap critical write in retryable transaction to handle transient failures
+    const { settlement, isDuplicate } = await withRetryableTransaction(
+      pool,
+      async (client) => {
+        let settlement: Settlement
+        let isDuplicate: boolean
 
-    // Check if shadow write mode is enabled for pipeline validation
-    const shadowWriteEnabled = getFlag('shadowWriteMode') && getFlag('newPipeline')
+        // Check if shadow write mode is enabled for pipeline validation
+        const shadowWriteEnabled = getFlag('shadowWriteMode') && getFlag('newPipeline')
 
-    if (shadowWriteEnabled) {
-      // Execute write to both old and new pipelines, diffing results in metrics
-      const shadowResult = await executeShadowWrite(this.repository, this.repository, input)
-      settlement = shadowResult.primaryResult.settlement
-      isDuplicate = shadowResult.primaryResult.isDuplicate
-    } else {
-      // Standard path: write to single pipeline (determined by NEW_PIPELINE flag)
-      const result = await this.repository.upsert(input)
-      settlement = result.settlement
-      isDuplicate = result.isDuplicate
-    }
+        if (shadowWriteEnabled) {
+          // Execute write to both old and new pipelines, diffing results in metrics
+          const shadowResult = await executeShadowWrite(this.repository, this.repository, input)
+          settlement = shadowResult.primaryResult.settlement
+          isDuplicate = shadowResult.primaryResult.isDuplicate
+        } else {
+          // Standard path: write to single pipeline (determined by NEW_PIPELINE flag)
+          const result = await this.repository.upsert(input)
+          settlement = result.settlement
+          isDuplicate = result.isDuplicate
+        }
+
+        return { settlement, isDuplicate }
+      },
+      {
+        maxRetries: 3,
+        operationName: 'upsert-settlement-status',
+      }
+    )
     
+    // Post-commit side effects: these run AFTER the transaction successfully commits
     // Record metric when duplicate settlement is detected and collapsed via transaction_hash idempotency
     if (isDuplicate) {
       recordSettlementDuplicate()
