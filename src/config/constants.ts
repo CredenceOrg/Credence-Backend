@@ -48,3 +48,8 @@ export const SESSION_SWEEP_INTERVAL_MS = 3_600_000
  * thundering herd against a just-recovered provider.
  */
 export const PROVIDER_RECOVERY_BUFFER_MS = 5_000
+
+/** 
+ * Threshold in milliseconds after which a backup is considered stale (24 hours).
+ */
+export const BACKUP_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000

@@ -11,6 +11,7 @@ import { rotateSigningKeyBodySchema } from '../../schemas/admin.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
 import migrationsRouter from './migrations.js'
+import systemRouter from './system.js'
 import {
   buildCursorPaginationLinks,
   buildPaginationLinks,
@@ -686,6 +687,9 @@ export function createAdminRouter(): Router {
 
   // Mount migrations sub-router (dry-run)
   router.use('/migrations', migrationsRouter)
+
+  // Mount system status sub-router
+  router.use('/system', systemRouter)
 
   return router
 }
