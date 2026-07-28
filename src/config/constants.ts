@@ -18,6 +18,13 @@ export const MAX_TOP_TALKERS_LIMIT = 100
 /** Default time window in minutes for top talkers request aggregation (1 hour). */
 export const DEFAULT_TOP_TALKERS_WINDOW_MINUTES = 60
 
+/**
+ * Hard cap on rows included in a single authenticated data export.
+ * Oversized exports are rejected before streaming begins.
+ * Override via EXPORT_MAX_ROWS.
+ */
+export const DEFAULT_EXPORT_MAX_ROWS = 100_000
+
 /** Header name used to trigger graceful degradation / read-only mode */
 export const READ_ONLY_HEADER = 'x-read-only'
 
@@ -48,3 +55,8 @@ export const SESSION_SWEEP_INTERVAL_MS = 3_600_000
  * thundering herd against a just-recovered provider.
  */
 export const PROVIDER_RECOVERY_BUFFER_MS = 5_000
+
+/** 
+ * Threshold in milliseconds after which a backup is considered stale (24 hours).
+ */
+export const BACKUP_STALE_THRESHOLD_MS = 24 * 60 * 60 * 1000

@@ -62,7 +62,7 @@ The request itself is malformed. Retrying unchanged will fail identically.
 | `invalid_stellar_address` | 400 | A Stellar address failed checksum/format validation. | Verify it is a strkey-encoded ed25519 public key (`G...`, 56 chars). |
 | `batch_size_too_small` | 400 | A batch request is below the minimum item count. | Add items or use the single-item endpoint. |
 | `batch_size_exceeded` | 413 | A batch request exceeds the maximum item count. | Split into smaller batches. |
-| `request_too_large` | 413 | The request body exceeds the configured size limit. | Reduce payload size; for evidence uploads see [evidence-upload-security.md](evidence-upload-security.md). |
+| `request_too_large` | 413 | The request body exceeds the configured size limit, or an authenticated export would exceed `EXPORT_MAX_ROWS`. | Reduce payload size; for evidence uploads see [evidence-upload-security.md](evidence-upload-security.md); for exports narrow the date window or see [export.md](export.md). |
 
 ## Authentication and authorization (401 / 403)
 

@@ -44,6 +44,7 @@ import {
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
 import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
+import { createExportRouter } from "./routes/export/index.js";
 
 const app = express();
 
@@ -209,6 +210,7 @@ app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 app.use("/api/payouts", createPayoutsRouter());
 
 app.use("/api/reports", reportRouter);
+app.use("/api/export", createExportRouter());
 app.use(cspReportRouter);
 
 

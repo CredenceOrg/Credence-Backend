@@ -133,3 +133,15 @@ export const replayEventBodySchema = z
 
 export type ReplayEventBody = z.infer<typeof replayEventBodySchema>
 
+/**
+ * Response schema for GET /api/admin/system/backup-status
+ */
+export const backupStatusResponseSchema = z.object({
+  success: z.boolean(),
+  data: z.object({
+    isStale: z.boolean(),
+    lastSuccessfulBackup: z.string().datetime().nullable(),
+  }),
+})
+
+export type BackupStatusResponse = z.infer<typeof backupStatusResponseSchema>

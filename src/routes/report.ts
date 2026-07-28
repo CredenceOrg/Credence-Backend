@@ -25,11 +25,11 @@ const reportService = new ReportService(reportRepository, reportStorage);
  *
  * Returns Top N tenants by request count in the aggregate window (default: last hour).
  *
- * @requires enterprise scope
+ * @requires exports:read scope
  */
 router.get(
   "/top-talkers",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.EXPORTS_READ),
   validate({ query: topTalkersQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -65,7 +65,7 @@ router.get(
  */
 router.post(
   "/",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.REPORTS_GENERATE),
   validate({ body: createReportBodySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -112,7 +112,7 @@ router.post(
  */
 router.get(
   "/:jobId",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.REPORTS_GENERATE),
   validate({ params: reportJobParamsSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {

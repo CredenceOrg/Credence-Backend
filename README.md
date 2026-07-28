@@ -203,6 +203,7 @@ Both commands target `src/` and respect the ignore patterns in `eslint.config.js
 | GET    | `/api/verification/:address` | Verification proof (stub)                   |
 | GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
 | GET    | `/api/reports/top-talkers`   | Top N tenants by request count in last hour |
+| GET    | `/api/admin/system/backup-status` | Admin endpoint: Returns the backup job status (stale if > 24h) |
 
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
@@ -381,9 +382,11 @@ See [docs/caching.md](./docs/caching.md) for detailed documentation, and
 [docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
 cache namespaces and their TTLs.
 
-## Developer SDK
+## API Clients & SDKs
 
 A TypeScript/JavaScript SDK is available at `src/sdk/` for programmatic access to the API. See [docs/sdk.md](docs/sdk.md) for full documentation.
+
+For a complete list of recommended client libraries and guidance on generating clients for other languages, see **docs/API_CLIENTS.md**.
 
 ## Configuration
 
@@ -552,11 +555,13 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
 
 ### Environment Variables
 
-| Variable            | Description                        | Default        |
-| ------------------- | ---------------------------------- | -------------- |
-| `DATABASE_URL`      | PostgreSQL connection string       | Required       |
-| `MIGRATIONS_TABLE`  | Table name for tracking migrations | `pgmigrations` |
-| `MIGRATIONS_SCHEMA` | Schema for migrations table        | `public`       |
+| Variable                       | Description                                      | Default        |
+| ------------------------------ | ------------------------------------------------ | -------------- |
+| `DATABASE_URL`                 | PostgreSQL connection string                     | Required       |
+| `MIGRATIONS_TABLE`             | Table name for tracking migrations               | `pgmigrations` |
+| `MIGRATIONS_SCHEMA`            | Schema for migrations table                      | `public`       |
+| `MIGRATION_CHECKSUM_VALIDATE`  | Reject startup when applied migrations drift       | enabled        |
+| `MIGRATION_CHECKSUM_BOOTSTRAP` | Seed missing checksum records on first startup   | enabled        |
 
 ### CI/CD Integration
 
