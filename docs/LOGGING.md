@@ -198,7 +198,30 @@ Every inbound HTTP request is assigned three IDs by `requestIdMiddleware` (`src/
 | `correlationId` | `X-Correlation-ID` | Persists across service calls; propagated downstream |
 | `traceId` | `X-Trace-ID` | End-to-end trace across all hops |
 
-These IDs are stored in an `AsyncLocalStorage` context (`tracingContext` in `src/utils/logger.ts`) and are automatically appended to every log line emitted during that request — including logs inside services, repositories, and jobs that are called from the handler.
+These IDs are stored in an `AsyncLocalStorage` context (`tracingContext` in `src/utils/logger.ts`) and are automatically appended to every log line emitted during that request — including logs inside services and repositories that are called synchronously from the handler.
+
+### Propagation into async jobs and webhooks
+
+`AsyncLocalStorage` only follows the call stack of a single in-process async chain. It does **not** survive the request handler returning — so anything that is deferred (a domain event written to the transactional outbox, a scheduled job, a webhook delivered minutes later by a different process) needs the correlation id handed to it explicitly and restored when that later work actually runs.
+
+Three helpers in `src/utils/logger.ts` implement this hand-off:
+
+| Function | Used at | Purpose |
+|----------|---------|---------|
+| `getActiveCorrelationIds()` | The moment work is handed off (e.g. `OutboxEventEmitter.emit`) | Snapshot `correlationId`/`requestId` out of the current context so they can travel with the deferred work |
+| `runWithCorrelationIds(ids, fn)` | The moment the deferred work actually runs (e.g. `OutboxPublisher.processEvent`, `deliverWebhook`, `JobScheduler.runJob`) | Re-install those ids into a fresh `AsyncLocalStorage` context for the duration of `fn`, so `logger` calls inside it are tagged correctly |
+| `sanitizeCorrelationId(value)` | Any point a correlation id is about to leave the process (an outbound HTTP header) or has entered it from an external caller | Strips anything outside `[A-Za-z0-9._:-]` and truncates to 128 chars, so a value that round-tripped through a client-supplied header or a database row can't be used for HTTP header/log injection |
+
+Concretely, for the transactional outbox and webhook pipeline:
+
+1. **Emit** (`src/db/outbox/emitter.ts`): when a domain event is written to the outbox inside a request, `OutboxEventEmitter` captures the active `correlationId` (alongside the existing OTel `traceId`/`spanId`) and persists it on the `event_outbox` row (`correlation_id` column).
+2. **Publish** (`src/db/outbox/publisher.ts`): when `OutboxPublisher` later picks up that row — potentially seconds or minutes afterward, on any worker replica — it restores the stored `correlationId` via `runWithCorrelationIds` for the duration of the call into the registered `EventPublisher`, so logs (and metrics/error messages) from that publish attempt are tagged with the id of the request that originally caused it.
+3. **Webhook delivery** (`src/services/webhooks/{service,delivery}.ts`): `WebhookEventPublisher` forwards the correlation id into `WebhookService.emit`, which passes it to `deliverWebhook`. There it is (a) sanitized and sent to the receiving endpoint as an `X-Correlation-Id` header, and (b) used to restore the tracing context around the HTTP call and its retries, so delivery logs are tagged too.
+4. **Scheduled jobs** (`src/jobs/scheduler.ts`): scheduled jobs have no originating request, so `JobScheduler` generates a fresh correlation id for each run and wraps `job.run()` in `runWithCorrelationIds`. Any outbox events the job emits during that run inherit the same id (via step 1), so a single job run can still be traced end-to-end through anything it triggers.
+
+A single request (or job run) can therefore be traced through: `HTTP request → domain event emitted to outbox → outbox published later by a worker → webhook delivered to a third party`, all tagged with the same `correlationId` in structured logs, and echoed to the receiving webhook endpoint via `X-Correlation-Id` so it can correlate on its side too.
+
+Security note: because a correlation id can originate from an external, untrusted `x-correlation-id` request header and later round-trip through a database row before being reused, every point where it crosses a boundary (an outbound webhook header, or re-entry into `AsyncLocalStorage`) sanitizes it first with `sanitizeCorrelationId`.
 
 ### Using `req.log` inside handlers and middleware
 

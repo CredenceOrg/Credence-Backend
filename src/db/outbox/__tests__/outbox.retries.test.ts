@@ -110,7 +110,9 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
             span_id TEXT,
             tracestate TEXT,
             shard_count INTEGER,
-            shard_id INTEGER
+            shard_id INTEGER,
+            correlation_id TEXT,
+            publish_idempotency_key TEXT
         );
     `)
 

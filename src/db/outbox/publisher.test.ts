@@ -97,6 +97,7 @@ async function buildTestPool(): Promise<Pool> {
       tracestate TEXT,
       shard_count INTEGER,
       shard_id INTEGER,
+      correlation_id TEXT,
       publish_idempotency_key TEXT
     )
   `)
@@ -141,6 +142,7 @@ function baseEvent(overrides: Partial<OutboxEvent> = {}): OutboxEvent {
     traceId: null,
     spanId: null,
     tracestate: null,
+    correlationId: null,
     publishIdempotencyKey: null,
     ...overrides,
   }
@@ -565,5 +567,38 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
     expect(row.rows[0].status).toBe('published')
     expect(row.rows[0].publish_idempotency_key).toBeNull()
+  })
+})
+
+describe('OutboxRepository correlation id persistence', () => {
+  it('persists correlation_id on create and returns it via claimEvents', async () => {
+    const pool = await buildTestPool()
+    const repo = new OutboxRepository()
+
+    await repo.create(pool, {
+      aggregateType: 'bond',
+      aggregateId: 'bond-1',
+      eventType: 'bond.created',
+      payload: { address: '0xabc' },
+      correlationId: 'corr-persisted-123',
+    })
+
+    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    expect(claimed.correlationId).toBe('corr-persisted-123')
+  })
+
+  it('leaves correlation_id null when the event was emitted with no active request context', async () => {
+    const pool = await buildTestPool()
+    const repo = new OutboxRepository()
+
+    await repo.create(pool, {
+      aggregateType: 'bond',
+      aggregateId: 'bond-2',
+      eventType: 'bond.created',
+      payload: { address: '0xdef' },
+    })
+
+    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    expect(claimed.correlationId).toBeFalsy()
   })
 })

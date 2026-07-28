@@ -27,6 +27,7 @@ type OutboxEventRow = {
   tracestate?: string | null
   shard_count?: number | null
   shard_id?: number | null
+  correlation_id?: string | null
   publish_idempotency_key?: string | null
 }
 
@@ -91,6 +92,7 @@ function mapOutboxEvent(row: OutboxEventRow): OutboxEvent {
     tracestate: row.tracestate,
     shardCount: row.shard_count,
     shardId: row.shard_id,
+    correlationId: row.correlation_id,
     publishIdempotencyKey: row.publish_idempotency_key,
   }
 }
@@ -124,8 +126,8 @@ export class OutboxRepository {
    */
   async create(db: Queryable, event: CreateOutboxEvent): Promise<bigint> {
     const result = await db.query<{ id: string }>(
-      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries, trace_id, span_id, tracestate)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries, trace_id, span_id, tracestate, correlation_id)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         event.aggregateType,
@@ -136,6 +138,7 @@ export class OutboxRepository {
         event.traceId,
         event.spanId,
         event.tracestate,
+        event.correlationId,
       ]
     )
     return BigInt(result.rows[0].id)
@@ -181,6 +184,7 @@ export class OutboxRepository {
         tracestate: string | null
         shard_count: number | null
         shard_id: number | null
+        correlation_id: string | null
         publish_idempotency_key: string | null
       }>(
         `UPDATE event_outbox
@@ -201,7 +205,7 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, publish_idempotency_key`,
+                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
         [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
@@ -227,6 +231,7 @@ export class OutboxRepository {
         tracestate: string | null
         shard_count: number | null
         shard_id: number | null
+        correlation_id: string | null
         publish_idempotency_key: string | null
       }>(
         `UPDATE event_outbox
@@ -246,7 +251,7 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, publish_idempotency_key`,
+                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
         [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
@@ -318,10 +323,11 @@ export class OutboxRepository {
       trace_id: string | null
       span_id: string | null
       tracestate: string | null
+      correlation_id: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at, trace_id, span_id, tracestate
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate, correlation_id
        FROM event_outbox
        WHERE consumer_id = $1 AND status = 'processing'
        ORDER BY created_at ASC
@@ -354,6 +360,7 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        correlation_id: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -366,7 +373,7 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate`,
+                   trace_id, span_id, tracestate, correlation_id`,
         [limit]
       )
 
@@ -388,6 +395,7 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        correlation_id: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -399,7 +407,7 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate`,
+                   trace_id, span_id, tracestate, correlation_id`,
         [limit]
       )
 
@@ -528,10 +536,11 @@ export class OutboxRepository {
       trace_id: string | null
       span_id: string | null
       tracestate: string | null
+      correlation_id: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at, trace_id, span_id, tracestate
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate, correlation_id
        FROM event_outbox
        WHERE aggregate_type = $1 AND aggregate_id = $2
        ORDER BY created_at DESC

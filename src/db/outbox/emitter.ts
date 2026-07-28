@@ -2,6 +2,7 @@ import type { Queryable } from '../repositories/queryable.js'
 import { OutboxRepository } from './repository.js'
 import type { CreateOutboxEvent } from './types.js'
 import { trace } from '@opentelemetry/api'
+import { getActiveCorrelationIds } from '../../utils/logger.js'
 
 /**
  * Helper for emitting domain events to the outbox within a transaction.
@@ -24,11 +25,13 @@ export class OutboxEventEmitter {
    */
   async emit(db: Queryable, event: CreateOutboxEvent): Promise<bigint> {
     const spanContext = trace.getActiveSpan()?.spanContext()
+    const { correlationId } = getActiveCorrelationIds()
     const eventWithTrace: CreateOutboxEvent = {
       ...event,
       traceId: spanContext?.traceId,
       spanId: spanContext?.spanId,
       tracestate: spanContext?.traceState?.serialize(),
+      correlationId: event.correlationId ?? correlationId,
     }
     return this.repository.create(db, eventWithTrace)
   }
@@ -40,12 +43,14 @@ export class OutboxEventEmitter {
   async emitBatch(db: Queryable, events: CreateOutboxEvent[]): Promise<bigint[]> {
     const ids: bigint[] = []
     const spanContext = trace.getActiveSpan()?.spanContext()
+    const { correlationId } = getActiveCorrelationIds()
     for (const event of events) {
       const eventWithTrace: CreateOutboxEvent = {
         ...event,
         traceId: spanContext?.traceId,
         spanId: spanContext?.spanId,
         tracestate: spanContext?.traceState?.serialize(),
+        correlationId: event.correlationId ?? correlationId,
       }
       const id = await this.repository.create(db, eventWithTrace)
       ids.push(id)

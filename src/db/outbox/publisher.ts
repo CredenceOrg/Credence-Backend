@@ -12,7 +12,7 @@ import {
   bondCreationEventSchema,
   withdrawalEventSchema,
 } from '../../schemas/queue.js'
-import { logger } from '../../utils/logger.js'
+import { logger, runWithCorrelationIds } from '../../utils/logger.js'
 import {
   incrementOutboxDeadLetter,
   incrementOutboxPublished,
@@ -353,14 +353,21 @@ export class OutboxPublisher {
     try {
       await tracer.startActiveSpan('outbox.publish', { links, attributes: { 'outbox.event.id': event.id.toString(), 'outbox.event.type': event.eventType, 'outbox.aggregate.type': event.aggregateType, 'outbox.aggregate.id': event.aggregateId } }, async (span) => {
         try {
+          // Restore the correlation id captured at emit time so any logger
+          // calls made while publishing (including inside the webhook
+          // delivery HTTP client) are tagged with the id of the request
+          // that originally triggered this event.
+          const publishWithContext = () =>
+            runWithCorrelationIds({ correlationId: event.correlationId ?? undefined }, () =>
+              this.publisher.publish(event)
+            )
+
           // If we have a span context, set it as active context for publishing
           if (parentSpanContext) {
             const ctx = trace.setSpanContext(context.active(), parentSpanContext)
-            await context.with(ctx, async () => {
-              await this.publisher.publish(event)
-            })
+            await context.with(ctx, publishWithContext)
           } else {
-            await this.publisher.publish(event)
+            await publishWithContext()
           }
           await this.repository.markPublished(pool, event.id)
           incrementOutboxPublished(event.aggregateType)

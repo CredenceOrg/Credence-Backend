@@ -110,6 +110,7 @@ export class WebhookService {
           ...this.deliveryOptions,
           returnAllChunks: true,
           eventId: options.eventId,
+          correlationId: options.correlationId,
           idempotencyStore: this.store,
         })
       ))

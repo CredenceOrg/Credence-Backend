@@ -1,4 +1,6 @@
+import { randomUUID } from 'crypto'
 import type { DistributedLock } from './distributedLock.js'
+import { runWithCorrelationIds } from '../utils/logger.js'
 
 export interface SchedulableJob {
   run(): Promise<unknown>
@@ -138,13 +140,23 @@ export class JobScheduler {
       return
     }
 
+    // Scheduled jobs have no originating HTTP request, so there is no
+    // correlation id to inherit. Generate one per run so that any outbox
+    // events or webhook deliveries triggered by this job's business logic
+    // (via the shared tracing context) can still be traced back to the
+    // specific run that caused them.
+    const jobRunCorrelationId = randomUUID()
+
     if (this.distributedLock) {
       const { executed } = await this.distributedLock.withLock(
         this.lockKey,
         async () => {
           this.isRunning = true
           try {
-            const result = await this.job.run()
+            const result = await runWithCorrelationIds(
+              { correlationId: jobRunCorrelationId },
+              () => this.job.run()
+            )
             this.logger(`Job completed: ${JSON.stringify(result)}`)
           } finally {
             this.isRunning = false
@@ -164,7 +176,10 @@ export class JobScheduler {
 
     this.isRunning = true
     try {
-      const result = await this.job.run()
+      const result = await runWithCorrelationIds(
+        { correlationId: jobRunCorrelationId },
+        () => this.job.run()
+      )
       this.logger(`Job completed: ${JSON.stringify(result)}`)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'

@@ -20,8 +20,11 @@ export class WebhookEventPublisher implements EventPublisher {
       return
     }
 
-    // Emit to webhook service
-    await this.webhookService.emit(webhookEventType, event.payload as any)
+    // Emit to webhook service, carrying the correlation id forward so the
+    // outbound delivery can tag its request and logs with it.
+    await this.webhookService.emit(webhookEventType, event.payload as any, {
+      correlationId: event.correlationId ?? undefined,
+    })
   }
 
   /**

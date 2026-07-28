@@ -106,6 +106,49 @@ describe('deliverWebhook', () => {
     expect(headers['X-Webhook-Signature']).toBe(expectedSig)
   })
 
+  it('sends X-Correlation-Id header when a correlation id is provided', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: 'corr-from-request-123' })
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBe('corr-from-request-123')
+  })
+
+  it('omits X-Correlation-Id header when no correlation id is provided', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    await deliverWebhook(mockWebhook, mockPayload)
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBeUndefined()
+  })
+
+  it('sanitizes the correlation id before sending it as a header (defends against header injection)', async () => {
+    const { sanitizeCorrelationId } = await import('../../utils/logger.js')
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    const raw = 'evil\r\nX-Injected: true'
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: raw })
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBe(sanitizeCorrelationId(raw))
+    expect(call[1].headers['X-Correlation-Id']).not.toMatch(/[\r\n]/)
+  })
+
+  it('tags logger calls made during delivery with the provided correlation id', async () => {
+    const { tracingContext } = await import('../../utils/logger.js')
+    global.fetch = vi.fn(async () => {
+      // Assert the tracing context is active *during* the delivery attempt.
+      expect(tracingContext.getStore()?.get('correlationId')).toBe('corr-mid-delivery')
+      return { ok: true, status: 200 }
+    })
+
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: 'corr-mid-delivery' })
+
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
   it('delivers webhook with mTLS configuration using custom agent', async () => {
     const mockAgent = new https.Agent()
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
