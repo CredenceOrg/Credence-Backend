@@ -4,6 +4,7 @@ To facilitate debugging in our distributed environment, every request is assigne
 
 - **X-Request-ID**: Unique identifier for the HTTP call. If provided in the incoming request headers, we preserve it. We also propagate it to downstream RPC calls (using Connect-RPC interceptors) and emit it automatically in every log line during the request lifecycle.
 - **X-Correlation-ID**: Persists across services. If an upstream service sends one, we propagate it.
+- **X-Response-Time-Ms**: Every response carries the server-side wall-clock processing time in milliseconds (`x-response-time-ms`). This makes per-request latency observable for operators and automated canaries without parsing the response body.
 
 ## Log Format
 

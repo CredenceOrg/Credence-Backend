@@ -281,45 +281,6 @@ curl -X POST http://localhost:3000/api/admin/replay-event \
 
 ---
 
-### POST /api/admin/replay-webhook
-
-Replay a specific failed webhook delivery from the DLQ on demand. Audit-logged.
-
-**Scope**: `admin:write`
-
-**Request body**:
-
-```json
-{
-  "id": "dlq-entry-uuid"
-}
-```
-
-**Example Request**:
-
-```bash
-curl -X POST http://localhost:3000/api/admin/replay-webhook \
-  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
-  -H "Content-Type: application/json" \
-  -d '{"id":"dlq-entry-uuid"}'
-```
-
-**Example Response (200 OK)**
-
-```json
-{
-  "success": true,
-  "webhookId": "webhook-uuid",
-  "attempts": 2
-}
-```
-
-**Permissions**: Requires `admin` role.
-
-**Errors**: Returns 400 for validation errors, 404 if the DLQ entry or webhook is not found, 500 if replay fails.
-
----
-
 ### Replay Horizon Ledger Range
 
 **POST** `/api/admin/events/replay-range`
@@ -769,6 +730,55 @@ curl -X POST 'http://localhost:3000/api/admin/purge-cache' \
   }
 }
 ```
+
+---
+
+### Reset Cache
+
+Resets all cached entries in a specific cache namespace. A simpler, more focused alternative to `/purge-cache` for operators who need to clear an entire namespace at once. Audit-logged with admin identity, namespace, and cleared count.
+
+**Endpoint:** `POST /api/admin/reset-cache`  
+**Authentication:** Admin Bearer Token (`requireUserAuth` + `requireAdminRole`)
+
+#### Request Body
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `namespace` | string | Yes | Cache namespace to reset (e.g. `"attestation"`, `"bond"`, `"trust"`) |
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:3000/api/admin/reset-cache' \
+  -H "Authorization: Bearer <ADMIN_API_KEY_RAW>" \
+  -H "Content-Type: application/json" \
+  -d '{"namespace": "attestation"}'
+```
+
+#### Example Response (200 OK)
+
+```json
+{
+  "success": true,
+  "message": "Cache namespace 'attestation' reset",
+  "data": {
+    "namespace": "attestation",
+    "clearedCount": 5
+  }
+}
+```
+
+#### Error Responses
+
+- **400 Bad Request** - Missing required `namespace` field or extra unknown fields in request body.
+- **401 Unauthorized** - Missing or invalid Bearer token.
+- **403 Forbidden** - User does not have the admin role.
+
+#### Audit Logging
+
+This action is logged with:
+- **Action**: `RESET_CACHE`
+- **Details**: `{ "namespace": "<namespace>", "clearedCount": <number> }`
 
 ---
 

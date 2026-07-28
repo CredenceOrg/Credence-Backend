@@ -73,11 +73,15 @@ Subscribe to bond creation events with cursor checkpointing:
 
 ```ts
 import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
-import { pool } from '../db/pool.js'
+import { replayService } from '../services/replay.js'
 
-await subscribeBondCreationEvents(pool, (event) => {
-  console.log('Bond created:', event)
-})
+const handle = subscribeBondCreationEvents(
+  { captureFailure: replayService.captureFailure },
+  (event) => {
+    console.log('Bond created:', event)
+  },
+)
+// Later: handle.stop()
 ```
 
 ### Key Components
@@ -555,9 +559,13 @@ async function startListeners() {
   )
 
   // Start bond creation listener
-  await subscribeBondCreationEvents(pool, (event) => {
-    console.log('Bond created:', event)
-  })
+  const bondHandle = subscribeBondCreationEvents(
+    { captureFailure: replayService.captureFailure },
+    (event) => {
+      console.log('Bond created:', event)
+    },
+    pool
+  )
 
   // Handle graceful shutdown
   process.on('SIGINT', async () => {
@@ -664,10 +672,13 @@ This module listens for bond creation events from Stellar/Horizon and syncs iden
 ```typescript
 import { subscribeBondCreationEvents } from '../src/listeners/horizonBondEvents';
 
-subscribeBondCreationEvents((event) => {
-  // Handle bond creation event
-  console.log(event);
-});
+const handle = subscribeBondCreationEvents(
+  { captureFailure: async () => {} },
+  (event) => {
+    // Handle bond creation event
+    console.log(event);
+  }
+);
 ```
 
 ## Event Payload Example

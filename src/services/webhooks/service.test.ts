@@ -316,5 +316,33 @@ describe('WebhookService', () => {
       expect(mockDlq.markReplayed).toHaveBeenCalledWith('dlq_1', expect.any(String))
       expect(fetch).toHaveBeenCalledTimes(1)
     })
+
+    it('preserves audit context with REPLAY_WEBHOOK action', async () => {
+      const mockDlq = {
+        get: vi.fn().mockResolvedValue({ id: 'dlq_1', webhookId: 'wh_1', payload: { event: 'bond.created', timestamp: '2026-02-25T12:00:00Z', data: {} } }),
+        push: vi.fn(),
+        list: vi.fn(),
+        markReplayed: vi.fn()
+      }
+      const mockAudit = { logAction: vi.fn().mockResolvedValue({}) }
+      const actor = { id: 'admin_1', email: 'admin@example.com', tenantId: 'tenant_1' }
+
+      const service = new WebhookService(mockStore, undefined, mockDlq, mockAudit as any)
+      await service.replayWebhook('dlq_1', actor, 'req-123')
+
+      expect(mockAudit.logAction).toHaveBeenCalledWith(
+        'tenant_1',
+        'admin_1',
+        'admin@example.com',
+        'REPLAY_WEBHOOK',
+        'dlq_1',
+        expect.any(String),
+        expect.objectContaining({ webhookId: 'wh_1' }),
+        undefined,
+        undefined,
+        undefined,
+        'req-123'
+      )
+    })
   })
 })

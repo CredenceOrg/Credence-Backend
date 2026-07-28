@@ -1,14 +1,29 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { CursorRepository } from "../../db/repositories/cursorRepository.js";
+import { DlqRouter, type DlqSink } from "../messageValidator.js";
+
+const poolMocks = vi.hoisted(() => {
+  const mockClientQuery = vi.fn()
+  const mockClientRelease = vi.fn()
+  const mockClient = { query: mockClientQuery, release: mockClientRelease }
+  const mockPoolConnect = vi.fn().mockResolvedValue(mockClient)
+  const mockPoolQuery = vi.fn().mockResolvedValue({ rows: [] })
+  return { mockClientQuery, mockClientRelease, mockClient, mockPoolConnect, mockPoolQuery }
+})
 
 vi.mock("prom-client", () => ({
   register: {},
   Gauge: vi.fn().mockImplementation(function() { return { set: vi.fn() }; }),
 }));
 
+vi.mock("../../db/pool.js", () => ({
+  pool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
+}))
+
 vi.mock("../../services/identityService.js", () => ({
   upsertIdentity: vi.fn().mockResolvedValue(undefined),
   upsertBond: vi.fn().mockResolvedValue(undefined),
+  upsertCursor: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("../../observability/horizonMetrics.js", () => ({
@@ -52,6 +67,13 @@ vi.mock("@stellar/stellar-sdk", () => {
 
 import { subscribeBondCreationEvents } from "../horizonBondEvents.js";
 
+function makeRouter(): DlqRouter {
+  const sink: DlqSink = {
+    async captureFailure() {},
+  };
+  return new DlqRouter(sink);
+}
+
 describe("subscribeBondCreationEvents", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -61,31 +83,31 @@ describe("subscribeBondCreationEvents", () => {
   });
 
   it("opens exactly ONE stream on subscribe", () => {
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() });
+    const h = subscribeBondCreationEvents(makeRouter());
     expect(streamCallCount).toBe(1);
     h.stop();
   });
 
   it("does NOT open a second stream — no duplicate", () => {
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() });
+    const h = subscribeBondCreationEvents(makeRouter());
     expect(streamCallCount).toBe(1);
     h.stop();
   });
 
   it("returns a stop() handle", () => {
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() });
+    const h = subscribeBondCreationEvents(makeRouter());
     expect(typeof h.stop).toBe("function");
     h.stop();
   });
 
   it("stop() does not throw", () => {
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() });
+    const h = subscribeBondCreationEvents(makeRouter());
     expect(() => h.stop()).not.toThrow();
   });
 
   it("invokes onEvent for create_bond operations", async () => {
     const onEvent = vi.fn();
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() }, onEvent);
+    const h = subscribeBondCreationEvents(makeRouter(), onEvent);
     await capturedHandlers.onmessage?.({
       type: "create_bond", id: "op1", paging_token: "tok1",
       source_account: "GABC", amount: "100", duration: "365",
@@ -100,7 +122,7 @@ describe("subscribeBondCreationEvents", () => {
 
   it("does not invoke onEvent for non create_bond operations", async () => {
     const onEvent = vi.fn();
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() }, onEvent);
+    const h = subscribeBondCreationEvents(makeRouter(), onEvent);
     await capturedHandlers.onmessage?.({
       type: "payment", id: "op2", paging_token: "tok2",
       source_account: "GXYZ", amount: "50",
@@ -110,7 +132,7 @@ describe("subscribeBondCreationEvents", () => {
   });
 
   it("stop() prevents further reconnects after error", async () => {
-    const h = subscribeBondCreationEvents({ captureFailure: vi.fn() });
+    const h = subscribeBondCreationEvents(makeRouter());
     h.stop();
     const countBefore = streamCallCount;
     await capturedHandlers.onerror?.(new Error("test"));
@@ -134,7 +156,7 @@ describe("subscribeBondCreationEvents", () => {
           updatedAt: new Date(),
         });
 
-      const h = subscribeBondCreationEvents({ captureFailure: vi.fn() }, undefined, mockPool);
+      const h = subscribeBondCreationEvents(makeRouter(), undefined, mockPool);
 
       // Wait for the async initAndStart microtasks to run
       await new Promise((resolve) => process.nextTick(resolve));
@@ -149,7 +171,7 @@ describe("subscribeBondCreationEvents", () => {
       const spy = vi.spyOn(CursorRepository.prototype, "findByStreamName")
         .mockResolvedValue(null);
 
-      const h = subscribeBondCreationEvents({ captureFailure: vi.fn() }, undefined, mockPool);
+      const h = subscribeBondCreationEvents(makeRouter(), undefined, mockPool);
 
       await new Promise((resolve) => process.nextTick(resolve));
 
@@ -163,7 +185,7 @@ describe("subscribeBondCreationEvents", () => {
       const spy = vi.spyOn(CursorRepository.prototype, "findByStreamName")
         .mockRejectedValue(new Error("Database connection error"));
 
-      const h = subscribeBondCreationEvents({ captureFailure: vi.fn() }, undefined, mockPool);
+      const h = subscribeBondCreationEvents(makeRouter(), undefined, mockPool);
 
       await new Promise((resolve) => process.nextTick(resolve));
 

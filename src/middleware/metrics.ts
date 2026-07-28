@@ -11,8 +11,14 @@
 
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
-import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerPreparedStatementCacheMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import {
+  httpRequestDurationHistogram,
+  httpRequestStatusTotal,
+  normalizeRoute,
+  getRouteTemplate,
+  registerLatencyMetrics,
+} from '../observability/latencyMetrics.js'
+import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import {
   pool,
@@ -283,13 +289,13 @@ export const oomEventsTotal = new client.Counter({
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
   // Initialize a fresh metrics namespace for each request to avoid leakage
   (req as any).metrics = {};
-  const start = Date.now()
   const hrStart = process.hrtime.bigint()
   
   res.on('finish', () => {
-    const duration = (Date.now() - start) / 1000
     const durationSeconds = Number(process.hrtime.bigint() - hrStart) / 1e9
-    const route = normalizeRoute(req.path, req.route?.path)
+    // Use getRouteTemplate which correctly joins req.baseUrl + req.route.path
+    // so sub-router mounted routes produce fully-qualified templates.
+    const route = getRouteTemplate(req)
     const statusClass = `${Math.floor(res.statusCode / 100)}xx`
     
     httpRequestsTotal.inc({

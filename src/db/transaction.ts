@@ -7,6 +7,13 @@ import { withSpan, DbSpans } from '../tracing/tracer.js'
 export const transactionStorage = new AsyncLocalStorage<PoolClient>()
 export const disableRedirectionStorage = new AsyncLocalStorage<boolean>()
 
+export interface TransactionContext {
+  postCommitHooks: Array<() => Promise<void>>
+  rollbackHooks: Array<() => Promise<void>>
+}
+
+export const transactionContextStorage = new AsyncLocalStorage<TransactionContext>()
+
 const originalPoolQuery = Pool.prototype.query
 Pool.prototype.query = function (this: Pool, ...args: any[]): any {
   const activeClient = transactionStorage.getStore()
@@ -239,6 +246,11 @@ export class TransactionManager {
       return await fn(activeClient);
     }
 
+    const context: TransactionContext = {
+      postCommitHooks: [],
+      rollbackHooks: [],
+    };
+
     let attempts = 0;
 
     while (true) {
@@ -283,6 +295,16 @@ export class TransactionManager {
         }, initAttrs);
 
         await client.query("COMMIT");
+
+        // Run post-commit hooks
+        for (const hook of context.postCommitHooks) {
+          try {
+            await hook();
+          } catch (hookErr) {
+            console.error('Error running post-commit hook:', hookErr);
+          }
+        }
+
         // Record metrics on successful commit
         const durationSeconds = (Date.now() - startTime) / 1000;
         dbTxnDurationSeconds.observe(durationSeconds);
@@ -292,6 +314,15 @@ export class TransactionManager {
         await client.query("ROLLBACK").catch(() => {
           // Swallowed: connection may be dead, pg will recycle on release.
         });
+
+        // Run rollback hooks
+        for (const hook of context.rollbackHooks) {
+          try {
+            await hook();
+          } catch (hookErr) {
+            console.error('Error running rollback hook:', hookErr);
+          }
+        }
 
         const pgCode = (err as { code?: string }).code;
 

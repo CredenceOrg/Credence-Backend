@@ -24,6 +24,7 @@ import {
 } from '../../middleware/auth.js'
 import {
   parsePaginationParams,
+  buildPaginationLinks,
   buildPaginationMeta,
   PaginationValidationError,
 } from '../../lib/pagination.js'
@@ -103,11 +104,14 @@ export function createMembersRouter(): Router {
         includeDeleted,
       )
 
+      const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
       res.status(200).json({
         success: true,
         data: {
           ...result,
           ...buildPaginationMeta(result.total, page, limit),
+          links: buildPaginationLinks(fullUrl, page, limit, result.total),
         },
       })
     } catch (err) {
