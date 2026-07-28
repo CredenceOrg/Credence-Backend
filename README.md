@@ -551,11 +551,13 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
 
 ### Environment Variables
 
-| Variable            | Description                        | Default        |
-| ------------------- | ---------------------------------- | -------------- |
-| `DATABASE_URL`      | PostgreSQL connection string       | Required       |
-| `MIGRATIONS_TABLE`  | Table name for tracking migrations | `pgmigrations` |
-| `MIGRATIONS_SCHEMA` | Schema for migrations table        | `public`       |
+| Variable                       | Description                                      | Default        |
+| ------------------------------ | ------------------------------------------------ | -------------- |
+| `DATABASE_URL`                 | PostgreSQL connection string                     | Required       |
+| `MIGRATIONS_TABLE`             | Table name for tracking migrations               | `pgmigrations` |
+| `MIGRATIONS_SCHEMA`            | Schema for migrations table                      | `public`       |
+| `MIGRATION_CHECKSUM_VALIDATE`  | Reject startup when applied migrations drift       | enabled        |
+| `MIGRATION_CHECKSUM_BOOTSTRAP` | Seed missing checksum records on first startup   | enabled        |
 
 ### CI/CD Integration
 
