@@ -3,8 +3,7 @@
 To facilitate debugging in our distributed environment, every request is assigned a `Request ID` and a `Correlation ID`.
 
 - **X-Request-ID**: Unique identifier for the HTTP call. If provided in the incoming request headers, we preserve it. We also propagate it to downstream RPC calls (using Connect-RPC interceptors) and emit it automatically in every log line during the request lifecycle.
-- **X-Correlation-ID**: Persists across services. If an upstream service sends one, we propagate it.
-- **X-Response-Time-Ms**: Every response carries the server-side wall-clock processing time in milliseconds (`x-response-time-ms`). This makes per-request latency observable for operators and automated canaries without parsing the response body.
+- **X-Correlation-ID**: Persists across services. Handled by the dedicated `correlationIdMiddleware` (`src/middleware/correlationId.ts`). If an upstream service sends one, we propagate it; otherwise a UUID v4 is generated automatically. The resolved ID is stored on `req['correlationId']` for downstream handlers and echoed in every response.
 
 ## Log Format
 
@@ -421,6 +420,14 @@ Every query issued through `pool`, `workerPool`, or `replicaPool` (`src/db/pool.
   "plan": "[{\"Plan\":{\"Node Type\":\"Seq Scan\",\"Relation Name\":\"attestations\",\"Total Cost\":48123.0}}]"
 }
 ```
+
+## Redis Cache Key Size
+
+`CacheService.set()` (`src/cache/redis.ts`) is the single choke point every L2 (Redis) write goes through — `attestationCacheService`, `bondCacheService`, `reputationService`, `settlementService`, `replayService`, the analytics route, and others all funnel through it. Each call serializes its value (`JSON.stringify`, or the raw string as-is) and records the resulting byte size before writing to Redis, so a single endpoint that balloons one key — for example, caching an ever-growing list/hash under one key instead of paginating — shows up immediately as an outlier instead of only being noticed when Redis memory pressure or `MEMORY USAGE` on that key becomes a problem.
+
+### Metrics
+
+- **`redis_key_size_bytes`** (Histogram, labeled by `namespace`): size in bytes of each value written to a Redis cache key, bucketed from 1KB to 4MB (`[1024, 4096, 16384, 65536, 262144, 1048576, 4194304]`). `namespace` is the cache namespace passed to `cache.set()` (e.g. `attestation`, `bond`, `trust`, `settlement`) — a low-cardinality label chosen deliberately over the raw key, which would blow up cardinality. A rising `redis_key_size_bytes_bucket{le="+Inf", ...}` count for a given namespace, or observations consistently landing in the top bucket, indicates that namespace's cache entries are becoming mega-keys and the caching strategy for that endpoint (e.g. paginate instead of caching the full list under one key) should be revisited.
 
 ## Outbox Publisher Observability (Issue #329)
 
