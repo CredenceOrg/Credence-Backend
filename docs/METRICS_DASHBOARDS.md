@@ -76,6 +76,7 @@ The following table summarizes which dashboard panels visualize which SLIs/SLOs 
   1. Check connectivity logs and check if the database/Redis containers are alive: `docker-compose ps`.
   2. For Database, check PostgreSQL pool saturation: `db_prepared_statement_cache_size` or waiting connections.
   3. For Redis, check `ioredis` connection event listeners.
+  4. If Redis is unhealthy due to memory pressure (evictions, `OOM command not allowed`), check `redis_key_size_bytes` (bucketed by `namespace`) for a namespace with observations piling up in the top bucket — that's a single endpoint writing an outsized value (e.g. an unpaginated list cached as one key) rather than general growth. See [Redis Cache Key Size](./OBSERVABILITY.md#redis-cache-key-size) in the observability doc.
 
 ### 4. Outbox Pending Events
 - **Panel Type**: Gauge / Graph

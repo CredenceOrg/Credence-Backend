@@ -18,7 +18,11 @@ import {
   getRouteTemplate,
   registerLatencyMetrics,
 } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import {
+  registerPoolMetrics,
+  registerRpcLatencyMetrics,
+  registerPreparedStatementCacheMetrics,
+} from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import {
   pool,
@@ -262,6 +266,18 @@ export function recordSigningKeyPrune(count: number): void {
 export function recordJwksRequest(cache: 'hit' | 'miss', status: number): void {
   jwksRequestsTotal.inc({ cache, status: String(status) })
 }
+
+// ============================================================================
+// Redis Cache Metrics
+// ============================================================================
+
+export const redisKeySizeBytes = new client.Histogram({
+  name: 'redis_key_size_bytes',
+  help: 'Size in bytes of values written to Redis cache keys, labeled by cache namespace. Helps detect a single endpoint ballooning a key (e.g. a hash/JSON blob) into a mega-key.',
+  labelNames: ['namespace'],
+  buckets: [1024, 4096, 16384, 65536, 262144, 1048576, 4194304], // 1KB to 4MB
+  registers: [register]
+})
 
 // ============================================================================
 // Memory/OOM Metrics
@@ -519,4 +535,18 @@ export function recordWebhookDlqSize(size: number) {
  */
 export function recordOomEvent(): void {
   oomEventsTotal.inc()
+}
+
+/**
+ * Record the size (in bytes) of a value written to a Redis cache key.
+ *
+ * Usage:
+ * ```typescript
+ * import { recordRedisKeySize } from './middleware/metrics.js'
+ *
+ * recordRedisKeySize('attestation', Buffer.byteLength(serialized, 'utf8'))
+ * ```
+ */
+export function recordRedisKeySize(namespace: string, bytes: number): void {
+  redisKeySizeBytes.observe({ namespace }, bytes)
 }
