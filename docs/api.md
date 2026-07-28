@@ -311,19 +311,33 @@ curl http://localhost:3000/api/trust/not-an-address
 
 ### `GET /api/attestations/:address`
 
-Returns persisted attestations for a subject address. Results are ordered newest
-first and paginated with `page` and `limit`.
+Returns persisted attestations for a subject address using cursor-based
+pagination. Results are ordered newest first.
 
 ```
-GET /api/attestations/:address?page=1&limit=20
+GET /api/attestations/:address?limit=20
+GET /api/attestations/:address?limit=20&cursor=<nextCursor>
 ```
+
+**Path parameters**
+
+| Param     | Description                                                     |
+| --------- | --------------------------------------------------------------- |
+| `address` | Ethereum address (`0x` + 40 hex chars), normalised to lowercase |
+
+**Query parameters**
+
+| Param    | Type    | Default | Description                                         |
+| -------- | ------- | ------- | --------------------------------------------------- |
+| `limit`  | integer | 20      | Number of results per page (1–100)                  |
+| `cursor` | string  | —       | Opaque cursor returned by a previous response       |
 
 **Response `200`**
 
 ```json
 {
   "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
-  "attestations": [
+  "data": [
     {
       "id": 42,
       "bondId": 10,
@@ -334,13 +348,26 @@ GET /api/attestations/:address?page=1&limit=20
       "createdAt": "2025-01-01T00:00:00.000Z"
     }
   ],
-  "offset": 0,
-  "page": 1,
-  "limit": 20,
-  "total": 1,
-  "hasNext": false
+  "page": {
+    "nextCursor": "eyJ0IjoiMjAyNS0wMS0wMVQwMDowMDowMC4wMDBaIiwiaSI6IjQyIiwiaCI6Ij...",
+    "hasMore": true,
+    "limit": 20
+  },
+  "links": {
+    "self": "http://localhost:3000/api/attestations/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266?limit=20",
+    "next": "http://localhost:3000/api/attestations/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266?limit=20&cursor=eyJ0IjoiMjAyNS0wMS0wMVQwMDowMDowMC4wMDBaIiwiaSI6IjQyIiwiaCI6Ij..."
+  }
 }
 ```
+
+When there are no more results `nextCursor` is `null` and `hasMore` is `false`.
+
+**Responses**
+
+| Status | Condition                            |
+| ------ | ------------------------------------ |
+| `200`  | Returns attestation page             |
+| `400`  | Invalid address or pagination params |
 
 ### `POST /api/attestations`
 

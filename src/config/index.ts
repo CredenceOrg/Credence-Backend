@@ -531,6 +531,16 @@ export const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().min(1).max(3650)),
 
+  /**
+   * Maximum rows allowed in a single authenticated data export.
+   * Requests that would exceed this are rejected before streaming starts.
+   */
+  EXPORT_MAX_ROWS: z
+    .string()
+    .default('100000')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10_000_000)),
+
   // Report generation
   REPORT_MAX_CONCURRENT_JOBS_PER_ORG: z
     .string()
@@ -758,6 +768,10 @@ export interface Config {
   }
   auditLog: {
     exportMaxWindowDays: number
+  }
+  export: {
+    /** Max rows per authenticated export; oversized requests are rejected early. */
+    maxRows: number
   }
   reports: {
     maxConcurrentJobsPerOrg: number
@@ -1021,6 +1035,9 @@ function mapEnvToConfig(env: Env): Config {
     },
     auditLog: {
       exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
+    },
+    export: {
+      maxRows: env.EXPORT_MAX_ROWS,
     },
     reports: {
       maxConcurrentJobsPerOrg: env.REPORT_MAX_CONCURRENT_JOBS_PER_ORG,

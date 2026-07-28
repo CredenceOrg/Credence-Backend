@@ -4,12 +4,6 @@ import { invalidateCache } from '../cache/invalidation.js'
 import { recordSettlementDuplicate } from '../middleware/metrics.js'
 import { getFlag } from '../config/featureFlags.js'
 import { executeShadowWrite } from './shadowWrite.js'
-/**
- * Issue #325: Import the schema-inferred type to ensure the service input
- * is aligned with the validated Zod schema. CreateSettlementInput from the
- * repository already matches the schema shape, so no structural changes needed.
- * This import documents the intentional alignment between schema and service.
- */
 import type { CreatePayoutInput } from '../schemas/payout.js'
 
 export class SettlementService {
@@ -54,21 +48,26 @@ export class SettlementService {
    * When SHADOW_WRITE_MODE is enabled (and NEW_PIPELINE is true), writes go to both
    * old and new pipelines; results are diffed in metrics to validate the new pipeline.
    */
-  async upsertSettlementStatus(input: CreateSettlementInput): Promise<Settlement> {
+  async upsertSettlementStatus(input: CreatePayoutInput): Promise<Settlement> {
+    const repoInput: CreateSettlementInput = {
+      bondId: input.bondId,
+      amount: input.amount,
+      transactionHash: input.transactionHash,
+      settledAt: input.settledAt ? new Date(input.settledAt) : undefined,
+      status: input.status,
+    }
+
     let settlement: Settlement
     let isDuplicate: boolean
 
-    // Check if shadow write mode is enabled for pipeline validation
     const shadowWriteEnabled = getFlag('shadowWriteMode') && getFlag('newPipeline')
 
     if (shadowWriteEnabled) {
-      // Execute write to both old and new pipelines, diffing results in metrics
-      const shadowResult = await executeShadowWrite(this.repository, this.repository, input)
+      const shadowResult = await executeShadowWrite(this.repository, this.repository, repoInput)
       settlement = shadowResult.primaryResult.settlement
       isDuplicate = shadowResult.primaryResult.isDuplicate
     } else {
-      // Standard path: write to single pipeline (determined by NEW_PIPELINE flag)
-      const result = await this.repository.upsert(input)
+      const result = await this.repository.upsert(repoInput)
       settlement = result.settlement
       isDuplicate = result.isDuplicate
     }

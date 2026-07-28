@@ -869,6 +869,30 @@ registry.registerPath({
   },
 });
 
+// Admin System API
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/system/backup-status',
+  summary: 'System Backup Status',
+  description: 'Returns the status of the continuous WAL archiving backup job.',
+  tags: ['Admin System'],
+  security: bearerAuth,
+  responses: {
+    200: {
+      description: 'Backup status returned successfully',
+      content: { 'application/json': { schema: schemas.backupStatusResponseSchema } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
 const generator = new OpenApiGeneratorV3(registry.definitions);
 
 const document = generator.generateDocument({

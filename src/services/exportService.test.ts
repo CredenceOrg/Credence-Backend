@@ -7,6 +7,7 @@ import {
   createDiscardExportWriter,
   createNdjsonExportWriter,
 } from './exportService.js'
+import { ExportTooLargeError } from '../lib/errors.js'
 
 describe('ExportService', () => {
   it('exports audit logs in bounded batches via ExportWorker', async () => {
@@ -37,6 +38,76 @@ describe('ExportService', () => {
     expect(result.totalRows).toBe(12)
     expect(result.batchesProcessed).toBe(3)
     expect(result.errors).toBe(0)
+  })
+
+  it('rejects oversized exports before opening the writer', async () => {
+    const repo = new InMemoryAuditLogsRepository()
+    const auditLog = new AuditLogService(repo)
+    const tenantId = 'tenant-overflow'
+
+    for (let i = 0; i < 8; i++) {
+      await auditLog.logAction(
+        tenantId,
+        'admin-1',
+        'admin@example.com',
+        AuditAction.LIST_USERS,
+        `resource-${i}`,
+      )
+    }
+
+    const startDate = new Date(Date.now() - 60_000)
+    const endDate = new Date(Date.now() + 60_000)
+    const exportService = new ExportService(auditLog, {
+      maxRows: 5,
+      defaultBatchSize: 2,
+    })
+
+    const open = vi.fn()
+    const writeBatch = vi.fn()
+    const close = vi.fn()
+    const abort = vi.fn()
+    const writer = { open, writeBatch, close, abort }
+
+    await expect(
+      exportService.runAuditLogExport({ startDate, endDate, tenantId }, writer),
+    ).rejects.toBeInstanceOf(ExportTooLargeError)
+
+    expect(open).not.toHaveBeenCalled()
+    expect(writeBatch).not.toHaveBeenCalled()
+  })
+
+  it('countRowsUpTo stops early once the cap is exceeded', async () => {
+    const repo = new InMemoryAuditLogsRepository()
+    const auditLog = new AuditLogService(repo)
+    const tenantId = 'tenant-early-exit'
+    const querySpy = vi.spyOn(repo, 'query')
+
+    for (let i = 0; i < 20; i++) {
+      await auditLog.logAction(
+        tenantId,
+        'admin-1',
+        'admin@example.com',
+        AuditAction.LIST_USERS,
+        `resource-${i}`,
+      )
+    }
+
+    const startDate = new Date(Date.now() - 60_000)
+    const endDate = new Date(Date.now() + 60_000)
+    const exportService = new ExportService(auditLog, {
+      maxRows: 5,
+      defaultBatchSize: 3,
+    })
+
+    querySpy.mockClear()
+    const count = await exportService.countRowsUpTo(
+      { startDate, endDate, tenantId },
+      5,
+    )
+
+    expect(count).toBeGreaterThan(5)
+    // Early exit: with batch size 3, exceeding 5 needs at most 3 pages (3+3+3)
+    expect(querySpy.mock.calls.length).toBeLessThanOrEqual(3)
   })
 
   it('paginates audit export stream instead of loading all rows at once', async () => {
