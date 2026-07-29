@@ -382,7 +382,8 @@ The service includes a Redis-based caching layer with:
 
 See [docs/caching.md](./docs/caching.md) for detailed documentation, and
 [docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
-cache namespaces and their TTLs.
+cache namespaces and their TTLs. For the mutation-to-invalidation map, see
+[docs/CACHE_INVALIDATION_TRIGGERS.md](./docs/CACHE_INVALIDATION_TRIGGERS.md).
 
 ## API Clients & SDKs
 
