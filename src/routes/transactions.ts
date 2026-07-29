@@ -1,6 +1,6 @@
 import { Router, type Request, type Response } from 'express'
-import { SettlementsRepository } from '../db/repositories/settlementsRepository.js'
-import { encodeCursor, buildCursorPaginationLinks } from '../lib/pagination.js'
+import { SettlementsRepository, type Settlement } from '../db/repositories/settlementsRepository.js'
+import { encodeCursor, buildCursorPaginationLinks, type PaginationLinks } from '../lib/pagination.js'
 import { pool } from '../db/pool.js'
 import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import { validate, type ValidatedRequest } from '../middleware/validate.js'
@@ -45,13 +45,23 @@ export function createTransactionsRouter(): Router {
         }
 
         const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
-
-        res.status(200).json({
+        const response: {
+          success: boolean
+          data: Settlement[]
+          next_cursor: string | null
+          links?: PaginationLinks
+        } = {
           success: true,
           data: settlements,
           next_cursor: nextCursor,
-          links: buildCursorPaginationLinks(fullUrl, limit, nextCursor),
-        })
+        }
+
+        // Only include links when there's a nextCursor (non-empty result)
+        if (nextCursor) {
+          response.links = buildCursorPaginationLinks(fullUrl, limit, nextCursor)
+        }
+
+        res.status(200).json(response)
       } catch (error) {
         next(error)
       }

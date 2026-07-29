@@ -60,6 +60,7 @@ import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
 import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
 import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
 import { createWebhookReplayRouter } from "./routes/webhookReplay.js";
+import { createTransactionsRouter } from "./routes/transactions.js";
 
 const app = express();
 
@@ -253,6 +254,9 @@ app.use("/api/admin/outbox", createOutboxAdminRouter());
 
 // Webhook DLQ replay — GET /api/webhooks/dlq, POST /api/webhooks/dlq/:id/replay
 app.use("/api/webhooks/dlq", createWebhookReplayRouter(pool));
+
+// Transaction history — GET /api/transactions/history (cursor-paginated, trust:read)
+app.use("/api/transactions", createTransactionsRouter());
 
 app.use("/api/orgs/:orgId/policies", createPolicyRouter());
 
