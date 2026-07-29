@@ -7,7 +7,7 @@ import {
 } from "../../middleware/auth.js";
 import erasureProofRouter from './erasureProof.js'
 import { keyManager } from '../../services/keyManager/index.js'
-import { rotateSigningKeyBodySchema } from '../../schemas/admin.js'
+import { rotateSigningKeyBodySchema, replayWebhookBodySchema, type ReplayWebhookBody } from '../../schemas/admin.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
 import migrationsRouter from './migrations.js'
@@ -686,7 +686,7 @@ export function createAdminRouter(): Router {
    * and tier is issued. The new raw key is returned exactly once.
    * Every attempt (success or failure) is audit-logged.
    */
-  router.post('/regen-api-key', requireUserAuth, async (req: Request, res: Response, next: NextFunction) => {
+  router.post('/regen-api-key', requireUserAuth, idempotencyMiddleware(idempotencyRepo), async (req: Request, res: Response, next: NextFunction) => {
     try {
       const authReq = req as AuthenticatedRequest;
       const user = authReq.user!;
