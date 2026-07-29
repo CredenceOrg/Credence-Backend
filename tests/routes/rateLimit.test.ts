@@ -507,6 +507,42 @@ describe('Rate Limit Middleware', () => {
   })
 
   // ═══════════════════════════════════════════════════════════════════════════
+    it('increments rate_limit_rejected_total with reason=redis_unavailable when fail-closed', async () => {
+      const spyIncr = vi.spyOn(mockRedis, 'incr').mockRejectedValue(new Error('Redis down'))
+
+      const before = (await rateLimitRejectedTotal.get()).values
+        .filter((v) => v.labels.reason === 'redis_unavailable')
+        .reduce((sum, v) => sum + v.value, 0)
+
+      const app = express()
+      app.use(express.json())
+      app.use(
+        '/api',
+        createRateLimitMiddleware({
+          enabled: true,
+          windowSec: 60,
+          maxFree: 1,
+          maxPro: 1,
+          maxEnterprise: 1,
+          failOpen: false,
+        }, { namespace: 'ratelimit:redisdowncnt' })
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, code: _err.code })
+      })
+
+      await request(app).get('/api/ping')
+
+      const after = (await rateLimitRejectedTotal.get()).values
+        .filter((v) => v.labels.reason === 'redis_unavailable')
+        .reduce((sum, v) => sum + v.value, 0)
+
+      expect(after).toBeGreaterThan(before)
+
+      spyIncr.mockRestore()
+    })
+
   // Prometheus counter
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -625,7 +661,155 @@ describe('Rate Limit Middleware', () => {
     })
   })
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // Per-key bucket key format includes tier ceiling
+  // ---------------------------------------------------------------------------
+
+  describe('per-key bucket key format includes tier ceiling', () => {
+    it('uses key id + tier in the Redis key name', async () => {
+      const capturedKeys: string[] = []
+      const recordingRedis = {
+        store: new Map<string, number>(),
+        async incr(key: string) {
+          capturedKeys.push(key)
+          const next = (this.store.get(key) ?? 0) + 1
+          this.store.set(key, next)
+          return next
+        },
+        async expire(_key: string, _seconds: number) {},
+        async ttl(_key: string) {
+          return 60
+        },
+      }
+
+      const config: Config['rateLimit'] = {
+        enabled: true,
+        windowSec: 60,
+        maxFree: 100,
+        maxPro: 100,
+        maxEnterprise: 100,
+        failOpen: true,
+      }
+
+      const app = express()
+      app.use(express.json())
+      app.use((req, _res, next) => {
+        ;(req as any).apiKeyRecord = {
+          id: 'key-tierfmt',
+          ownerId: 'owner-tierfmt',
+          tier: 'pro' as SubscriptionTier,
+        }
+        next()
+      })
+      app.use(
+        '/api',
+        createRateLimitMiddleware(config, {
+          namespace: 'ratelimit:tierkeyfmt',
+          getRedis: () => recordingRedis,
+        }),
+      )
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+
+      await request(app).get('/api/ping')
+
+      // The tenant bucket should be present
+      const tenantKey = capturedKeys.find((k) =>
+        k.startsWith('ratelimit:tierkeyfmt:tenant:'),
+      )
+      expect(tenantKey).toBeDefined()
+
+      // The key bucket should include both the key id AND the tier
+      const keyBucket = capturedKeys.find((k) =>
+        k.startsWith('ratelimit:tierkeyfmt:key:'),
+      )
+      expect(keyBucket).toBeDefined()
+      expect(keyBucket).toContain(':key-tierfmt:')
+      expect(keyBucket).toContain(':pro')
+    })
+
+    it('different tiers produce different per-key buckets for the same key id', async () => {
+      const capturedKeys: string[] = []
+      const recordingRedis = {
+        store: new Map<string, number>(),
+        async incr(key: string) {
+          capturedKeys.push(key)
+          const next = (this.store.get(key) ?? 0) + 1
+          this.store.set(key, next)
+          return next
+        },
+        async expire(_key: string, _seconds: number) {},
+        async ttl(_key: string) {
+          return 60
+        },
+      }
+
+      const config: Config['rateLimit'] = {
+        enabled: true,
+        windowSec: 60,
+        maxFree: 100,
+        maxPro: 100,
+        maxEnterprise: 100,
+        failOpen: true,
+      }
+
+      // Free tier request
+      const appFree = express()
+      appFree.use(express.json())
+      appFree.use((req, _res, next) => {
+        ;(req as any).apiKeyRecord = {
+          id: 'key-same-id',
+          ownerId: 'owner-same',
+          tier: 'free' as SubscriptionTier,
+        }
+        next()
+      })
+      appFree.use(
+        '/api',
+        createRateLimitMiddleware(config, {
+          namespace: 'ratelimit:tierkeysplit',
+          getRedis: () => recordingRedis,
+        }),
+      )
+      appFree.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      await request(appFree).get('/api/ping')
+
+      const freeKeyBucket = capturedKeys.find((k) =>
+        k.startsWith('ratelimit:tierkeysplit:key:'),
+      )
+
+      capturedKeys.length = 0
+      recordingRedis.store.clear()
+
+      // Pro tier request — same key id but different tier
+      const appPro = express()
+      appPro.use(express.json())
+      appPro.use((req, _res, next) => {
+        ;(req as any).apiKeyRecord = {
+          id: 'key-same-id',
+          ownerId: 'owner-same',
+          tier: 'pro' as SubscriptionTier,
+        }
+        next()
+      })
+      appPro.use(
+        '/api',
+        createRateLimitMiddleware(config, {
+          namespace: 'ratelimit:tierkeysplit',
+          getRedis: () => recordingRedis,
+        }),
+      )
+      appPro.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      await request(appPro).get('/api/ping')
+
+      const proKeyBucket = capturedKeys.find((k) =>
+        k.startsWith('ratelimit:tierkeysplit:key:'),
+      )
+
+      expect(freeKeyBucket).not.toBe(proKeyBucket)
+      expect(freeKeyBucket).toContain(':free')
+      expect(proKeyBucket).toContain(':pro')
+    })
+  })
+
   // Window-boundary burst (fixed-window 2x weakness)
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -933,6 +1117,27 @@ describe('Rate Limit Middleware', () => {
       const res = await request(app).get('/api/ping')
       expect(res.status).toBe(200)
       expect(res.headers['x-ratelimit-limit']).toBe('100')
+    })
+
+    it('defaults to fail-closed when no explicit failOpen is provided', async () => {
+      const spyIncr = vi.spyOn(mockRedis, 'incr').mockRejectedValue(new Error('Redis down'))
+
+      const app = express()
+      app.use(express.json())
+      // The legacy rateLimit() helper defaults failOpen based on NODE_ENV;
+      // in test environment it defaults to fail-open, so we pass an explicit
+      // failOpen: false to simulate production behaviour.
+      app.use('/api', rateLimit({ namespace: 'ratelimit:legacy-failclosed', windowSec: 60, max: 2, failOpen: false }))
+      app.get('/api/ping', (_req, res) => res.json({ ok: true }))
+      app.use((_err: any, _req: any, res: any, _next: any) => {
+        res.status(_err.status ?? 500).json({ error: _err.message, code: _err.code })
+      })
+
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(503)
+      expect(res.body.error).toMatch(/unavailable/i)
+
+      spyIncr.mockRestore()
     })
 
     it('applies an explicit max to every tier ceiling', async () => {

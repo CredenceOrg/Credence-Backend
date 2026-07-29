@@ -608,6 +608,31 @@ export const envSchema = z.object({
       message: 'Wildcard CORS origin (*) is prohibited in production environment',
     })
   }
+
+  // Security guard: explicitly setting fail-open in production silently
+  // disables rate limiting when Redis is unavailable.  This check catches
+  // the misconfiguration at startup before it can be exploited.
+  if (data.NODE_ENV === 'production' && process.env.RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables rate limiting when Redis is unavailable — exposing the API to abuse. ' +
+        'Remove RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
+
+  if (data.NODE_ENV === 'production' && process.env.AUTH_RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['AUTH_RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'AUTH_RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables auth rate limiting when Redis is unavailable. ' +
+        'Remove AUTH_RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
 })
 
 export type Env = z.infer<typeof envSchema>

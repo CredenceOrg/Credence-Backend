@@ -1087,6 +1087,10 @@ Behaviour when Redis is unreachable is controlled by `RATE_LIMIT_FAIL_OPEN`:
 | `false` (default in production) | Returns `503 Service Unavailable` — fail-closed |
 | `true` (default in dev/test)    | Passes the request through — fail-open          |
 
+**Security note:** The application refuses to start in production if
+`RATE_LIMIT_FAIL_OPEN` is explicitly set to `true`.  See
+[`docs/security.md`](security.md) for the full security rationale.
+
 ---
 
 ## Error format
