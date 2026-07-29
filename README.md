@@ -204,6 +204,7 @@ Both commands target `src/` and respect the ignore patterns in `eslint.config.js
 | GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
 | GET    | `/api/reports/top-talkers`   | Top N tenants by request count in last hour |
 | GET    | `/api/admin/system/backup-status` | Admin endpoint: Returns the backup job status (stale if > 24h) |
+| POST   | `/api/payouts`                    | Create a payout (settlement). Idempotent via `Idempotency-Key` header — see [docs/IDEMPOTENCY.md](docs/IDEMPOTENCY.md). Requires `payouts:write` scope. |
 
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
