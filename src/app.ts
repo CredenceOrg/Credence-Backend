@@ -61,6 +61,9 @@ import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
 import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
 import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
 import { createWebhookReplayRouter } from "./routes/webhookReplay.js";
+import { createWebhookRouter } from "./routes/webhooks.js";
+import { PostgresWebhookRepository } from "./db/repositories/webhookRepository.js";
+import { auditLogService } from "./services/audit/index.js";
 import { createExportRouter } from "./routes/export/index.js";
 
 const app = express();
@@ -256,6 +259,15 @@ app.use("/api/admin/outbox", createOutboxAdminRouter());
 
 // Webhook DLQ replay — GET /api/webhooks/dlq, POST /api/webhooks/dlq/:id/replay
 app.use("/api/webhooks/dlq", createWebhookReplayRouter(pool));
+
+// Webhook signing-secret rotation — POST /api/webhooks/:webhookId/rotate-secret
+// (audited, safe-rollout dual-secret grace period — see docs/SECRETS.md and
+// docs/WEBHOOK_SIGNING.md). Mounted after /api/webhooks/dlq so it never
+// intercepts that router's requests.
+app.use(
+  "/api/webhooks",
+  createWebhookRouter(new PostgresWebhookRepository(pool), auditLogService),
+);
 
 app.use("/api/orgs/:orgId/policies", createPolicyRouter());
 
