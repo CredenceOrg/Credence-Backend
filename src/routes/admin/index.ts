@@ -247,41 +247,43 @@ export function createAdminRouter(): Router {
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, idempotencyMiddleware(idempotencyRepo), (req: Request, res: Response, next) => {
-    try {
-      const authReq = req as AuthenticatedRequest
-      const user = authReq.user!
-      const requestId = (req as any).requestId
-      const body = req.body as Partial<IssueImpersonationTokenRequest>
+  router.post(
+    '/impersonate',
+    requireUserAuth,
+    requireAdminRole,
+    idempotencyMiddleware(idempotencyRepo),
+    validate({ body: issueImpersonationTokenBodySchema }),
+    async (req: Request, res: Response) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const user = authReq.user!
+        const requestId = (req as any).requestId
+        const body = req.body as IssueImpersonationTokenRequest
 
-      if (!body.targetUserId || !body.reason) {
-        sendError(res, ErrorCode.FIELD_REQUIRED, 'targetUserId and reason are required')
-        return
+        const issued = await impersonationService.issueToken(
+          user.id,
+          user.email,
+          user.tenantId,
+          {
+            targetUserId: body.targetUserId,
+            reason: body.reason,
+            ttlSeconds: body.ttlSeconds,
+          },
+          req.ip,
+          requestId,
+        )
+
+        res.status(201).json({ success: true, data: issued })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error"
+        if (/User not found/i.test(message)) {
+          res.status(404).json({ error: "NotFound", message })
+          return
+        }
+        res.status(400).json({ error: "BadRequest", message })
       }
-
-      const issued = impersonationService.issueToken(
-        user.id,
-        user.email,
-        user.tenantId,
-        {
-          targetUserId: body.targetUserId,
-          reason: body.reason,
-          ttlSeconds: body.ttlSeconds,
-        },
-        req.ip,
-      )
-
-      res.status(201).json({ success: true, data: issued })
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown error"
-      if (/User not found/i.test(message)) {
-        res.status(404).json({ error: "NotFound", message })
-        return
-      }
-      res.status(400).json({ error: "BadRequest", message })
-    }
-  },
+    },
   )
 
   /**

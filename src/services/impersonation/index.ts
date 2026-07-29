@@ -45,7 +45,7 @@ export class ImpersonationService {
     const { targetUserId, reason, ttlSeconds } = request
 
     if (!reason || reason.trim().length === 0) {
-      void this.auditLog.logAction(
+      await this.auditLog.logAction(
         tenantId,
         adminId,
         adminEmail,
@@ -63,7 +63,7 @@ export class ImpersonationService {
 
     const target = MOCK_USERS[targetUserId]
     if (!target) {
-      void this.auditLog.logAction(
+      await this.auditLog.logAction(
         tenantId,
         adminId,
         adminEmail,
@@ -98,7 +98,7 @@ export class ImpersonationService {
 
     await this.repo.create(record)
 
-    void this.auditLog.logAction(
+    await this.auditLog.logAction(
       tenantId,
       adminId,
       adminEmail,
@@ -144,7 +144,7 @@ export class ImpersonationService {
 
     await this.repo.revoke(tokenId, adminId)
 
-    void this.auditLog.logAction(
+    await this.auditLog.logAction(
       tenantId,
       adminId,
       adminEmail,
