@@ -7,6 +7,10 @@ import type {
   OutboxQuarantineEntry,
   OutboxQuarantineReason,
 } from './types.js'
+import { sanitizeErrorMessage } from './errorSanitizer.js'
+
+/** Upper bound on the exponential backoff delay between retry attempts. */
+const MAX_BACKOFF_SECONDS = 3600
 
 type OutboxEventRow = {
   id: string
@@ -27,6 +31,7 @@ type OutboxEventRow = {
   tracestate?: string | null
   shard_count?: number | null
   shard_id?: number | null
+  correlation_id?: string | null
   publish_idempotency_key?: string | null
 }
 
@@ -91,6 +96,7 @@ function mapOutboxEvent(row: OutboxEventRow): OutboxEvent {
     tracestate: row.tracestate,
     shardCount: row.shard_count,
     shardId: row.shard_id,
+    correlationId: row.correlation_id,
     publishIdempotencyKey: row.publish_idempotency_key,
   }
 }
@@ -124,8 +130,8 @@ export class OutboxRepository {
    */
   async create(db: Queryable, event: CreateOutboxEvent): Promise<bigint> {
     const result = await db.query<{ id: string }>(
-      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries, trace_id, span_id, tracestate)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8)
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries, trace_id, span_id, tracestate, correlation_id)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7, $8, $9)
        RETURNING id`,
       [
         event.aggregateType,
@@ -136,6 +142,7 @@ export class OutboxRepository {
         event.traceId,
         event.spanId,
         event.tracestate,
+        event.correlationId,
       ]
     )
     return BigInt(result.rows[0].id)
@@ -181,6 +188,7 @@ export class OutboxRepository {
         tracestate: string | null
         shard_count: number | null
         shard_id: number | null
+        correlation_id: string | null
         publish_idempotency_key: string | null
       }>(
         `UPDATE event_outbox
@@ -201,7 +209,7 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, publish_idempotency_key`,
+                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
         [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
@@ -227,6 +235,7 @@ export class OutboxRepository {
         tracestate: string | null
         shard_count: number | null
         shard_id: number | null
+        correlation_id: string | null
         publish_idempotency_key: string | null
       }>(
         `UPDATE event_outbox
@@ -246,7 +255,7 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, publish_idempotency_key`,
+                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
         [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
@@ -318,10 +327,11 @@ export class OutboxRepository {
       trace_id: string | null
       span_id: string | null
       tracestate: string | null
+      correlation_id: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at, trace_id, span_id, tracestate
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate, correlation_id
        FROM event_outbox
        WHERE consumer_id = $1 AND status = 'processing'
        ORDER BY created_at ASC
@@ -354,6 +364,7 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        correlation_id: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -366,7 +377,7 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate`,
+                   trace_id, span_id, tracestate, correlation_id`,
         [limit]
       )
 
@@ -388,6 +399,7 @@ export class OutboxRepository {
         trace_id: string | null
         span_id: string | null
         tracestate: string | null
+        correlation_id: string | null
       }>(
         `UPDATE event_outbox
          SET status = 'processing'
@@ -399,7 +411,7 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate`,
+                   trace_id, span_id, tracestate, correlation_id`,
         [limit]
       )
 
@@ -465,6 +477,11 @@ export class OutboxRepository {
    * If max retries exceeded, status remains 'failed'.
    */
   async markFailed(db: Queryable, eventId: bigint, errorMessage: string): Promise<{ status: string; retryCount: number }> {
+    // Truncate/redact before persisting: exception messages can incidentally
+    // carry secrets (e.g. an Authorization header echoed by an HTTP client
+    // error) or be unbounded in length.
+    const sanitizedMessage = sanitizeErrorMessage(errorMessage)
+
     // Step 1: increment retry_count, set status and clear lease/consumer, clear next_attempt_at and idempotency key for now
     const upd = await db.query<{
       retry_count: number
@@ -481,16 +498,17 @@ export class OutboxRepository {
            publish_idempotency_key = NULL
        WHERE id = $1
        RETURNING retry_count, max_retries`,
-      [eventId.toString(), errorMessage]
+      [eventId.toString(), sanitizedMessage]
     )
 
     const row = upd.rows[0]
     const retryCount = row ? Number(row.retry_count) : 0
     const maxRetries = row ? Number(row.max_retries) : 0
 
-    // If not yet exhausted, compute exponential backoff in JS and update next_attempt_at
+    // If not yet exhausted, compute exponential backoff in JS and update next_attempt_at.
+    // Capped so a large max_retries budget can't produce a multi-day wait.
     if (retryCount < maxRetries) {
-      const delaySeconds = Math.pow(2, retryCount)
+      const delaySeconds = Math.min(Math.pow(2, retryCount), MAX_BACKOFF_SECONDS)
       await db.query(
         `UPDATE event_outbox SET next_attempt_at = NOW() + ($2 || ' seconds')::interval WHERE id = $1`,
         [eventId.toString(), String(Math.floor(delaySeconds))]
@@ -528,10 +546,11 @@ export class OutboxRepository {
       trace_id: string | null
       span_id: string | null
       tracestate: string | null
+      correlation_id: string | null
     }>(
       `SELECT id, aggregate_type, aggregate_id, event_type, payload, status,
               retry_count, max_retries, created_at, processed_at, error_message,
-              consumer_id, lease_expires_at, trace_id, span_id, tracestate
+              consumer_id, lease_expires_at, trace_id, span_id, tracestate, correlation_id
        FROM event_outbox
        WHERE aggregate_type = $1 AND aggregate_id = $2
        ORDER BY created_at DESC

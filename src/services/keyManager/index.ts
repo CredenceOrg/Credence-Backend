@@ -75,6 +75,16 @@ export class KeyManager {
   }
 
   /**
+   * Typed liveness check.  Returns true iff `initialize()` has produced an
+   * active key in this process.  Lets callers (e.g. the admin rotate
+   * endpoint) distinguish "never bootstrapped" from any other rotation
+   * failure without keying off error-message substrings.
+   */
+  isInitialized(): boolean {
+    return this.activeKid !== null
+  }
+
+  /**
    * Returns all keys eligible for JWT verification: the active key plus any
    * retired keys still within their grace + clock-skew window.
    */

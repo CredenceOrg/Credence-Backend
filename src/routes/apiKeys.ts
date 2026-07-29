@@ -11,7 +11,7 @@
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
-import { requireUserAuth, UserRole, type AuthenticatedRequest } from '../middleware/auth.js'
+import { requireUserAuth, UserRole, type AuthenticatedRequest, requireApiKey } from '../middleware/auth.js'
 import { InMemoryApiKeyRepository } from '../repositories/apiKeyRepository.js'
 import { ApiKeyRotationService } from '../services/apiKeyRotationService.js'
 import { auditLogService } from '../services/audit/index.js'
@@ -34,7 +34,6 @@ export function createApiKeyRouter(
   const router = Router()
 
   // ── POST /api/integrations/keys ─────────────────────────────────────────
-  // Issue a new integration API key for the authenticated user.
   router.post('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -64,15 +63,17 @@ export function createApiKeyRouter(
   })
 
   // ── GET /api/integrations/keys ──────────────────────────────────────────
-  // List all API keys owned by the authenticated user.
-  router.get('/', requireUserAuth, (req: Request, res: Response): void => {
-    const { user } = req as AuthenticatedRequest
-    const keys = rotationService.listKeys(user!.id)
-    res.status(200).json({ success: true, data: keys })
+  router.get('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { user } = req as AuthenticatedRequest
+      const keys = await rotationService.listKeys(user!.id)
+      res.status(200).json({ success: true, data: keys })
+    } catch (err) {
+      next(err)
+    }
   })
 
   // ── POST /api/integrations/keys/:id/rotate ──────────────────────────────
-  // Rotate a key: revoke the existing one and issue a replacement.
   router.post('/:id/rotate', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -83,7 +84,6 @@ export function createApiKeyRouter(
         throw new NotFoundError('API key', id)
       }
 
-      // Admins may rotate any key; regular users are restricted to their own.
       const isAdmin = user!.role === UserRole.ADMIN || user!.role === UserRole.SUPER_ADMIN
       if (!isAdmin && existing.ownerId !== user!.id) {
         throw new ForbiddenError('You do not have permission to rotate this API key')
@@ -108,7 +108,6 @@ export function createApiKeyRouter(
   })
 
   // ── DELETE /api/integrations/keys/:id ───────────────────────────────────
-  // Permanently revoke an API key.
   router.delete('/:id', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -137,3 +136,60 @@ export function createApiKeyRouter(
 
   return router
 }
+
+function createDefaultRouter(): Router {
+  const router = Router()
+  const auth = requireApiKey('bond:write' as any)
+
+  // POST /
+  router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
+    const { ownerId, scopes, tier } = req.body
+    if (!ownerId) {
+      res.status(400).json({ error: 'ownerId is required' })
+      return
+    }
+
+    if (scopes && Array.isArray(scopes)) {
+      const validScopes = Object.values(ApiKeyScope) as string[]
+      for (const s of scopes) {
+        if (!validScopes.includes(s)) {
+          res.status(400).json({ error: 'Invalid scope' })
+          return
+        }
+      }
+    }
+
+    const key = await generateApiKey(ownerId, scopes, tier)
+    res.status(201).json(key)
+  })
+
+  // GET /:ownerId
+  router.get('/:ownerId', auth, async (req: Request, res: Response): Promise<void> => {
+    const keys = await listApiKeys(req.params.ownerId)
+    res.status(200).json(keys)
+  })
+
+  // DELETE /:id
+  router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
+    const revoked = await revokeApiKey(req.params.id)
+    if (!revoked) {
+      res.status(404).json({ error: 'Key not found' })
+    } else {
+      res.status(204).end()
+    }
+  })
+
+  // POST /:id/rotate
+  router.post('/:id/rotate', auth, async (req: Request, res: Response): Promise<void> => {
+    const result = await rotateApiKey(req.params.id)
+    if (!result) {
+      res.status(404).json({ error: 'Key not found' })
+    } else {
+      res.status(201).json(result)
+    }
+  })
+
+  return router
+}
+
+export default createDefaultRouter()

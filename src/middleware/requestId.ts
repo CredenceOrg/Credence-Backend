@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express'
 import { randomUUID } from 'crypto'
 import { tracingContext, createRequestLogger } from '../utils/logger.js'
+import { HEADER_CORRELATION_ID } from '../config/constants.js'
 
 /**
  * Middleware to handle Request ID, Correlation ID, Trace ID, and context for distributed tracing.
@@ -10,8 +11,9 @@ export const requestIdMiddleware = (
   res: Response,
   next: NextFunction
 ) => {
-  // 1. Handle Correlation ID
-  const correlationId = req.header('x-correlation-id') || randomUUID()
+  // 1. Handle Correlation ID — prefer value already set by correlationIdMiddleware
+  const correlationId = (req['correlationId'] as string) || req.header(HEADER_CORRELATION_ID) || randomUUID()
+  req['correlationId'] = correlationId
 
   // 2. Handle Request ID
   const requestId = (req.header('x-request-id') as string) || randomUUID()
@@ -35,8 +37,12 @@ export const requestIdMiddleware = (
   context.set('requestId', requestId)
   context.set('traceId', traceId)
 
-  // Set standardized observability fields
-  context.set('route', req.originalUrl || req.path || 'N/A')
+  // Set standardized observability fields.
+  // Use the matched route template (e.g. /api/trust/:address) rather than the
+  // full raw URL which may contain sensitive path parameters or query strings.
+  // req.route is only available after the route handler has been matched, so we
+  // resolve it lazily via the context proxy below.
+  context.set('route', req.route?.path || req.path || 'N/A')
 
   // Actor and tenant are extracted from headers or generic auth objects.
   // Replace `(req as any).user` with your actual auth extraction logic if different.
@@ -71,6 +77,18 @@ export const requestIdMiddleware = (
               (req as any).user?.id ||
               'N/A'
             )
+          }
+          if (key === 'route') {
+            // Lazily resolve the matched route template once Express has
+            // populated req.route.  This avoids logging raw URLs (which may
+            // contain path parameters or query strings with sensitive data)
+            // and keeps cardinality bounded to distinct route patterns.
+            const routeTemplate: string | undefined =
+              (req as any).route?.path ??
+              (req as any).routerPath ??
+              undefined
+            if (routeTemplate) return routeTemplate
+            return target.get('route') ?? 'N/A'
           }
           return target.get(key)
         }

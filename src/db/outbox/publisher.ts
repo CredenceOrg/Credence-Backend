@@ -12,7 +12,7 @@ import {
   bondCreationEventSchema,
   withdrawalEventSchema,
 } from '../../schemas/queue.js'
-import { logger } from '../../utils/logger.js'
+import { logger, runWithCorrelationIds } from '../../utils/logger.js'
 import {
   incrementOutboxDeadLetter,
   incrementOutboxPublished,
@@ -21,6 +21,10 @@ import {
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
 } from '../../observability/index.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 import { trace, context, SpanContext, TraceFlags, SpanStatusCode, createTraceState } from '@opentelemetry/api'
 
 /**
@@ -353,14 +357,21 @@ export class OutboxPublisher {
     try {
       await tracer.startActiveSpan('outbox.publish', { links, attributes: { 'outbox.event.id': event.id.toString(), 'outbox.event.type': event.eventType, 'outbox.aggregate.type': event.aggregateType, 'outbox.aggregate.id': event.aggregateId } }, async (span) => {
         try {
+          // Restore the correlation id captured at emit time so any logger
+          // calls made while publishing (including inside the webhook
+          // delivery HTTP client) are tagged with the id of the request
+          // that originally triggered this event.
+          const publishWithContext = () =>
+            runWithCorrelationIds({ correlationId: event.correlationId ?? undefined }, () =>
+              this.publisher.publish(event)
+            )
+
           // If we have a span context, set it as active context for publishing
           if (parentSpanContext) {
             const ctx = trace.setSpanContext(context.active(), parentSpanContext)
-            await context.with(ctx, async () => {
-              await this.publisher.publish(event)
-            })
+            await context.with(ctx, publishWithContext)
           } else {
-            await this.publisher.publish(event)
+            await publishWithContext()
           }
           await this.repository.markPublished(pool, event.id)
           incrementOutboxPublished(event.aggregateType)
@@ -383,7 +394,18 @@ export class OutboxPublisher {
                 .replace(/[^A-Z0-9_]/g, '_')
                 .slice(0, 50)
               incrementOutboxDeadLetter(code)
-              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter`)
+              // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
+              // `result.retryCount` is the FINAL attempt count of the event
+              // just moved to dead-letter: `markFailed` incremented retry_count
+              // and transitioned the row when `retry_count + 1 >= max_retries`,
+              // so the value here is exactly the budget the event consumed.
+              // Threading the real count (instead of 1) prevents the
+              // `jobs_terminal_attempt_count{domain="outbox"}` histogram
+              // from skewing toward the `1` bucket and misleading SREs.
+              const finalAttempts = result?.retryCount ?? 1
+              recordJobDeadLetter('outbox', code)
+              recordJobTerminalOutcome('outbox', 'dead_letter', finalAttempts)
+              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter after ${finalAttempts} attempt(s)`)
             }
           } catch (err) {
             logger.error('[OutboxPublisher] Error marking event failed', err)

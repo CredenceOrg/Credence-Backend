@@ -336,6 +336,79 @@ describe("GracefulShutdownManager", () => {
       running = false;
     });
 
+    it("clamps the scheduler drain wait to the remaining grace-period budget instead of the full jobDrainTimeoutMs", async () => {
+      vi.useRealTimers();
+
+      // Server close eats into the grace-period budget before scheduler_drain
+      // even starts.
+      const server = makeServer();
+      server.close = vi.fn((cb?: (err?: Error) => void) => {
+        setTimeout(() => cb?.(), 200);
+      });
+
+      let running = true;
+      const scheduler: DrainableScheduler = {
+        stop: vi.fn(),
+        isJobRunning: () => running,
+      };
+
+      const metrics = makeMetrics();
+      const opts = makeOptions({
+        server,
+        scheduler,
+        metrics,
+        gracePeriodMs: 600,
+        // Requests far more than what remains after the 200ms server close —
+        // without clamping this would overshoot gracePeriodMs entirely.
+        jobDrainTimeoutMs: 5000,
+      });
+      const mgr = new GracefulShutdownManager(opts);
+
+      await mgr.shutdown("SIGTERM");
+
+      const schedulerDrainSeconds = (
+        metrics.observePhase as MockInstance
+      ).mock.calls.find((c) => c[0] === "scheduler_drain")?.[1] as number;
+
+      // Roughly 400ms remained (600 - 200), not the full 5s requested.
+      expect(schedulerDrainSeconds).toBeLessThan(0.5);
+
+      running = false;
+    });
+
+    it("does not wait at all when the grace-period budget is already exhausted before scheduler_drain starts", async () => {
+      vi.useRealTimers();
+
+      const server = makeServer();
+      server.close = vi.fn((cb?: (err?: Error) => void) => {
+        setTimeout(() => cb?.(), 300);
+      });
+
+      const scheduler: DrainableScheduler = {
+        stop: vi.fn(),
+        isJobRunning: () => true,
+      };
+
+      const metrics = makeMetrics();
+      const opts = makeOptions({
+        server,
+        scheduler,
+        metrics,
+        gracePeriodMs: 100, // already elapsed by the time server_close finishes
+        jobDrainTimeoutMs: 5000,
+      });
+      const mgr = new GracefulShutdownManager(opts);
+
+      await mgr.shutdown("SIGTERM");
+
+      const schedulerDrainSeconds = (
+        metrics.observePhase as MockInstance
+      ).mock.calls.find((c) => c[0] === "scheduler_drain")?.[1] as number;
+
+      // Negative remaining budget clamps to zero — no extra wait piled on top.
+      expect(schedulerDrainSeconds).toBeLessThan(0.05);
+    });
+
     it("skips job-running poll when scheduler has no isJobRunning()", async () => {
       const scheduler: DrainableScheduler = { stop: vi.fn() };
       const opts = makeOptions({ scheduler });

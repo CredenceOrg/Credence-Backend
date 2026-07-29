@@ -197,3 +197,59 @@ describe('JobScheduler', () => {
     expect(scheduler.isActive()).toBe(true)
   })
 })
+
+describe('JobScheduler correlation id propagation', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('runs each job invocation inside its own correlation-id context', async () => {
+    const { getActiveCorrelationIds } = await import('../utils/logger.js')
+    const seenIds: (string | undefined)[] = []
+
+    const job: ScoreSnapshotJob = {
+      run: vi.fn(async () => {
+        seenIds.push(getActiveCorrelationIds().correlationId)
+        return { processed: 1, saved: 1, errors: 0, duration: 1, startTime: new Date().toISOString() }
+      }),
+    } as unknown as ScoreSnapshotJob
+
+    const scheduler = new JobScheduler(job, { intervalMs: 1_000_000, runOnStart: true })
+    scheduler.start()
+
+    // Allow the runOnStart invocation's async job.run() to complete.
+    await new Promise(resolve => setImmediate(resolve))
+    await new Promise(resolve => setImmediate(resolve))
+
+    scheduler.stop()
+
+    expect(seenIds).toHaveLength(1)
+    expect(seenIds[0]).toBeTruthy()
+    // A fresh uuid-shaped correlation id, since there is no originating request.
+    expect(seenIds[0]).toMatch(/^[0-9a-f-]{36}$/i)
+  })
+
+  it('gives sequential job runs different correlation ids', async () => {
+    const { getActiveCorrelationIds } = await import('../utils/logger.js')
+    const seenIds: (string | undefined)[] = []
+
+    const job: ScoreSnapshotJob = {
+      run: vi.fn(async () => {
+        seenIds.push(getActiveCorrelationIds().correlationId)
+        return {}
+      }),
+    } as unknown as ScoreSnapshotJob
+
+    const scheduler = new JobScheduler(job, { intervalMs: 1_000_000 })
+
+    // Invoke the private runJob twice directly (via start/stop cycles) to
+    // avoid depending on real timer intervals in this test.
+    await (scheduler as any).runJob()
+    await (scheduler as any).runJob()
+
+    expect(seenIds).toHaveLength(2)
+    expect(seenIds[0]).toBeTruthy()
+    expect(seenIds[1]).toBeTruthy()
+    expect(seenIds[0]).not.toBe(seenIds[1])
+  })
+})

@@ -18,6 +18,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | --- | ---: | --- | --- |
 | `invalid_input` | 400 |  | Invalid input |
 | `unauthorized` | 401 | authentication | Authentication is required |
+| `crawler_blocked` | 403 | authorization | Automated crawling of admin surfaces is forbidden. |
 | `forbidden` | 403 | authorization | The authenticated caller is not allowed to perform this action |
 | `insufficient_credits` | 402 | business | Monthly credit budget exhausted |
 | `idempotency_key_mismatch` | 409 | business | Idempotency key is already bound to a different actor or payload |
@@ -26,7 +27,9 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `rate_limit_exceeded` | 429 | rate_limit | Rate limit exceeded |
 | `not_found` | 404 | resource | The requested resource was not found |
 | `conflict` | 409 | resource | The request conflicts with the current resource state |
+| `optimistic_lock_conflict` | 409 | resource | The resource was modified by another request. Fetch the latest version and retry. |
 | `internal_server_error` | 500 | system | An unexpected internal server error occurred |
+| `missing_security_header` | 500 | system | A required security response header is missing |
 | `service_unavailable` | 503 | system | Service temporarily unavailable |
 | `batch_size_too_small` | 400 | validation | The batch size is below the allowed minimum |
 | `field_required` | 400 | validation | A required field is missing |
@@ -41,6 +44,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `value_too_small` | 400 | validation | The request contains a value below the allowed minimum |
 | `batch_size_exceeded` | 413 | validation | The batch size exceeds the allowed maximum |
 | `request_too_large` | 413 | validation | The request body exceeds the maximum allowed size |
+| `ssrf_blocked` | 422 | validation | The target URL resolves to a restricted or internal network address |
 
 ## Localization catalog
 
@@ -48,7 +52,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 
 | Locale | Coverage | Notes |
 | --- | ---: | --- |
-| `en` | 29 messages | Catalog default messages for active codes. |
+| `en` | 33 messages | Catalog default messages for active codes. |
 
 ## Deprecated codes
 

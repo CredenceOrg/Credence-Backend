@@ -13,12 +13,17 @@ Every API key is issued with an explicit set of **scopes** that determine which 
 | `attestations:write` | Create and revoke attestations                                     |
 | `payouts:write`      | Payout / settlement creation                                       |
 | `reports:generate`   | Report job creation and status polling                             |
-| `exports:read`       | Report artifact downloads and audit-log exports                    |
+| `exports:read`       | Report artifact downloads, audit-log exports, and top-talkers data |
 | `webhooks:admin`     | Webhook secret rotation and revocation                             |
-| `admin:read`         | Admin read operations (users, audit logs, failed events)           |
-| `admin:write`        | Admin write operations (role assignment, key revocation, impersonation, event replay) |
+| `outbox:reinject`    | Reinsert fixed quarantined outbox events                           |
+| `admin:read`         | Admin read operations (users, audit logs, failed events, imports previews/presets) |
+| `admin:write`        | Admin write operations (role assignment, key revocation, impersonation, event replay, import commits, manage presets) |
+| `flags:read`         | Read feature flag configurations and tenant rollouts               |
+| `flags:write`        | Create, update, and delete feature flags and overrides             |
+| `bond:read`          | Read bond state and status                                         |
+| `bond:write`         | Create and update bond records                                     |
 
-Legacy `public` and `enterprise` values are still accepted and automatically expanded to their respective scope sets (see `docs/api-keys.md`).
+Legacy `public` (expands to `trust:read`, `attestations:read`) and `enterprise` (expands to all 14 granular scopes) values are still accepted and automatically expanded to their respective scope sets (see `docs/api-keys.md`).
 
 ### Scope Enforcement Implementation
 

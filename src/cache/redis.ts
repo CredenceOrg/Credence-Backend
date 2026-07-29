@@ -5,6 +5,7 @@ import { createDefaultMetricsCollector } from '../observability/timeoutMetrics.j
 import { logger } from '../utils/logger.js'
 import { singleflight } from '../lib/singleflight.js'
 import { recordCacheHit, recordCacheMiss, isObjectStale } from '../utils/cacheContext.js'
+import { recordRedisKeySize } from '../middleware/metrics.js'
 
 export type RedisClient = RedisClientType
 
@@ -204,6 +205,7 @@ export class CacheService {
   ): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
     const serializedValue = typeof value === 'string' ? value : JSON.stringify(value)
+    recordRedisKeySize(namespace, Buffer.byteLength(serializedValue, 'utf8'))
 
     try {
       await this.redis.connect()

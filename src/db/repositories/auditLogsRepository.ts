@@ -174,20 +174,6 @@ export interface AuditLogRepository {
 export class PostgresAuditLogsRepository implements AuditLogRepository {
   constructor(private readonly db: Queryable) {}
 
-  /**
-   * Append an audit log entry with hash-chain integrity.
-   *
-   * The insert is done inside a serialised advisory-locked section so that
-   * concurrent writers cannot interleave and break the chain.
-   *
-   * Steps:
-   * 1. Acquire advisory lock to serialize chain writes
-   * 2. Fetch the row_hash of the latest row (by seq) — this becomes our prev_hash
-   * 3. Allocate a new seq from the sequence
-   * 4. Compute row_hash = SHA-256( prev_hash | id | occurred_at | ... )
-   * 5. INSERT the row with prev_hash and row_hash
-   * 6. Release advisory lock (auto on COMMIT/ROLLBACK if in transaction)
-   */
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
     const actorId = resolveActorId(input)
@@ -290,12 +276,79 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
   }
 
   async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
-    const entries: AuditLogEntry[] = []
-    for (const input of inputs) {
-      const entry = await this.append(input)
-      entries.push(entry)
+    const n = inputs.length
+    if (n === 0) return []
+    if (n === 1) return [await this.append(inputs[0])]
+
+    const params: unknown[] = []
+    const ctes: string[] = []
+
+    for (let i = 0; i < n; i++) {
+      const input = inputs[i]
+      const base = params.length
+      params.push(
+        randomUUID(),
+        resolveActorId(input),
+        resolveActorEmail(input),
+        input.action,
+        input.resourceType,
+        input.resourceId,
+        JSON.stringify(input.details ?? {}),
+        input.status ?? 'success',
+        input.ipAddress ?? null,
+        input.errorMessage ?? null,
+        input.tenantId,
+        input.requestId ?? null,
+      )
+
+      const p = (offset: number) => `$${base + offset + 1}`
+      const prevSrc = i === 0
+        ? '(SELECT COALESCE(row_hash, \'GENESIS\') FROM audit_logs ORDER BY seq DESC LIMIT 1)'
+        : `(SELECT row_hash FROM ins${i})`
+
+      ctes.push(`ins${i + 1} AS (
+  INSERT INTO audit_logs (
+    id, seq, actor_id, actor_email, action, resource_type, resource_id,
+    details_json, status, ip_address, error_message, tenant_id, request_id,
+    prev_hash, row_hash
+  )
+  SELECT
+    ${p(0)}::uuid,
+    nextval('audit_logs_seq'),
+    ${p(1)}, ${p(2)}, ${p(3)}, ${p(4)}, ${p(5)},
+    ${p(6)}::jsonb, ${p(7)}, ${p(8)}, ${p(9)}, ${p(10)}, ${p(11)},
+    COALESCE(${prevSrc}, 'GENESIS'),
+    encode(
+      sha256(
+        convert_to(
+          COALESCE(${prevSrc}, 'GENESIS') || '|' ||
+          ${p(0)}::text || '|' ||
+          NOW()::text || '|' ||
+          ${p(1)} || '|' ||
+          ${p(3)} || '|' ||
+          ${p(4)} || '|' ||
+          ${p(5)} || '|' ||
+          ${p(6)} || '|' ||
+          ${p(7)} || '|' ||
+          ${p(10)} || '|' ||
+          COALESCE(${p(11)}, ''),
+          'UTF8'
+        )
+      ),
+      'hex'
+    )
+  RETURNING
+    id, occurred_at, actor_id, actor_email, action, resource_type, resource_id,
+    details_json, status, ip_address, error_message, tenant_id, request_id,
+    seq, prev_hash, row_hash
+)`)
     }
-    return entries
+
+    const selects = Array.from({ length: n }, (_, i) => `SELECT * FROM ins${i + 1}`)
+    const sql = `WITH\n${ctes.join(',\n')}\n${selects.join('\nUNION ALL\n')}\nORDER BY seq ASC`
+
+    const result = await this.db.query<AuditLogRow>(sql, params)
+    return result.rows.map(mapAuditLog)
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {

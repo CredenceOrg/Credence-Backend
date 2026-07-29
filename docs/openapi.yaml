@@ -462,6 +462,37 @@ components:
         - valid
         - break_detected
         - never_run
+    auditLogExportQuerySchema:
+      def:
+        type: object
+        shape:
+          from:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
+          to:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     bondCreationEventSchema:
       def:
         type: object
@@ -1323,239 +1354,6 @@ components:
                 minLength: null
                 maxLength: null
             type: optional
-      type: object
-    cspReportDetailsSchema:
-      def:
-        type: object
-        shape:
-          document-uri:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-          referrer:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          blocked-uri:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          violated-directive:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          effective-directive:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          original-policy:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          disposition:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-          status-code:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: number
-                  checks:
-                    - def:
-                        type: number
-                        check: number_format
-                        abort: false
-                        format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                type: number
-                minValue: -9007199254740991
-                maxValue: 9007199254740991
-                isInt: true
-                isFinite: true
-                format: safeint
-            type: optional
-          script-sample:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                type: string
-                format: null
-                minLength: null
-                maxLength: null
-            type: optional
-      type: object
-    cspReportSchema:
-      def:
-        type: object
-        shape:
-          csp-report:
-            def:
-              type: object
-              shape:
-                document-uri:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                referrer:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                blocked-uri:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                violated-directive:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                effective-directive:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                original-policy:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                disposition:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-                status-code:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: number
-                        checks:
-                          - def:
-                              type: number
-                              check: number_format
-                              abort: false
-                              format: safeint
-                            type: number
-                            minValue: -9007199254740991
-                            maxValue: 9007199254740991
-                            isInt: true
-                            isFinite: true
-                            format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                  type: optional
-                script-sample:
-                  def:
-                    type: optional
-                    innerType:
-                      def:
-                        type: string
-                      type: string
-                      format: null
-                      minLength: null
-                      maxLength: null
-                  type: optional
-            type: object
       type: object
     dismissDisputeBodySchema:
       def:
@@ -3952,6 +3750,112 @@ components:
                   maxLength: null
             type: object
       type: object
+    paginationLinksSchema:
+      def:
+        type: object
+        shape:
+          self:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: url
+                    check: string_format
+                    abort: false
+                  type: string
+                  format: url
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: url
+            minLength: null
+            maxLength: null
+          first:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          prev:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          next:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          last:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
     policyListQuerySchema:
       def:
         type: object
@@ -4416,6 +4320,24 @@ components:
             maxLength: null
       type: object
     replayEventBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    replayWebhookBodySchema:
       def:
         type: object
         shape:
@@ -8298,36 +8220,6 @@ components:
       required:
         - tenantId
         - rolloutPercent
-    CspReport:
-      type: object
-      properties:
-        csp-report:
-          $ref: "#/components/schemas/CspReportDetails"
-      required:
-        - csp-report
-    CspReportDetails:
-      type: object
-      properties:
-        document-uri:
-          type: string
-        referrer:
-          type: string
-        blocked-uri:
-          type: string
-        violated-directive:
-          type: string
-        effective-directive:
-          type: string
-        original-policy:
-          type: string
-        disposition:
-          type: string
-        status-code:
-          type: integer
-        script-sample:
-          type: string
-      required:
-        - document-uri
   securitySchemes:
     bearerAuth:
       type: http
@@ -8427,6 +8319,50 @@ paths:
                 type: object
                 additionalProperties:
                   nullable: true
+  /api/dev/fault-injection:
+    post:
+      summary: Fault injection
+      description: Returns a configurable HTTP error (default 500) with a structured
+        JSON body. Only available when DEV_MODE is enabled (404 otherwise).
+        Intended for chaos / retry testing.
+      tags:
+        - Dev
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses:
+        "200":
+          description: Simulated fault response
+          content:
+            application/json: {}
+        "400":
+          description: Validation error (invalid statusCode or message too long)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "404":
+          description: DEV_MODE is disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
   /api/trust/{address}:
     get:
       summary: Get trust score
@@ -9775,42 +9711,21 @@ paths:
                 required:
                   - error
                   - message
-  /api/admin/replay-webhook:
-    post:
-      summary: Replay a failed webhook delivery
-      description: Replays a specific failed webhook delivery from the DLQ by id
-        (passed in body). Audit-logged via WebhookService.replayWebhook.
+  /api/admin/system/backup-status:
+    get:
+      summary: System Backup Status
+      description: Returns the status of the continuous WAL archiving backup job.
       tags:
-        - Admin
+        - Admin System
       security:
         - bearerAuth: []
-      requestBody:
-        required: true
-        content:
-          application/json: {}
       responses:
         "200":
-          description: Webhook replayed successfully
+          description: Backup status returned successfully
           content:
-            application/json:
-              schema:
-                nullable: true
-        "400":
-          description: Validation error
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  error:
-                    type: string
-                  message:
-                    type: string
-                required:
-                  - error
-                  - message
-        "404":
-          description: DLQ entry or Webhook not found
+            application/json: {}
+        "401":
+          description: Missing or invalid bearer token
           content:
             application/json:
               schema:
@@ -9823,27 +9738,17 @@ paths:
                 required:
                   - error
                   - message
-  /csp-report:
-    post:
-      summary: CSP violation report endpoint
-      description: Endpoint for browsers to post Content Security Policy violation reports.
-      tags:
-        - Security
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/CspReport"
-          application/csp-report:
-            schema:
-              $ref: "#/components/schemas/CspReport"
-      responses:
-        "204":
-          description: Report received
-        "400":
-          description: Validation error
+        "403":
+          description: Forbidden - Requires admin role
           content:
             application/json:
               schema:
-                nullable: true
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message

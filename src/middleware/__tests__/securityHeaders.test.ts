@@ -292,6 +292,8 @@ it('includes preload directive in the HSTS header in non-production environment'
       // Other headers should still be set
       expect(response.headers['referrer-policy']).toBeDefined()
       expect(response.headers['cross-origin-resource-policy']).toBeDefined()
+      // noSniff should always be present regardless of overrides
+      expect(response.headers['x-content-type-options']).toBe('nosniff')
     })
 
     it('does not affect responses from routes without override', async () => {
@@ -306,6 +308,31 @@ it('includes preload directive in the HSTS header in non-production environment'
       
       expect(response.headers['content-security-policy']).toBeDefined()
       expect(response.headers['strict-transport-security']).toBeDefined()
+    })
+
+    it('preserves_noSniff_when_all_overridable_headers_are_disabled', async () => {
+      app.use((req, res, next) => {
+        res.locals.securityHeaders = {
+          contentSecurityPolicy: false,
+          hsts: false,
+          referrerPolicy: false,
+          crossOriginResourcePolicy: false,
+        }
+        next()
+      })
+      app.use(securityHeadersWithOverride)
+      app.get('/test', (req, res) => {
+        res.json({ message: 'test' })
+      })
+
+      const response = await request(app).get('/test')
+
+      expect(response.headers['content-security-policy']).toBeUndefined()
+      expect(response.headers['strict-transport-security']).toBeUndefined()
+      expect(response.headers['referrer-policy']).toBeUndefined()
+      expect(response.headers['cross-origin-resource-policy']).toBeUndefined()
+      // noSniff is not overridable and should always be present
+      expect(response.headers['x-content-type-options']).toBe('nosniff')
     })
 
     it('allows per-route CSP relaxation for OpenAPI docs', async () => {
@@ -478,6 +505,25 @@ it('includes preload directive in the HSTS header in non-production environment'
       expect(response.body.error_code).toBe('missing_security_header')
       expect(response.body.details).toContain('content-security-policy')
       expect(response.body.details).toContain('strict-transport-security')
+    })
+
+    it('rejects_when_x_content_type_options_is_missing', async () => {
+      app.use(securityHeadersMiddleware)
+      app.use((req, res, next) => {
+        res.removeHeader('x-content-type-options')
+        next()
+      })
+      app.use(checkSecurityHeaders)
+      app.use(errorHandler)
+      app.get('/test', (req, res) => {
+        res.json({ message: 'test' })
+      })
+
+      const response = await request(app).get('/test')
+
+      expect(response.status).toBe(500)
+      expect(response.body.error_code).toBe('missing_security_header')
+      expect(response.body.details).toContain('x-content-type-options')
     })
   })
 })

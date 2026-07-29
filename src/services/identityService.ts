@@ -109,6 +109,7 @@ export class IdentityService {
   }
 }
 
+import type { PoolClient } from 'pg'
 import { pool } from '../db/pool.js'
 import { invalidateTrustScoreCache } from './reputationService.js'
 
@@ -125,10 +126,15 @@ export interface BondUpsertInput {
 
 /**
  * Upsert an identity by Stellar address.
+ * Accepts an optional client for transactional use.
  * Maps 'id' field from Horizon event (source_account) to 'address' in DB.
  */
-export async function upsertIdentity(identity: IdentityUpsertInput): Promise<void> {
-  await pool.query(
+export async function upsertIdentity(
+  identity: IdentityUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
+  const db = client ?? pool
+  await db.query(
     `INSERT INTO identities (address)
      VALUES ($1)
      ON CONFLICT (address) DO NOTHING`,
@@ -138,12 +144,17 @@ export async function upsertIdentity(identity: IdentityUpsertInput): Promise<voi
 
 /**
  * Upsert a bond for an identity.
+ * Accepts an optional client for transactional use.
  * Updates the identities table with bond information.
  */
-export async function upsertBond(bond: BondUpsertInput): Promise<void> {
+export async function upsertBond(
+  bond: BondUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
   const durationSeconds = bond.duration ? parseInt(bond.duration, 10) : null
+  const db = client ?? pool
   
-  await pool.query(
+  await db.query(
     `UPDATE identities
      SET bonded_amount = $2,
          bond_start = COALESCE(bond_start, NOW()),
@@ -156,4 +167,37 @@ export async function upsertBond(bond: BondUpsertInput): Promise<void> {
 
   // Invalidate trust score cache for this address
   await invalidateTrustScoreCache(bond.address)
+}
+
+export interface CursorUpsertInput {
+  streamName: string
+  pagingToken: string
+}
+
+/**
+ * Persist a cursor checkpoint for a Horizon event stream.
+ * Accepts an optional client for transactional use.
+ */
+export async function upsertCursor(
+  input: CursorUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
+  if (!/^\d+$/.test(input.pagingToken) && input.pagingToken !== 'now') {
+    throw new Error(
+      `Invalid paging_token format: ${input.pagingToken}. ` +
+      `Expected numeric string or 'now'.`
+    )
+  }
+
+  const db = client ?? pool
+  await db.query(
+    `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
+     VALUES ($1, $2, NOW(), NOW())
+     ON CONFLICT (stream_name)
+     DO UPDATE SET 
+       paging_token = EXCLUDED.paging_token,
+       last_checkpoint = NOW(),
+       updated_at = NOW()`,
+    [input.streamName, input.pagingToken]
+  )
 }

@@ -110,7 +110,9 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
             span_id TEXT,
             tracestate TEXT,
             shard_count INTEGER,
-            shard_id INTEGER
+            shard_id INTEGER,
+            correlation_id TEXT,
+            publish_idempotency_key TEXT
         );
     `)
 
@@ -199,5 +201,41 @@ describe('Outbox bounded retries and backoff', () => {
         const events = await repo.claimEvents(pool, consumerId, 10, 60)
         // Should skip t1 and return t2 then t3 preserving order
         expect(events.map(e => e.id)).toEqual([BigInt(t2.rows[0].id), BigInt(t3.rows[0].id)])
+    })
+
+    it('caps the backoff delay at 3600s even when 2^retryCount would be far larger', async () => {
+        const insert = await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            ['agg', 'cap2', 't', JSON.stringify({}), 'processing', 15, 20]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const before = Date.now()
+        await repo.markFailed(pool, id, 'timeout')
+
+        const check = await pool.query('SELECT next_attempt_at FROM event_outbox WHERE id = $1', [id.toString()])
+        const nextAttemptAt = new Date(check.rows[0].next_attempt_at).getTime()
+        const deltaSeconds = (nextAttemptAt - before) / 1000
+
+        // Uncapped this would be 2^16 = 65536s (~18 hours); capped it must stay near 3600s.
+        expect(deltaSeconds).toBeGreaterThan(3000)
+        expect(deltaSeconds).toBeLessThanOrEqual(3600 + 5)
+    })
+
+    it('sanitizes the error message before persisting it (truncation + secret redaction)', async () => {
+        const insert = await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            ['agg', 'sanitize', 't', JSON.stringify({}), 'processing', 0, 5]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const seed = 'S' + 'A'.repeat(55)
+        await repo.markFailed(pool, id, `webhook rejected signer ${seed}`)
+
+        const check = await pool.query('SELECT error_message FROM event_outbox WHERE id = $1', [id.toString()])
+        expect(check.rows[0].error_message).not.toContain(seed)
+        expect(check.rows[0].error_message).toContain('[REDACTED]')
     })
 })

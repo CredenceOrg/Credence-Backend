@@ -79,7 +79,9 @@ export class AuditLogService {
     const resourceType =
       effectiveAction === AuditAction.LIST_USERS || effectiveAction === AuditAction.EXPORT_AUDIT_LOGS
         ? 'admin_user'
-        : 'user'
+        : effectiveAction === AuditAction.ROTATE_SIGNING_KEY
+          ? 'system'
+          : 'user'
 
     const mappedDetails: Record<string, unknown> = {
       ...(details ?? {}),
@@ -231,29 +233,46 @@ export class AuditLogService {
       allowSuperScope?: boolean
     }
   ): AsyncGenerator<AuditLogEntry> {
-    // SECURITY: Enforce tenant scoping - deny by default
+    this.assertExportScope(tenantId, options)
+
+    const filters: AuditLogFilters = {
+      from: startDate.toISOString(),
+      to: endDate.toISOString(),
+    }
+
+    for await (const log of this.paginateLogs(tenantId, filters, options)) {
+      yield this.redactLogEntry(log)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+
+  private assertExportScope(
+    tenantId?: string,
+    options?: { allowSuperScope?: boolean },
+  ): void {
     if (!tenantId && !options?.allowSuperScope) {
       throw new Error(
         'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
       )
     }
+  }
 
-    const startMs = startDate.getTime()
-    const endMs = endDate.getTime()
-
-    const { logs } = await this.getLogs(tenantId, {}, Number.MAX_SAFE_INTEGER, undefined, options)
-    for (const log of logs) {
-      const logTime = new Date(log.timestamp).getTime()
-      
-      // Apply tenant filter if provided (not in super-scope mode)
-      if (tenantId && log.tenantId !== tenantId) {
-        continue
+  private async *paginateLogs(
+    tenantId: string | undefined,
+    filters: AuditLogFilters,
+    options?: { allowSuperScope?: boolean },
+    pageSize = 500,
+  ): AsyncGenerator<AuditLogEntry> {
+    let cursor: string | undefined
+    while (true) {
+      const page = await this.getLogs(tenantId, filters, pageSize, cursor, options)
+      for (const log of page.logs) {
+        yield log
       }
-      
-      if (logTime >= startMs && logTime <= endMs) {
-        yield this.redactLogEntry(log)
-        await new Promise((resolve) => setImmediate(resolve))
+      if (!page.hasNextPage || !page.nextCursor) {
+        break
       }
+      cursor = page.nextCursor
     }
   }
 

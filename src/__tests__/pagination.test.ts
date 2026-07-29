@@ -5,6 +5,8 @@ import { newDb } from 'pg-mem'
 import { Pool } from 'pg'
 
 process.env.JWT_SECRET = 'test-jwt-secret-at-least-32-chars-long'
+process.env.DB_URL = 'postgres://x:x@localhost/x'
+process.env.REDIS_URL = 'redis://localhost:6379'
 
 describe('Cursor Pagination', () => {
   describe('encodeCursor & decodeCursor', () => {
