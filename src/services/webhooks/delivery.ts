@@ -353,30 +353,11 @@ async function deliverSingleWebhook(
   const startMs = Date.now()
 
   for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
-    attempts = attempt
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), webhook.timeoutMs ?? timeout ?? 5000)
 
     try {
-      const fetchStart = Date.now()
-      
-      // Create fetch options with custom agent for mTLS
-      const fetchOptions: RequestInit = {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Webhook-Signature': signatureHeader,
-          'X-Webhook-Event': payload.event,
-          ...(safeCorrelationId ? { 'X-Correlation-Id': safeCorrelationId } : {}),
-        },
-        body: payloadStr,
-        signal: controller.signal,
-        // @ts-ignore - agent is not in standard RequestInit but supported by Node.js fetch
-        agent,
-      }
-
-  try {
-    const response = await executeWithRetry(
+      const response = await executeWithRetry(
       provider,
       async (signal) => {
         attempts += 1
@@ -390,6 +371,7 @@ async function deliverSingleWebhook(
               'Content-Type': 'application/json',
               'X-Webhook-Signature': signatureHeader,
               'X-Webhook-Event': payload.event,
+              ...(safeCorrelationId ? { 'X-Correlation-Id': safeCorrelationId } : {}),
             },
             body: payloadStr,
             signal,
@@ -482,6 +464,16 @@ async function deliverSingleWebhook(
       responseBodySnippet: undefined,
       errorCode: lastErrorCode,
     }
+  }
+  }
+
+  return {
+    webhookId: webhook.id,
+    success: false,
+    error: lastError ?? 'Webhook delivery failed: no attempts were made',
+    attempts,
+    statusCode: lastStatusCode,
+    errorCode: lastErrorCode,
   }
 }
 

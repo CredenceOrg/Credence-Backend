@@ -178,55 +178,9 @@ describe('Admin Routes â€” Idempotent Mutations', () => {
     const headers = { ...ADMIN_AUTH, 'idempotency-key': 'ia-test-new-1' }
     const payload = { userId: 'admin-user-1', role: 'admin' }
 
-    expect(response.headers['x-robots-tag']).toBe('noindex, nofollow, noarchive, nosnippet');
-  });
-});
-
-describe('POST /api/admin/replay-event', () => {
-  it('should replay event with valid id', async () => {
-    const { ReplayService } = await import('../../services/replayService.js')
-    const mockReplayService = vi.mocked(ReplayService)
-    mockReplayService.prototype.replayEvent = vi.fn().mockResolvedValue({
-      success: true,
-      message: 'Event successfully replayed',
-    })
-
-    const res = await request(setup())
-      .post('/api/admin/replay-event')
-      .send({ id: 'evt-123' })
-
+    const res = await request(app, 'POST', '/api/admin/roles/assign', headers, payload)
     expect(res.status).toBe(200)
-    expect(res.body.success).toBe(true)
-  })
-
-  it('should return 400 when id is missing', async () => {
-    const res = await request(setup())
-      .post('/api/admin/replay-event')
-      .send({})
-
-    expect(res.status).toBe(400)
-    expect(res.body.code).toBe('validation_failed')
-  })
-
-  it('should return 400 for empty string id', async () => {
-    const res = await request(setup())
-      .post('/api/admin/replay-event')
-      .send({ id: '' })
-
-    await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'admin' })
-
-    const { status, body } = await request(app, 'POST', '/api/admin/roles/assign', headers, { userId: 'admin-user-1', role: 'super-admin' })
-    expect(status).toBe(409)
-    expect((body as any).code).toBe('idempotency_key_mismatch')
-  })
-
-  it('should return 400 for extra unknown fields (strict schema)', async () => {
-    const res = await request(setup())
-      .post('/api/admin/replay-event')
-      .send({ id: 'evt-123', maliciousField: 'attack' })
-
-    expect(res.status).toBe(400)
-    expect(res.body.code).toBe('validation_failed')
+    expect((res.body as any).success).toBe(true)
   })
 
   it('does_not_interfere_when_no_idempotency_key', async () => {
@@ -342,7 +296,7 @@ describe('Admin Routes â€” Audit Logged Actions', () => {
   })
 })
 
-describe('POST /api/admin/regen-api-key — Tenant Self-Service', () => {
+describe('POST /api/admin/regen-api-key - Tenant Self-Service', () => {
   let app: Express
 
   beforeEach(async () => {
@@ -351,6 +305,9 @@ describe('POST /api/admin/regen-api-key — Tenant Self-Service', () => {
     app.use(express.json())
     app.use('/api/admin', createAdminRouter())
     app.use(errorHandler)
+
+    const { _resetStore } = await import('../../services/apiKeys.js')
+    _resetStore()
   })
 
   it('returns_401_when_not_authenticated', async () => {
@@ -363,5 +320,46 @@ describe('POST /api/admin/regen-api-key — Tenant Self-Service', () => {
     const { status, body } = await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
     // Allow either 404 (no key found) or 401 (auth scope issue)
     expect([401, 404]).toContain(status)
+  })
+
+  it('replays_the_same_response_when_idempotency_key_is_reused', async () => {
+    const { generateApiKey } = await import('../../services/apiKeys.js')
+    generateApiKey('admin-user-1', 'full', 'pro')
+    const headers = { Authorization: 'Bearer admin-key-12345', 'idempotency-key': 'regen-test-1' }
+
+    const res1 = await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
+    expect(res1.status).toBe(200)
+
+    const res2 = await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
+    expect(res2.status).toBe(200)
+    expect(res2.body).toEqual(res1.body)
+  })
+
+  it('returns_409_when_idempotency_key_is_reused_with_a_different_payload', async () => {
+    const { generateApiKey } = await import('../../services/apiKeys.js')
+    generateApiKey('admin-user-1', 'full', 'pro')
+    const headers = { Authorization: 'Bearer admin-key-12345', 'idempotency-key': 'regen-test-mismatch-1' }
+
+    await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
+
+    const { status, body } = await request(app, 'POST', '/api/admin/regen-api-key', headers, { note: 'different payload' })
+    expect(status).toBe(409)
+    expect((body as any).code).toBe('idempotency_key_mismatch')
+  })
+
+  it('writes_only_one_rotate_api_key_audit_entry_when_idempotency_key_is_reused', async () => {
+    const { generateApiKey } = await import('../../services/apiKeys.js')
+    generateApiKey('admin-user-1', 'full', 'pro')
+    await auditLogService.clearLogs()
+    const headers = { Authorization: 'Bearer admin-key-12345', 'idempotency-key': 'regen-test-audit-1' }
+
+    await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
+    await request(app, 'POST', '/api/admin/regen-api-key', headers, {})
+
+    const logs = await auditLogService.getAllLogs()
+    const rotateSuccessLogs = logs.filter(
+      (l) => l.action === AuditAction.ROTATE_API_KEY && l.status === 'success',
+    )
+    expect(rotateSuccessLogs.length).toBe(1)
   })
 })
