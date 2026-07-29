@@ -59,6 +59,7 @@ import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
 import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
 import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
 import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
+import { createWebhookReplayRouter } from "./routes/webhookReplay.js";
 
 const app = express();
 
@@ -249,6 +250,9 @@ app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());
 app.use("/api/admin/outbox", createOutboxAdminRouter());
+
+// Webhook DLQ replay — GET /api/webhooks/dlq, POST /api/webhooks/dlq/:id/replay
+app.use("/api/webhooks/dlq", createWebhookReplayRouter(pool));
 
 app.use("/api/orgs/:orgId/policies", createPolicyRouter());
 

@@ -44,6 +44,7 @@ import { OutboxJob } from "./jobs/outbox.js";
 import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
 import { IdempotencyKeySweeper } from "./jobs/idempotencyKeySweeper.js";
 import { ExpiredSessionsSweeper } from "./jobs/expiredSessionsSweeper.js";
+import { WebhookDlqProcessor } from "./jobs/webhookDlqProcessor.js";
 
 app.use("/api/admin", createAdminRouter());
 app.use("/api/governance", governanceRouter);
@@ -65,6 +66,7 @@ let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
 let idempotencyKeySweeper: IdempotencyKeySweeper | null = null;
 let expiredSessionsSweeper: ExpiredSessionsSweeper | null = null;
 let keyRotationScheduler: KeyRotationScheduler | null = null;
+let webhookDlqProcessor: WebhookDlqProcessor | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -374,6 +376,22 @@ if (process.env.NODE_ENV !== "test") {
       logger.error(`Failed to start cache invalidation bus: ${message}`, error);
     }
 
+    // Start Webhook DLQ Processor — promotes permanently-failed outbox webhook
+    // events into the webhook_dlq table so operators can replay them.
+    if (process.env.DATABASE_URL) {
+      try {
+        webhookDlqProcessor = new WebhookDlqProcessor(pool, {
+          intervalMs: parseInt(process.env.WEBHOOK_DLQ_INTERVAL_MS ?? "60000", 10),
+          batchSize: parseInt(process.env.WEBHOOK_DLQ_BATCH_SIZE ?? "200", 10),
+          logger: logger.info,
+        });
+        webhookDlqProcessor.start();
+        logger.info("[Main] Webhook DLQ Processor started");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        logger.error(`Failed to start Webhook DLQ Processor: ${message}`, error);
+      }
+    }
     // Start JWT signing-key rotation scheduler.
     // Rotation interval is configurable (KEY_ROTATION_INTERVAL_SECONDS, default 24h).
     // The pruning tick is hourly so retired keys are GC'd even if rotation halts.
@@ -422,6 +440,10 @@ if (process.env.NODE_ENV !== "test") {
         if (keyRotationScheduler) {
           logger.info("[Main] Stopping Key Rotation Scheduler");
           keyRotationScheduler.stop();
+        }
+        if (webhookDlqProcessor) {
+          logger.info("[Main] Stopping Webhook DLQ Processor");
+          webhookDlqProcessor.stop();
         }
         return originalShutdown(signal ?? "SIGTERM");
       };
