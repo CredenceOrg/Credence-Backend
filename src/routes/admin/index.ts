@@ -6,6 +6,7 @@ import {
   UserRole,
 } from "../../middleware/auth.js";
 import erasureProofRouter from './erasureProof.js'
+import exportPaginatedRouter from './exportPaginated.js'
 import { keyManager } from '../../services/keyManager/index.js'
 import { rotateSigningKeyBodySchema, replayWebhookBodySchema, type ReplayWebhookBody } from '../../schemas/admin.js'
 import auditChainStatusRouter from './auditChainStatus.js'
@@ -740,6 +741,9 @@ export function createAdminRouter(): Router {
 
   // Mount erasure-proof sub-routes
   router.use(erasureProofRouter)
+
+  // Mount paginated audit-log export (bounded cursor-based pagination with date-range filtering)
+  router.use(exportPaginatedRouter)
 
 
   // Mount audit chain status (read-only verifier state)
