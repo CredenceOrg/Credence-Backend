@@ -60,6 +60,7 @@ import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
 import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
 import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
 import { createWebhookReplayRouter } from "./routes/webhookReplay.js";
+import { createExportRouter } from "./routes/export/index.js";
 
 const app = express();
 
