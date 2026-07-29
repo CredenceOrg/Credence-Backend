@@ -296,6 +296,78 @@ describe('Admin Routes — Audit Logged Actions', () => {
   })
 })
 
+describe('POST /api/admin/impersonate - Audited token issuance', () => {
+  let app: Express
+
+  beforeEach(async () => {
+    seedTestUsers()
+    await auditLogService.clearLogs()
+    const { createAdminRouter } = await import('./index.js')
+    app = express()
+    app.use(express.json())
+    app.use('/api/admin', createAdminRouter())
+    app.use(errorHandler)
+  })
+
+  it('issues a short-lived token and writes an audit log', async () => {
+    const headers = {
+      Authorization: 'Bearer admin-key-12345',
+      'idempotency-key': 'impersonate-test-1',
+    }
+
+    const payload = {
+      targetUserId: 'verifier-user-1',
+      reason: 'support investigation',
+      ttlSeconds: 600,
+    }
+
+    const { status, body } = await request(app, 'POST', '/api/admin/impersonate', headers, payload)
+
+    expect(status).toBe(201)
+    expect((body as any).success).toBe(true)
+    expect((body as any).data).toMatchObject({
+      targetUserId: 'verifier-user-1',
+      targetUserEmail: 'verifier@credence.org',
+      ttlSeconds: 600,
+    })
+    expect((body as any).data.tokenId).toMatch(/^[0-9a-f]{64}$/)
+
+    const logs = await auditLogService.getAllLogs()
+    const issueLogs = logs.filter((entry) => entry.action === AuditAction.ISSUE_IMPERSONATION_TOKEN)
+    expect(issueLogs).toHaveLength(1)
+    expect(issueLogs[0].status).toBe('success')
+    expect(issueLogs[0].actorId).toBe('admin-user-1')
+    expect(issueLogs[0].targetUserId).toBe('verifier-user-1')
+    expect(issueLogs[0].details).toMatchObject({
+      tokenId: (body as any).data.tokenId,
+      ttlSeconds: 600,
+      reason: 'support investigation',
+    })
+  })
+
+  it('rejects TTL values above the strict cap', async () => {
+    const headers = {
+      Authorization: 'Bearer admin-key-12345',
+      'idempotency-key': 'impersonate-test-2',
+    }
+
+    const payload = {
+      targetUserId: 'verifier-user-1',
+      reason: 'support investigation',
+      ttlSeconds: 7200,
+    }
+
+    const { status, body } = await request(app, 'POST', '/api/admin/impersonate', headers, payload)
+
+    expect(status).toBe(400)
+    expect((body as any).error).toBeDefined()
+
+    const logs = await auditLogService.getAllLogs()
+    const issueLogs = logs.filter((entry) => entry.action === AuditAction.ISSUE_IMPERSONATION_TOKEN)
+    expect(issueLogs).toHaveLength(0)
+  })
+})
+
 describe('POST /api/admin/regen-api-key - Tenant Self-Service', () => {
   let app: Express
 
