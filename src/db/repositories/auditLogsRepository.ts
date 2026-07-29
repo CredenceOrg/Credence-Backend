@@ -162,6 +162,22 @@ const resolveActorEmail = (input: AuditLogInput): string =>
   (input as unknown as { adminEmail?: string }).adminEmail ??
   'unknown@unknown'
 
+/**
+ * Result of a retention purge operation on audit log entries.
+ */
+export interface AuditLogPurgeResult {
+  /** Number of expired entries identified before the purge. */
+  expiredCount: number
+  /** Number of entries actually deleted. */
+  deletedCount: number
+  /** Whether the operation was a dry run (no actual deletions). */
+  dryRun: boolean
+  /** The TTL threshold in days that was used. */
+  ttlDays: number
+  /** Optional tenant ID scope applied to the purge. */
+  tenantId?: string
+}
+
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
   appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]>
@@ -169,6 +185,23 @@ export interface AuditLogRepository {
   getTopTalkers(limit?: number, windowMinutes?: number, now?: Date): Promise<TopTalkersReport>
   getAll(): Promise<AuditLogEntry[]>
   clear(): Promise<void>
+  /**
+   * Purge audit log entries older than the specified number of days.
+   *
+   * Security: this operation is tenant-scoped. When `tenantId` is provided,
+   * only entries belonging to that tenant are purged; otherwise all tenants
+   * are included (requires privileged access).
+   *
+   * @param olderThanDays - Delete entries with `occurred_at` earlier than
+   *   NOW() - olderThanDays days. A value of 0 means "keep forever" and
+   *   returns zero counts without deleting anything.
+   * @param options - Optional controls for batch size, tenant scoping, and
+   *   dry-run mode.
+   */
+  purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean }
+  ): Promise<AuditLogPurgeResult>
 }
 
 export class PostgresAuditLogsRepository implements AuditLogRepository {
@@ -480,6 +513,76 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
   async clear(): Promise<void> {
     await this.db.query('DELETE FROM audit_logs')
   }
+
+  async purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean },
+  ): Promise<AuditLogPurgeResult> {
+    // 0 means keep forever — no purging
+    if (olderThanDays === 0) {
+      return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
+    }
+
+    const batchSize = options?.batchSize ?? 5_000
+    const dryRun = options?.dryRun ?? false
+    const tenantId = options?.tenantId
+
+    // Count expired entries
+    const countParams: unknown[] = [olderThanDays]
+    let countSql = `SELECT COUNT(*)::int AS cnt FROM audit_logs
+       WHERE occurred_at < NOW() - ($1 || ' days')::interval`
+    if (tenantId) {
+      countParams.push(tenantId)
+      countSql += ` AND tenant_id = $2`
+    }
+
+    const countResult = await this.db.query<{ cnt: number }>(countSql, countParams)
+    const expiredCount = Number(countResult.rows[0]?.cnt ?? 0)
+
+    if (dryRun || expiredCount === 0) {
+      return { expiredCount, deletedCount: 0, dryRun, ttlDays: olderThanDays, tenantId }
+    }
+
+    // Delete in a batched CTE to avoid long-running transactions.
+    // Loop with a guard: maxIterations = ceil(expiredCount/batchSize) + 1.
+    // The +1 handles the final iteration where deleted < batchSize triggers
+    // the break. If new rows expire between COUNT and the final DELETE, they
+    // won't be captured this run — that's intentional; the next scheduled run
+    // will pick them up.
+    const deleteParams: unknown[] = [olderThanDays, batchSize]
+    let orgFilter = ''
+    if (tenantId) {
+      deleteParams.push(tenantId)
+      orgFilter = ` AND tenant_id = $3`
+    }
+
+    // Loop until no more expired rows or batch limit is reached in aggregate
+    let totalDeleted = 0
+    const maxIterations = Math.ceil(expiredCount / batchSize) + 1
+    for (let i = 0; i < maxIterations; i++) {
+      const result = await this.db.query<{ cnt: number }>(
+        `WITH rows AS (
+           SELECT id FROM audit_logs
+           WHERE occurred_at < NOW() - ($1 || ' days')::interval${orgFilter}
+           LIMIT $2
+         )
+         DELETE FROM audit_logs WHERE id IN (SELECT id FROM rows)
+         RETURNING 1`,
+        deleteParams,
+      )
+      const deleted = result.rowCount ?? 0
+      totalDeleted += deleted
+      if (deleted < batchSize) break
+    }
+
+    return {
+      expiredCount,
+      deletedCount: totalDeleted,
+      dryRun: false,
+      ttlDays: olderThanDays,
+      tenantId,
+    }
+  }
 }
 
 export class InMemoryAuditLogsRepository implements AuditLogRepository {
@@ -491,7 +594,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     const actorId = resolveActorId(input)
     const actorEmail = resolveActorEmail(input)
     const seq = ++this.seqCounter
-    const occurredAt = new Date().toISOString()
+    const occurredAt = input.occurredAt ?? new Date().toISOString()
     const detailsStr = JSON.stringify(input.details ?? {})
     const statusVal = input.status ?? 'success'
 
@@ -684,5 +787,50 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
   async clear(): Promise<void> {
     this.logs = []
     this.seqCounter = 0
+  }
+
+  async purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean },
+  ): Promise<AuditLogPurgeResult> {
+    // 0 means keep forever — no purging
+    if (olderThanDays === 0) {
+      return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
+    }
+
+    const batchSize = options?.batchSize ?? 5_000
+    const dryRun = options?.dryRun ?? false
+    const tenantId = options?.tenantId
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
+
+    // Find expired entries (occurred_at before cutoff)
+    const expiredIndices: number[] = []
+    for (let i = 0; i < this.logs.length; i++) {
+      const entry = this.logs[i]
+      if (new Date(entry.timestamp) < cutoff) {
+        if (!tenantId || entry.tenantId === tenantId) {
+          expiredIndices.push(i)
+        }
+      }
+    }
+
+    const expiredCount = expiredIndices.length
+
+    if (dryRun || expiredCount === 0) {
+      return { expiredCount, deletedCount: 0, dryRun, ttlDays: olderThanDays, tenantId }
+    }
+
+    // Delete up to batchSize entries (oldest first)
+    const deleteCount = Math.min(expiredCount, batchSize)
+    const indicesToDelete = new Set(expiredIndices.slice(0, deleteCount))
+    this.logs = this.logs.filter((_, i) => !indicesToDelete.has(i))
+
+    return {
+      expiredCount,
+      deletedCount: deleteCount,
+      dryRun: false,
+      ttlDays: olderThanDays,
+      tenantId,
+    }
   }
 }

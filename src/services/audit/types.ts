@@ -67,6 +67,8 @@ export interface AuditLogInput {
   errorMessage?: string
   tenantId: string
   requestId?: string
+  /** Optional timestamp override — used in tests to simulate historical entries. */
+  occurredAt?: string
 }
 
 export interface AuditLogFilters {
