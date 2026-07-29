@@ -69,23 +69,32 @@ export class WorkerHealthService {
 
     const workers: WorkerHealthEntry[] = []
 
-    // Process keys we found in Redis
-    for (const key of foundKeys) {
-      const [value, ttl] = await Promise.all([
-        this.redis.get(key).catch(() => null),
-        this.redis.ttl(key).catch(() => -2),
-      ])
+    if (foundKeys.length > 0) {
+      const values = await this.redis.mGet(foundKeys).catch(() => foundKeys.map(() => null))
 
-      const tokenInfo = value ? parseToken(value) : { pid: null, acquiredAt: null }
+      const pipeline = this.redis.multi()
+      for (const key of foundKeys) {
+        pipeline.ttl(key)
+      }
+      const ttlResults: (number | null)[] = await pipeline.exec().catch(() =>
+        foundKeys.map(() => -2),
+      ) ?? foundKeys.map(() => -2)
 
-      workers.push({
-        name: WORKER_LOCKS[key] ?? key,
-        lockKey: key,
-        held: value !== null && ttl !== -2 && ttl !== 0,
-        acquiredAt: tokenInfo.acquiredAt,
-        pid: tokenInfo.pid,
-        ttlMs: ttl >= 0 ? ttl * 1000 : ttl,
-      })
+      for (let i = 0; i < foundKeys.length; i++) {
+        const key = foundKeys[i]
+        const value = values[i]
+        const ttl = typeof ttlResults[i] === 'number' ? (ttlResults[i] as number) : -2
+        const tokenInfo = value ? parseToken(value) : { pid: null, acquiredAt: null }
+
+        workers.push({
+          name: WORKER_LOCKS[key] ?? key,
+          lockKey: key,
+          held: value !== null && ttl !== -2 && ttl !== 0,
+          acquiredAt: tokenInfo.acquiredAt,
+          pid: tokenInfo.pid,
+          ttlMs: ttl >= 0 ? ttl * 1000 : ttl,
+        })
+      }
     }
 
     // Also report known workers whose keys were not found in Redis

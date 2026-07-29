@@ -47,7 +47,6 @@
     "@opentelemetry/sdk-trace-base": "^1.26.0",
     "@opentelemetry/sdk-trace-node": "^1.26.0",
     "@opentelemetry/semantic-conventions": "^1.27.0",
-    "@rolldown/binding-win32-x64-msvc": "^1.2.0",
     "@stellar/stellar-sdk": "^14.5.0",
     "asynckit": "^0.5.0",
     "better-sqlite3": "^12.6.2",
@@ -109,5 +108,8 @@
     "@emnapi/runtime": "1.11.1",
     "@emnapi/wasi-threads": "1.2.2",
     "@rolldown/binding-linux-x64-gnu": false
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.0"
   }
 }
