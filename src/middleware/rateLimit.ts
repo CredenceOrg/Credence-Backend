@@ -207,12 +207,10 @@ export function createRateLimitMiddleware(
     const ip = getClientIp(req)
     const tenantSegment = tenantId ? `tenant:${tenantId}` : `ip:${ip}`
 
-    const now         = Math.floor(Date.now() / 1000)
-    const windowStart = now - (now % effectiveWindowSec)
-    const resetTime   = windowStart + effectiveWindowSec
+    const now = Math.floor(Date.now() / 1000)
 
-    const tenantKey = `${namespace}:${tenantSegment}:${windowStart}`
-    const keyBucket = keyId ? `${namespace}:key:${keyId}:${windowStart}` : null
+    const tenantKey = `${namespace}:${tenantSegment}`
+    const keyBucket = keyId ? `${namespace}:key:${keyId}` : null
 
     try {
       const redis = getRedis()
@@ -242,16 +240,16 @@ export function createRateLimitMiddleware(
 
         // Remaining is the tighter of the two budgets
         const remaining = Math.min(effectiveTierMax - tenantCount, keyMax - keyCount)
-        setRateLimitHeaders(res, { limit: keyMax, remaining, reset: resetTime })
+        setRateLimitHeaders(res, { limit: keyMax, remaining, reset: now + Math.min(tenantTtl, keyTtl) })
       } else {
-        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax - tenantCount, reset: resetTime })
+        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax - tenantCount, reset: now + tenantTtl })
       }
 
       next()
     } catch (err) {
       if (config.failOpen) {
         // Fail-open: let the request through, surface headers with full budget
-        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax, reset: resetTime })
+        setRateLimitHeaders(res, { limit: effectiveTierMax, remaining: effectiveTierMax, reset: now + effectiveWindowSec })
         return next()
       }
 
