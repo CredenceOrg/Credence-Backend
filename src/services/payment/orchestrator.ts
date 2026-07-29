@@ -55,7 +55,6 @@ export class PaymentOrchestrator {
       rootSpan.setAttributes({
         'payment.bond_id':          request.bondId,
         'payment.transaction_hash': request.transactionHash,
-        'payment.from_account':     request.fromAccount,
       })
 
       const processedAt = new Date()
@@ -147,9 +146,7 @@ export class PaymentOrchestrator {
       try {
         span.setAttributes({
           'ingest.bond_id':          request.bondId,
-          'ingest.amount':           request.amount,
           'ingest.transaction_hash': request.transactionHash,
-          'ingest.from_account':     request.fromAccount,
         })
 
         const trimmed = request.amount.trim()
@@ -157,7 +154,6 @@ export class PaymentOrchestrator {
           throw new Error('Payment amount must not be empty')
         }
 
-        span.setAttributes({ 'ingest.normalized_amount': trimmed })
         span.setStatus({ code: SpanStatusCode.OK })
       } catch (error) {
         span.setStatus({
@@ -306,7 +302,6 @@ export class PaymentOrchestrator {
         span.setAttributes({
           'settle.bond_id':          request.bondId,
           'settle.transaction_hash': processorResult.transactionHash,
-          'settle.amount':           request.amount,
         })
 
         // Wrap settlement write in retryable transaction to handle concurrent payment conflicts
