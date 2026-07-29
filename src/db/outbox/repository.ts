@@ -7,6 +7,10 @@ import type {
   OutboxQuarantineEntry,
   OutboxQuarantineReason,
 } from './types.js'
+import { sanitizeErrorMessage } from './errorSanitizer.js'
+
+/** Upper bound on the exponential backoff delay between retry attempts. */
+const MAX_BACKOFF_SECONDS = 3600
 
 type OutboxEventRow = {
   id: string
@@ -473,6 +477,11 @@ export class OutboxRepository {
    * If max retries exceeded, status remains 'failed'.
    */
   async markFailed(db: Queryable, eventId: bigint, errorMessage: string): Promise<{ status: string; retryCount: number }> {
+    // Truncate/redact before persisting: exception messages can incidentally
+    // carry secrets (e.g. an Authorization header echoed by an HTTP client
+    // error) or be unbounded in length.
+    const sanitizedMessage = sanitizeErrorMessage(errorMessage)
+
     // Step 1: increment retry_count, set status and clear lease/consumer, clear next_attempt_at and idempotency key for now
     const upd = await db.query<{
       retry_count: number
@@ -489,16 +498,17 @@ export class OutboxRepository {
            publish_idempotency_key = NULL
        WHERE id = $1
        RETURNING retry_count, max_retries`,
-      [eventId.toString(), errorMessage]
+      [eventId.toString(), sanitizedMessage]
     )
 
     const row = upd.rows[0]
     const retryCount = row ? Number(row.retry_count) : 0
     const maxRetries = row ? Number(row.max_retries) : 0
 
-    // If not yet exhausted, compute exponential backoff in JS and update next_attempt_at
+    // If not yet exhausted, compute exponential backoff in JS and update next_attempt_at.
+    // Capped so a large max_retries budget can't produce a multi-day wait.
     if (retryCount < maxRetries) {
-      const delaySeconds = Math.pow(2, retryCount)
+      const delaySeconds = Math.min(Math.pow(2, retryCount), MAX_BACKOFF_SECONDS)
       await db.query(
         `UPDATE event_outbox SET next_attempt_at = NOW() + ($2 || ' seconds')::interval WHERE id = $1`,
         [eventId.toString(), String(Math.floor(delaySeconds))]

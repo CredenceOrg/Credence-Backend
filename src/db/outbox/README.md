@@ -225,8 +225,12 @@ Backoff and dead-letter
 
 - If the failure does **not** exhaust retries (`retryCount < max_retries` in the code path), it then sets backoff in two steps:
 
-  - `delaySeconds = Math.pow(2, retryCount)`
+  - `delaySeconds = Math.min(Math.pow(2, retryCount), 3600)` — capped at one hour so a large `max_retries` budget can't produce a multi-day wait between attempts.
   - `next_attempt_at = NOW() + (delaySeconds || ' seconds')::interval`
+
+- `error_message` is sanitized before being persisted (see `src/db/outbox/errorSanitizer.ts`):
+  - known secret shapes (Stellar secret seeds, `Authorization`/`Bearer` headers, JWTs, `api_key=`/`token=`-style params, email addresses) are replaced with `[REDACTED]`
+  - the result is truncated to 2000 characters (with a `...[truncated]` suffix) so an unbounded upstream error can't bloat the row or logs
 
 - If retries are exhausted (`retry_count + 1 >= max_retries` in the SQL CASE), the row transitions to the terminal state:
   - `status = 'dead_letter'`
