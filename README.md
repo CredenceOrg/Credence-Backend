@@ -209,6 +209,8 @@ Both commands target `src/` and respect the ignore patterns in `eslint.config.js
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
 
+Every API error carries a stable error code and an HTTP status. The full reference with remediation for each status and code: **[docs/HTTP_STATUS_REFERENCE.md](docs/HTTP_STATUS_REFERENCE.md)** and **[docs/API_ERROR_TAXONOMY.md](docs/API_ERROR_TAXONOMY.md)**.
+
 List endpoints support offset/page and cursor-based pagination. See **[docs/PAGINATION_CONTRACT.md](docs/PAGINATION_CONTRACT.md)** for cursor format, page-size limits, and ordering guarantees.
 
 Full request/response documentation, cURL examples, and import instructions:
