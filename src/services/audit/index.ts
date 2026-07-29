@@ -2,6 +2,7 @@ import { pool } from '../../db/pool.js'
 import {
   InMemoryAuditLogsRepository,
   PostgresAuditLogsRepository,
+  type AuditLogPurgeResult,
   type AuditLogRepository,
 } from '../../db/repositories/auditLogsRepository.js'
 import {
@@ -310,6 +311,44 @@ export class AuditLogService {
   }
 
   /**
+   * Purge audit log entries older than the specified number of days.
+   *
+   * Enforces the retention policy by deleting entries whose `occurred_at`
+   * timestamp is before the cutoff boundary (NOW() - olderThanDays days).
+   *
+   * Security: Tenant-scoped by default. When no tenant ID is provided and
+   * allowSuperScope is not explicitly set, the call throws.
+   *
+   * @param olderThanDays - Retention window in days. Entries older than this are purged. 0 = keep forever.
+   * @param options - Optional controls
+   * @param options.batchSize - Max entries to delete per batch (default: 5000)
+   * @param options.tenantId - Scope purge to a single tenant
+   * @param options.dryRun - Count but don't delete
+   * @param options.allowSuperScope - Allow cross-tenant purge (must be explicitly true)
+   */
+  async purgeExpired(
+    olderThanDays: number,
+    options?: {
+      batchSize?: number
+      tenantId?: string
+      dryRun?: boolean
+      allowSuperScope?: boolean
+    }
+  ): Promise<AuditLogPurgeResult> {
+    if (!options?.tenantId && !options?.allowSuperScope) {
+      throw new Error(
+        'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
+      )
+    }
+
+    return this.repository.purgeExpired(olderThanDays, {
+      batchSize: options?.batchSize,
+      tenantId: options?.tenantId,
+      dryRun: options?.dryRun,
+    })
+  }
+
+  /**
    * Get top N talker tenants by request count in the last window (default: 1 hour).
    */
   async getTopTalkers(
@@ -352,5 +391,6 @@ export type {
   TopTalkerEntry,
   TopTalkersReport,
 } from './types.js'
+export type { AuditLogPurgeResult } from '../../db/repositories/auditLogsRepository.js'
 export * from './serviceAccountAudit.js'
 
