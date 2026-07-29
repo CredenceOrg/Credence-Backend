@@ -206,19 +206,35 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     message: { type: "string" },
     method: { type: "string" },
     path: { type: "string" },
+    /** Normalized route template, e.g. /api/trust/:address (never the raw URL). */
+    route: { type: "string" },
     statusCode: { type: "number" },
     durationMs: { type: "number" },
     requestId: { type: "string" },
+    /** Tenant identifier extracted from x-tenant-id header or JWT claim. */
+    tenant: { type: "string" },
+    /** Actor identifier extracted from x-actor-id header or authenticated user/API-key ID. */
+    actor: { type: "string" },
+    /** Distributed trace correlation ID propagated via X-Correlation-ID header. */
+    correlationId: { type: "string" },
   },
 
   [LogEventType.HTTP_ERROR]: {
     message: { type: "string" },
     method: { type: "string" },
     path: { type: "string" },
+    /** Normalized route template, e.g. /api/trust/:address. */
+    route: { type: "string" },
     statusCode: { type: "number" },
     error: { type: "string" },
     stack: { type: "string" },
     requestId: { type: "string" },
+    /** Tenant identifier. */
+    tenant: { type: "string" },
+    /** Actor identifier. */
+    actor: { type: "string" },
+    /** Distributed trace correlation ID. */
+    correlationId: { type: "string" },
   },
 
   // ── Auth Events ──
