@@ -356,6 +356,8 @@ The backend implements a comprehensive timeout and retry strategy for all extern
 - Operational runbook (symptom → diagnosis → tuning)
 
 For diagnosing a backed-up outbox event queue specifically, see **[docs/RUNBOOK_QUEUE_LAG.md](docs/RUNBOOK_QUEUE_LAG.md)**.
+For crash recovery across background workers, leases, retries, and shutdown, see
+**[docs/BACKGROUND_JOB_RECOVERY.md](docs/BACKGROUND_JOB_RECOVERY.md)**.
 
 ## Horizon Listener
 
