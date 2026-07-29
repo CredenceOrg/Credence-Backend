@@ -664,8 +664,105 @@ This module listens for bond creation events from Stellar/Horizon and syncs iden
 - Parses event payload (identity, amount, duration, etc.)
 - Upserts identity and bond records in PostgreSQL
 - **Idempotent Restart & Gap-Free Resumption**: Loads the saved `bond_creation` cursor checkpoint from the `horizon_cursors` table on startup (falling back to `'now'` only on the first boot or DB error) to ensure no blockchain operations are missed across process restarts.
+- **Bounded Exponential Backoff with Full Jitter**: On stream errors, reconnects with exponential backoff starting at 500ms, capped at 30 seconds, with full jitter to prevent thundering herd
+- **Single Stream** (no duplicate connections): Exactly one stream is opened to prevent double subscriptions
 - Handles reconnection and backfill
 - Comprehensive tests with mocked Horizon
+
+## Reconnection Strategy: Bounded Exponential Backoff
+
+The bond creation listener uses **bounded exponential backoff with full jitter** to handle stream reconnections gracefully:
+
+### Algorithm
+
+```
+delay = random(0, min(maxDelay, baseDelay * 2^attempt))
+```
+
+Where:
+- **baseDelay** = 500 ms (initial reconnect delay)
+- **maxDelay** = 30 seconds (reconnect cap)
+- **attempt** = current attempt number (0-based)
+- **full jitter** = prevents thundering herd when multiple listeners reconnect simultaneously
+
+### Example Sequence
+
+```
+Attempt 0: random(0, 500ms)     ← first reconnect
+Attempt 1: random(0, 1000ms)    ← second attempt
+Attempt 2: random(0, 2000ms)    ← continues exponentially
+Attempt 3: random(0, 4000ms)
+Attempt 4: random(0, 8000ms)
+Attempt 5: random(0, 16000ms)   ← approaching cap
+Attempt 6: random(0, 30000ms)   ← capped at maxDelay
+Attempt 7+: random(0, 30000ms)  ← stays capped
+```
+
+### Reset on Success
+
+When a bond event is **successfully processed**, `backoff.reset()` is called to restart the backoff sequence at attempt 0. This ensures that temporary network blips don't accumulate delay.
+
+### Implementation
+
+```typescript
+// In horizonBondEvents.ts
+const backoff = new BoundedBackoff({
+  baseMs: 500,        // Start at 500ms
+  maxMs: 30_000,      // Cap at 30 seconds
+  maxAttempts: 0,     // Infinite retries (0 = no limit)
+});
+
+// On successful message
+onmessage: async (op: any) => {
+  // ... process event ...
+  backoff.reset();  // Reset to attempt 0 on success
+  // ... update cursor ...
+}
+
+// On stream error
+onerror: async (err: unknown) => {
+  metrics.streamUp.set({ stream: STREAM_NAME }, 0);
+  metrics.reconnectTotal.inc({ stream: STREAM_NAME });
+  try {
+    await backoff.wait();     // Wait with exponential backoff
+    startStream();            // Reconnect
+  } catch (e: any) {
+    if (e?.stopped) {
+      // Stream was stopped, exit gracefully
+    } else if (e?.exhausted) {
+      // Max attempts reached
+      console.warn('Max reconnect attempts reached');
+    }
+  }
+}
+```
+
+### Stop Handling
+
+When `stop()` is called:
+1. `stopped` flag is set to `true`
+2. `backoff.stop()` cancels any pending sleep timer
+3. Any pending reconnect attempts are immediately rejected
+4. The stream is closed gracefully
+
+This prevents timer leaks and ensures clean shutdown.
+
+### Metrics
+
+The listener exposes Prometheus metrics for monitoring reconnection behavior:
+
+```prometheus
+# Counter: incremented on each reconnect attempt
+horizon_reconnect_total{stream="bond_creation"}
+
+# Gauge: 1 if stream is connected, 0 if disconnected
+horizon_stream_up{stream="bond_creation"}
+```
+
+Monitor these to detect:
+- **Flapping streams** — high `reconnect_total` indicates instability
+- **Stream outages** — `stream_up` stays 0 for extended time
+- **Recovery patterns** — tracks how quickly the stream recovers
 
 ## Usage
 
@@ -679,6 +776,9 @@ const handle = subscribeBondCreationEvents(
     console.log(event);
   }
 );
+
+// Later: graceful shutdown with timer cleanup
+handle.stop();
 ```
 
 ## Event Payload Example
@@ -698,9 +798,10 @@ const handle = subscribeBondCreationEvents(
 ```
 
 ## Testing
-- Tests are located in `src/__tests__/horizonBondEvents.test.ts`
+- Tests are located in `src/listeners/__tests__/horizonBondEvents.test.ts`
 - Run tests with `npm test` or `npx jest`
 - Mocked Horizon stream covers event parsing, DB upsert, duplicate handling
+- Backoff tests verify exponential delays, max caps, and reset behavior
 
 ## JSDoc
 - All functions are documented with JSDoc comments in `src/listeners/horizonBondEvents.ts`
@@ -710,7 +811,7 @@ const handle = subscribeBondCreationEvents(
  - Clear documentation
 
 ## Backfill & Reconnection
- - Listener automatically reconnects on errors
+ - Listener automatically reconnects on errors with bounded exponential backoff
  - Backfill logic can be extended to fetch missed events
 
 ## Event Validation
