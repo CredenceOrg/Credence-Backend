@@ -63,10 +63,14 @@ export function createApiKeyRouter(
   })
 
   // ── GET /api/integrations/keys ──────────────────────────────────────────
-  router.get('/', requireUserAuth, (req: Request, res: Response): void => {
-    const { user } = req as AuthenticatedRequest
-    const keys = rotationService.listKeys(user!.id)
-    res.status(200).json({ success: true, data: keys })
+  router.get('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const { user } = req as AuthenticatedRequest
+      const keys = await rotationService.listKeys(user!.id)
+      res.status(200).json({ success: true, data: keys })
+    } catch (err) {
+      next(err)
+    }
   })
 
   // ── POST /api/integrations/keys/:id/rotate ──────────────────────────────
