@@ -4,10 +4,10 @@
  * Integration API key management endpoints.
  *
  * Routes (all require Bearer auth):
- *   POST   /api/integrations/keys            – Issue a new key
- *   GET    /api/integrations/keys            – List keys for the authenticated user
- *   POST   /api/integrations/keys/:id/rotate – Rotate a key (safe invalidation)
- *   DELETE /api/integrations/keys/:id        – Permanently revoke a key
+ *   POST   /api/integrations/keys            - Issue a new key
+ *   GET    /api/integrations/keys            - List keys for the authenticated user
+ *   POST   /api/integrations/keys/:id/rotate - Rotate a key (safe invalidation)
+ *   DELETE /api/integrations/keys/:id        - Permanently revoke a key
  */
 
 import { Router, type Request, type Response, type NextFunction } from 'express'
@@ -15,7 +15,15 @@ import { requireUserAuth, UserRole, type AuthenticatedRequest, requireApiKey } f
 import { InMemoryApiKeyRepository } from '../repositories/apiKeyRepository.js'
 import { ApiKeyRotationService } from '../services/apiKeyRotationService.js'
 import { auditLogService } from '../services/audit/index.js'
-import type { KeyScope, SubscriptionTier } from '../services/apiKeys.js'
+import {
+  generateApiKey,
+  listApiKeys,
+  revokeApiKey,
+  rotateApiKey,
+  ApiKeyScope,
+  type KeyScope,
+  type SubscriptionTier,
+} from '../services/apiKeys.js'
 import { ValidationError, NotFoundError, ForbiddenError, sendError, ErrorCode } from '../lib/errors.js'
 
 const VALID_SCOPES: KeyScope[] = ['read', 'full']
@@ -24,7 +32,7 @@ const VALID_TIERS: SubscriptionTier[] = ['free', 'pro', 'enterprise']
 /**
  * Create and return an Express Router for integration API key management.
  *
- * Accepts optional pre-built dependencies for testability — production callers
+ * Accepts optional pre-built dependencies for testability - production callers
  * can omit them and rely on the shared singletons.
  */
 export function createApiKeyRouter(
@@ -33,7 +41,7 @@ export function createApiKeyRouter(
 ): Router {
   const router = Router()
 
-  // ── POST /api/integrations/keys ─────────────────────────────────────────
+  // POST /api/integrations/keys
   router.post('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -62,7 +70,7 @@ export function createApiKeyRouter(
     }
   })
 
-  // ── GET /api/integrations/keys ──────────────────────────────────────────
+  // GET /api/integrations/keys
   router.get('/', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -73,33 +81,33 @@ export function createApiKeyRouter(
     }
   })
 
-  // ── POST /api/integrations/keys/:id/rotate ──────────────────────────────
+  // POST /api/integrations/keys/:id/rotate
   router.post('/:id/rotate', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
       const { id } = req.params
 
       const existing = repo.findById(id)
-      if (!existing) {
-        throw new NotFoundError('API key', id)
-      }
-
       const isAdmin = user!.role === UserRole.ADMIN || user!.role === UserRole.SUPER_ADMIN
-      if (!isAdmin && existing.ownerId !== user!.id) {
+
+      if (existing && !isAdmin && existing.ownerId !== user!.id) {
         throw new ForbiddenError('You do not have permission to rotate this API key')
       }
 
       const newKey = await rotationService.rotateKey(id, user!.id, user!.email, req.ip)
 
       if (!newKey) {
-        // Key existed but was already revoked — conflict.
+        if (!existing) {
+          throw new NotFoundError('API key', id)
+        }
+
         sendError(res, ErrorCode.CONFLICT, 'API key is already revoked and cannot be rotated')
         return
       }
 
       res.status(200).json({
         success: true,
-        message: 'API key rotated. Store the new key securely — it will not be shown again.',
+        message: 'API key rotated. Store the new key securely - it will not be shown again.',
         data: newKey,
       })
     } catch (err) {
@@ -107,7 +115,7 @@ export function createApiKeyRouter(
     }
   })
 
-  // ── DELETE /api/integrations/keys/:id ───────────────────────────────────
+  // DELETE /api/integrations/keys/:id
   router.delete('/:id', requireUserAuth, async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const { user } = req as AuthenticatedRequest
@@ -141,7 +149,6 @@ function createDefaultRouter(): Router {
   const router = Router()
   const auth = requireApiKey('bond:write' as any)
 
-  // POST /
   router.post('/', auth, async (req: Request, res: Response): Promise<void> => {
     const { ownerId, scopes, tier } = req.body
     if (!ownerId) {
@@ -163,13 +170,11 @@ function createDefaultRouter(): Router {
     res.status(201).json(key)
   })
 
-  // GET /:ownerId
   router.get('/:ownerId', auth, async (req: Request, res: Response): Promise<void> => {
     const keys = await listApiKeys(req.params.ownerId)
     res.status(200).json(keys)
   })
 
-  // DELETE /:id
   router.delete('/:id', auth, async (req: Request, res: Response): Promise<void> => {
     const revoked = await revokeApiKey(req.params.id)
     if (!revoked) {
@@ -179,7 +184,6 @@ function createDefaultRouter(): Router {
     }
   })
 
-  // POST /:id/rotate
   router.post('/:id/rotate', auth, async (req: Request, res: Response): Promise<void> => {
     const result = await rotateApiKey(req.params.id)
     if (!result) {

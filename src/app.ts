@@ -10,6 +10,7 @@ import { createImportsRouter } from "./routes/imports.js";
 import { createAdminRouter } from "./routes/admin/index.js";
 import { createWebhookAdminRouter } from "./routes/admin/webhooks.js";
 import { createFeatureFlagAdminRouter } from "./routes/admin/featureFlags.js";
+import { createApiKeyRouter } from "./routes/apiKeys.js";
 import { createPolicyRouter } from "./routes/policy.js";
 import { createAnalyticsRouter } from "./routes/analytics.js";
 import { createPayoutsRouter } from "./routes/payouts.js";
@@ -223,6 +224,7 @@ try {
 }
 
 app.use("/api/trust", trustRouter);
+app.use("/api/integrations/keys", createApiKeyRouter());
 
 // Bond status — uses the real BondService + BondStore backed by
 // deriveBondPaymentStatus, with read-through caching via CacheService.
