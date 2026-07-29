@@ -644,6 +644,7 @@ For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
 - **Dependency Upgrades**: See [docs/dependency-upgrades.md](docs/dependency-upgrades.md) for how aggressively we upgrade deps and our review process.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
+- **API Key Scopes**: See [docs/SCOPES.md](docs/SCOPES.md) for every available scope, which endpoints each unlocks, and how to request the right set for your integration.
 - **Canonical JWT Claims Reference**: See [docs/JWT_CLAIMS.md](docs/JWT_CLAIMS.md) for standard, custom, and impersonation JWT claims, headers, and consumer middleware.
 - **Rate Limiting Support & Operations**: See [docs/rate-limiting.md](docs/rate-limiting.md) for details on default tier rate limits, environment configuration, troubleshooting, and support FAQs.
 - **Rate Limit Response Headers**: See [docs/RATE_LIMIT_HEADERS.md](docs/RATE_LIMIT_HEADERS.md) for header semantics (`X-RateLimit-*`, `Retry-After`), calculation rules, and client integration examples.

@@ -304,5 +304,6 @@ When deploying to production, operators must configure allowed origins:
 
 ## See Also
 
+- **[docs/SCOPES.md](SCOPES.md)** — Every available API key scope, which endpoints each unlocks, legacy tier aliases, and how to request the right set for your integration.
 - **[docs/SECRETS.md](SECRETS.md)** — Secret-rotation posture: where credentials live, rotation cadence, and blast radius for the Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets.
 - **[docs/kms-rotation-runbook.md](kms-rotation-runbook.md)** — Step-by-step operational runbook for Evidence KEK rotation.
