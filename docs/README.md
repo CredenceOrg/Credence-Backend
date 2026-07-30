@@ -18,6 +18,7 @@ This directory contains additional documentation for the Credence Backend.
 - **[Cache Inventory](CACHE_INVENTORY.md)** – every cache namespace in the codebase and its TTL, in one table.
 - **[Grafana Metrics & Dashboards Reference](METRICS_DASHBOARDS.md)** – detailed mapping of Grafana dashboard panels to Service Level Indicators (SLIs) and Objectives (SLOs) for operators.
 - **[Rate Limiting Design](RATE_LIMITING_DESIGN.md)** – tenant/IP/key rate-limiting windows and tiers.
+- **[HTTP Status Reference](HTTP_STATUS_REFERENCE.md)** – every HTTP status the API returns, when to use each one, and how to throw the right error from a route handler (contributor-facing).
 - **[Input Validation Guide](INPUT_VALIDATION.md)** – how we validate request inputs (path params, query, body) and surface errors.
 - **[Key Rotation Procedure](KEY_ROTATION_PROCEDURE.md)** – JWT signing key rotation cadence, grace window, and verification checks.
 - **[Integration API Key Lifecycle](API_KEY_LIFECYCLE.md)** – complete lifecycle for integration API keys: create, list, rotate, revoke, with audit trail and authorization model.
