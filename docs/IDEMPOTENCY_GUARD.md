@@ -359,7 +359,24 @@ for (const message of historicalMessages) {
 
 ## Overview
 
-The HTTP Idempotency Middleware provides replay protection for HTTP API requests. It ensures that requests with the same `Idempotency-Key` header are processed exactly once, preventing duplicate operations from network retries.
+The HTTP Idempotency Middleware provides replay protection for HTTP API requests.
+It ensures that requests with the same `Idempotency-Key` header are processed
+exactly once, preventing duplicate operations from network retries.
+
+The middleware is **mounted globally on all `/api` routes** in `src/app.ts`.
+Any endpoint can therefore be made idempotent by the client simply by including
+an `Idempotency-Key` header — no per-route wiring is required.
+
+## Configuration
+
+Two environment variables control the middleware behaviour:
+
+| Variable | Default | Description |
+|---|---|---|
+| `IDEMPOTENCY_TTL_SECONDS` | `86400` | Seconds a cached response is retained (max 7 days). |
+| `IDEMPOTENCY_SWEEPER_INTERVAL_MS` | `3600000` | How often expired keys are purged from the DB. |
+
+See `.env.example` for the full documentation of both variables.
 
 ## Security Features
 
@@ -403,24 +420,25 @@ function constantTimeEquals(a: string, b: string): boolean {
 
 ## Usage
 
-### Basic Setup
+### Global Mount (default)
 
-```typescript
-import express from 'express'
-import { idempotencyMiddleware } from './middleware/idempotency.js'
-import { IdempotencyRepository } from './db/repositories/idempotencyRepository.js'
+The middleware is already active for every `/api` route.
+Clients opt-in by adding the `Idempotency-Key` header:
 
-const app = express()
-const idempotencyRepo = new IdempotencyRepository(db)
-
-app.post('/api/payments',
-  requireApiKey(ApiScope.PAYOUTS_WRITE),
-  idempotencyMiddleware(idempotencyRepo),
-  handlePayment
-)
+```bash
+curl -X POST https://api.example.com/api/payouts \
+  -H "Authorization: Bearer cr_xxx" \
+  -H "Idempotency-Key: pay-$(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"amount": 100, "currency": "USD"}'
 ```
 
-### With Custom TTL
+Retrying with the same key returns the original response without re-executing
+the handler.
+
+### Per-Route Custom TTL
+
+If a route needs a shorter TTL, mount the middleware explicitly with an override:
 
 ```typescript
 app.post('/api/payments',

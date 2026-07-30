@@ -171,6 +171,7 @@ export class VerificationService {
 
   /**
    * Verify addresses in chunks by delegating to IdentityService.verifyBulk.
+   * Default chunkSize of 50 is chosen to balance throughput and avoid rate limiting.
    */
   async verifyBulkChunked(
     addresses: string[],

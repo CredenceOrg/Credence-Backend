@@ -28,13 +28,13 @@ export interface ApiKeyRepository {
    * @param tier     Subscription tier
    * @param scopes   Explicit list of granted scopes. When provided, overrides `scope`.
    */
-  create(ownerId: string, scope?: KeyScope, tier?: SubscriptionTier, scopes?: string[]): CreateApiKeyResult
+  create(ownerId: string, scope?: KeyScope, tier?: SubscriptionTier, scopes?: string[]): Promise<CreateApiKeyResult>
 
   /** Look up a key record by its opaque ID, excluding the hash. Returns null when not found. */
   findById(id: string): Omit<StoredApiKey, 'hashedKey'> | null
 
   /** Return all keys (active and revoked) for the given owner, without the hash. */
-  listByOwner(ownerId: string): Omit<StoredApiKey, 'hashedKey'>[]
+  listByOwner(ownerId: string): Promise<Omit<StoredApiKey, 'hashedKey'>[]>
 
   /**
    * Atomically revoke the key identified by `id` and issue a replacement with
@@ -43,17 +43,17 @@ export interface ApiKeyRepository {
    * @returns New key metadata (raw key included — shown once), or null if the
    *          key was not found or is already revoked.
    */
-  rotate(id: string): CreateApiKeyResult | null
+  rotate(id: string): Promise<CreateApiKeyResult | null>
 
   /**
    * Mark the key as inactive (permanently revoked).
    *
    * @returns true when the key was found and deactivated; false otherwise.
    */
-  revoke(id: string): boolean
+  revoke(id: string): Promise<boolean>
 
   /** Validate a raw key string and record the access timestamp. */
-  validate(rawKey: string): StoredApiKey | null
+  validate(rawKey: string): Promise<StoredApiKey | null>
 }
 
 /**
@@ -62,27 +62,28 @@ export interface ApiKeyRepository {
  * database-backed adapter is wired in.
  */
 export class InMemoryApiKeyRepository implements ApiKeyRepository {
-  create(ownerId: string, scope: KeyScope = 'read', tier: SubscriptionTier = 'free', scopes?: string[]): CreateApiKeyResult {
-    return generateApiKey(ownerId, scope, tier, scopes)
+  async create(ownerId: string, scope: KeyScope = 'read', tier: SubscriptionTier = 'free', scopes?: string[]): Promise<CreateApiKeyResult> {
+    const effectiveScopes = scopes ?? [scope]
+    return generateApiKey(ownerId, effectiveScopes, tier)
   }
 
   findById(id: string): Omit<StoredApiKey, 'hashedKey'> | null {
     return findApiKeyById(id)
   }
 
-  listByOwner(ownerId: string): Omit<StoredApiKey, 'hashedKey'>[] {
+  async listByOwner(ownerId: string): Promise<Omit<StoredApiKey, 'hashedKey'>[]> {
     return listApiKeys(ownerId)
   }
 
-  rotate(id: string): CreateApiKeyResult | null {
+  async rotate(id: string): Promise<CreateApiKeyResult | null> {
     return rotateApiKey(id)
   }
 
-  revoke(id: string): boolean {
+  async revoke(id: string): Promise<boolean> {
     return revokeApiKey(id)
   }
 
-  validate(rawKey: string): StoredApiKey | null {
+  async validate(rawKey: string): Promise<StoredApiKey | null> {
     return validateApiKey(rawKey)
   }
 }

@@ -5,8 +5,15 @@ import type {
   AuditLogFilters,
   AuditLogInput,
   AuditStatus,
+  TopTalkerEntry,
+  TopTalkersReport,
 } from '../../services/audit/types.js'
 import { decodeCursor, encodeCursor } from '../../lib/pagination.js'
+import {
+  DEFAULT_TOP_TALKERS_LIMIT,
+  MAX_TOP_TALKERS_LIMIT,
+  DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+} from '../../config/constants.js'
 
 type AuditLogRow = {
   id: string
@@ -19,6 +26,7 @@ type AuditLogRow = {
   details_json: Record<string, unknown> | null
   status: AuditStatus
   ip_address: string | null
+  request_id: string | null
   error_message: string | null
   tenant_id: string
   seq?: number
@@ -142,32 +150,67 @@ export function computeRowHash(
   return createHash('sha256').update(input, 'utf8').digest('hex')
 }
 
+const resolveActorId = (input: AuditLogInput): string =>
+  input.actorId ??
+  (input as unknown as { actor_id?: string }).actor_id ??
+  (input as unknown as { adminId?: string }).adminId ??
+  'unknown'
+
+const resolveActorEmail = (input: AuditLogInput): string =>
+  input.actorEmail ??
+  (input as unknown as { actor_email?: string }).actor_email ??
+  (input as unknown as { adminEmail?: string }).adminEmail ??
+  'unknown@unknown'
+
+/**
+ * Result of a retention purge operation on audit log entries.
+ */
+export interface AuditLogPurgeResult {
+  /** Number of expired entries identified before the purge. */
+  expiredCount: number
+  /** Number of entries actually deleted. */
+  deletedCount: number
+  /** Whether the operation was a dry run (no actual deletions). */
+  dryRun: boolean
+  /** The TTL threshold in days that was used. */
+  ttlDays: number
+  /** Optional tenant ID scope applied to the purge. */
+  tenantId?: string
+}
+
 export interface AuditLogRepository {
   append(input: AuditLogInput): Promise<AuditLogEntry>
+  appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]>
   query(filters?: AuditLogFilters, limit?: number, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }>
+  getTopTalkers(limit?: number, windowMinutes?: number, now?: Date): Promise<TopTalkersReport>
   getAll(): Promise<AuditLogEntry[]>
   clear(): Promise<void>
+  /**
+   * Purge audit log entries older than the specified number of days.
+   *
+   * Security: this operation is tenant-scoped. When `tenantId` is provided,
+   * only entries belonging to that tenant are purged; otherwise all tenants
+   * are included (requires privileged access).
+   *
+   * @param olderThanDays - Delete entries with `occurred_at` earlier than
+   *   NOW() - olderThanDays days. A value of 0 means "keep forever" and
+   *   returns zero counts without deleting anything.
+   * @param options - Optional controls for batch size, tenant scoping, and
+   *   dry-run mode.
+   */
+  purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean }
+  ): Promise<AuditLogPurgeResult>
 }
 
 export class PostgresAuditLogsRepository implements AuditLogRepository {
   constructor(private readonly db: Queryable) {}
 
-  /**
-   * Append an audit log entry with hash-chain integrity.
-   *
-   * The insert is done inside a serialised advisory-locked section so that
-   * concurrent writers cannot interleave and break the chain.
-   *
-   * Steps:
-   * 1. Acquire advisory lock to serialize chain writes
-   * 2. Fetch the row_hash of the latest row (by seq) — this becomes our prev_hash
-   * 3. Allocate a new seq from the sequence
-   * 4. Compute row_hash = SHA-256( prev_hash | id | occurred_at | ... )
-   * 5. INSERT the row with prev_hash and row_hash
-   * 6. Release advisory lock (auto on COMMIT/ROLLBACK if in transaction)
-   */
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const actorId = resolveActorId(input)
+    const actorEmail = resolveActorEmail(input)
     const detailsStr = JSON.stringify(input.details ?? {})
     const statusVal = input.status ?? 'success'
 
@@ -248,8 +291,8 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
       `,
       [
         id,
-        input.actorId,
-        input.actorEmail,
+        actorId,
+        actorEmail,
         input.action,
         input.resourceType,
         input.resourceId,
@@ -263,6 +306,82 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     )
 
     return mapAuditLog(result.rows[0])
+  }
+
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    const n = inputs.length
+    if (n === 0) return []
+    if (n === 1) return [await this.append(inputs[0])]
+
+    const params: unknown[] = []
+    const ctes: string[] = []
+
+    for (let i = 0; i < n; i++) {
+      const input = inputs[i]
+      const base = params.length
+      params.push(
+        randomUUID(),
+        resolveActorId(input),
+        resolveActorEmail(input),
+        input.action,
+        input.resourceType,
+        input.resourceId,
+        JSON.stringify(input.details ?? {}),
+        input.status ?? 'success',
+        input.ipAddress ?? null,
+        input.errorMessage ?? null,
+        input.tenantId,
+        input.requestId ?? null,
+      )
+
+      const p = (offset: number) => `$${base + offset + 1}`
+      const prevSrc = i === 0
+        ? '(SELECT COALESCE(row_hash, \'GENESIS\') FROM audit_logs ORDER BY seq DESC LIMIT 1)'
+        : `(SELECT row_hash FROM ins${i})`
+
+      ctes.push(`ins${i + 1} AS (
+  INSERT INTO audit_logs (
+    id, seq, actor_id, actor_email, action, resource_type, resource_id,
+    details_json, status, ip_address, error_message, tenant_id, request_id,
+    prev_hash, row_hash
+  )
+  SELECT
+    ${p(0)}::uuid,
+    nextval('audit_logs_seq'),
+    ${p(1)}, ${p(2)}, ${p(3)}, ${p(4)}, ${p(5)},
+    ${p(6)}::jsonb, ${p(7)}, ${p(8)}, ${p(9)}, ${p(10)}, ${p(11)},
+    COALESCE(${prevSrc}, 'GENESIS'),
+    encode(
+      sha256(
+        convert_to(
+          COALESCE(${prevSrc}, 'GENESIS') || '|' ||
+          ${p(0)}::text || '|' ||
+          NOW()::text || '|' ||
+          ${p(1)} || '|' ||
+          ${p(3)} || '|' ||
+          ${p(4)} || '|' ||
+          ${p(5)} || '|' ||
+          ${p(6)} || '|' ||
+          ${p(7)} || '|' ||
+          ${p(10)} || '|' ||
+          COALESCE(${p(11)}, ''),
+          'UTF8'
+        )
+      ),
+      'hex'
+    )
+  RETURNING
+    id, occurred_at, actor_id, actor_email, action, resource_type, resource_id,
+    details_json, status, ip_address, error_message, tenant_id, request_id,
+    seq, prev_hash, row_hash
+)`)
+    }
+
+    const selects = Array.from({ length: n }, (_, i) => `SELECT * FROM ins${i + 1}`)
+    const sql = `WITH\n${ctes.join(',\n')}\n${selects.join('\nUNION ALL\n')}\nORDER BY seq ASC`
+
+    const result = await this.db.query<AuditLogRow>(sql, params)
+    return result.rows.map(mapAuditLog)
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
@@ -302,6 +421,7 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
         ip_address,
         error_message,
         tenant_id,
+        request_id,
         seq,
         prev_hash,
         row_hash
@@ -330,6 +450,61 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     }
   }
 
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const totalResult = await this.db.query<{ total: string | number }>(
+      `SELECT COUNT(*)::int AS total FROM audit_logs WHERE occurred_at >= $1 AND occurred_at <= $2`,
+      [windowStart.toISOString(), windowEnd.toISOString()],
+    )
+    const totalRequests = Number(totalResult.rows[0]?.total ?? 0)
+
+    const topResult = await this.db.query<{
+      tenant_id: string
+      request_count: string | number
+      last_request_at: Date | string
+    }>(
+      `
+      SELECT
+        tenant_id,
+        COUNT(*)::int AS request_count,
+        MAX(occurred_at) AS last_request_at
+      FROM audit_logs
+      WHERE occurred_at >= $1 AND occurred_at <= $2
+      GROUP BY tenant_id
+      ORDER BY request_count DESC, tenant_id ASC
+      LIMIT $3
+      `,
+      [windowStart.toISOString(), windowEnd.toISOString(), effectiveLimit],
+    )
+
+    const topTalkers: TopTalkerEntry[] = topResult.rows.map((row) => {
+      const count = Number(row.request_count)
+      const pct = totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0
+      const lastAt = row.last_request_at ? new Date(row.last_request_at).toISOString() : undefined
+      return {
+        tenantId: row.tenant_id,
+        requestCount: count,
+        percentage: pct,
+        lastRequestAt: lastAt,
+      }
+    })
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers,
+    }
+  }
+
   async getAll(): Promise<AuditLogEntry[]> {
     const result = await this.query(undefined, 1000000, undefined)
     return result.logs
@@ -337,6 +512,76 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
 
   async clear(): Promise<void> {
     await this.db.query('DELETE FROM audit_logs')
+  }
+
+  async purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean },
+  ): Promise<AuditLogPurgeResult> {
+    // 0 means keep forever — no purging
+    if (olderThanDays === 0) {
+      return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
+    }
+
+    const batchSize = options?.batchSize ?? 5_000
+    const dryRun = options?.dryRun ?? false
+    const tenantId = options?.tenantId
+
+    // Count expired entries
+    const countParams: unknown[] = [olderThanDays]
+    let countSql = `SELECT COUNT(*)::int AS cnt FROM audit_logs
+       WHERE occurred_at < NOW() - ($1 || ' days')::interval`
+    if (tenantId) {
+      countParams.push(tenantId)
+      countSql += ` AND tenant_id = $2`
+    }
+
+    const countResult = await this.db.query<{ cnt: number }>(countSql, countParams)
+    const expiredCount = Number(countResult.rows[0]?.cnt ?? 0)
+
+    if (dryRun || expiredCount === 0) {
+      return { expiredCount, deletedCount: 0, dryRun, ttlDays: olderThanDays, tenantId }
+    }
+
+    // Delete in a batched CTE to avoid long-running transactions.
+    // Loop with a guard: maxIterations = ceil(expiredCount/batchSize) + 1.
+    // The +1 handles the final iteration where deleted < batchSize triggers
+    // the break. If new rows expire between COUNT and the final DELETE, they
+    // won't be captured this run — that's intentional; the next scheduled run
+    // will pick them up.
+    const deleteParams: unknown[] = [olderThanDays, batchSize]
+    let orgFilter = ''
+    if (tenantId) {
+      deleteParams.push(tenantId)
+      orgFilter = ` AND tenant_id = $3`
+    }
+
+    // Loop until no more expired rows or batch limit is reached in aggregate
+    let totalDeleted = 0
+    const maxIterations = Math.ceil(expiredCount / batchSize) + 1
+    for (let i = 0; i < maxIterations; i++) {
+      const result = await this.db.query<{ cnt: number }>(
+        `WITH rows AS (
+           SELECT id FROM audit_logs
+           WHERE occurred_at < NOW() - ($1 || ' days')::interval${orgFilter}
+           LIMIT $2
+         )
+         DELETE FROM audit_logs WHERE id IN (SELECT id FROM rows)
+         RETURNING 1`,
+        deleteParams,
+      )
+      const deleted = result.rowCount ?? 0
+      totalDeleted += deleted
+      if (deleted < batchSize) break
+    }
+
+    return {
+      expiredCount,
+      deletedCount: totalDeleted,
+      dryRun: false,
+      ttlDays: olderThanDays,
+      tenantId,
+    }
   }
 }
 
@@ -346,8 +591,10 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
     const id = randomUUID()
+    const actorId = resolveActorId(input)
+    const actorEmail = resolveActorEmail(input)
     const seq = ++this.seqCounter
-    const occurredAt = new Date().toISOString()
+    const occurredAt = input.occurredAt ?? new Date().toISOString()
     const detailsStr = JSON.stringify(input.details ?? {})
     const statusVal = input.status ?? 'success'
 
@@ -361,7 +608,7 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       prevHash,
       id,
       occurredAt,
-      input.actorId,
+      actorId,
       input.action as string,
       input.resourceType,
       input.resourceId,
@@ -374,10 +621,10 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     const entry: AuditLogEntry = {
       id,
       timestamp: occurredAt,
-      actorId: input.actorId,
-      actorEmail: input.actorEmail,
-      adminId: input.actorId,
-      adminEmail: input.actorEmail,
+      actorId,
+      actorEmail,
+      adminId: actorId,
+      adminEmail: actorEmail,
       action: input.action,
       resourceType: input.resourceType,
       resourceId: input.resourceId,
@@ -400,6 +647,15 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     const frozen = Object.freeze(cloneEntry(entry))
     this.logs.push(frozen)
     return cloneEntry(frozen)
+  }
+
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    const entries: AuditLogEntry[] = []
+    for (const input of inputs) {
+      const entry = await this.append(input)
+      entries.push(entry)
+    }
+    return entries
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
@@ -476,6 +732,54 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     }
   }
 
+  async getTopTalkers(
+    limit = DEFAULT_TOP_TALKERS_LIMIT,
+    windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
+    now = new Date(),
+  ): Promise<TopTalkersReport> {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
+    const windowEnd = now
+    const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
+
+    const matching = this.logs.filter((log) => {
+      const t = new Date(log.timestamp).getTime()
+      return t >= windowStart.getTime() && t <= windowEnd.getTime()
+    })
+
+    const totalRequests = matching.length
+    const tenantMap = new Map<string, { count: number; lastAt: string }>()
+
+    for (const log of matching) {
+      const existing = tenantMap.get(log.tenantId)
+      if (existing) {
+        existing.count++
+        if (log.timestamp > existing.lastAt) {
+          existing.lastAt = log.timestamp
+        }
+      } else {
+        tenantMap.set(log.tenantId, { count: 1, lastAt: log.timestamp })
+      }
+    }
+
+    const sorted = Array.from(tenantMap.entries())
+      .map(([tenantId, { count, lastAt }]) => ({
+        tenantId,
+        requestCount: count,
+        percentage: totalRequests > 0 ? Number(((count / totalRequests) * 100).toFixed(2)) : 0,
+        lastRequestAt: lastAt,
+      }))
+      .sort((a, b) => b.requestCount - a.requestCount || a.tenantId.localeCompare(b.tenantId))
+      .slice(0, effectiveLimit)
+
+    return {
+      windowStart: windowStart.toISOString(),
+      windowEnd: windowEnd.toISOString(),
+      windowMinutes,
+      totalRequests,
+      topTalkers: sorted,
+    }
+  }
+
   async getAll(): Promise<AuditLogEntry[]> {
     return this.logs.map(cloneEntry)
   }
@@ -483,5 +787,50 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
   async clear(): Promise<void> {
     this.logs = []
     this.seqCounter = 0
+  }
+
+  async purgeExpired(
+    olderThanDays: number,
+    options?: { batchSize?: number; tenantId?: string; dryRun?: boolean },
+  ): Promise<AuditLogPurgeResult> {
+    // 0 means keep forever — no purging
+    if (olderThanDays === 0) {
+      return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
+    }
+
+    const batchSize = options?.batchSize ?? 5_000
+    const dryRun = options?.dryRun ?? false
+    const tenantId = options?.tenantId
+    const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
+
+    // Find expired entries (occurred_at before cutoff)
+    const expiredIndices: number[] = []
+    for (let i = 0; i < this.logs.length; i++) {
+      const entry = this.logs[i]
+      if (new Date(entry.timestamp) < cutoff) {
+        if (!tenantId || entry.tenantId === tenantId) {
+          expiredIndices.push(i)
+        }
+      }
+    }
+
+    const expiredCount = expiredIndices.length
+
+    if (dryRun || expiredCount === 0) {
+      return { expiredCount, deletedCount: 0, dryRun, ttlDays: olderThanDays, tenantId }
+    }
+
+    // Delete up to batchSize entries (oldest first)
+    const deleteCount = Math.min(expiredCount, batchSize)
+    const indicesToDelete = new Set(expiredIndices.slice(0, deleteCount))
+    this.logs = this.logs.filter((_, i) => !indicesToDelete.has(i))
+
+    return {
+      expiredCount,
+      deletedCount: deleteCount,
+      dryRun: false,
+      ttlDays: olderThanDays,
+      tenantId,
+    }
   }
 }

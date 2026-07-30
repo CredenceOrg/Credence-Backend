@@ -38,6 +38,19 @@ describe('WebhookService', () => {
         return mockWebhooks.find(w => w.id === id) ?? null
       }),
       set: vi.fn(),
+      reserveWebhookDelivery: vi.fn(async () => true),
+      markWebhookDeliverySucceeded: vi.fn(async () => undefined),
+      clearWebhookDeliveryAttempt: vi.fn(async () => undefined),
+      rotateSecret: vi.fn(async (id: string, newSecret: string, previousSecret: string, previousSecretExpiresAt: string) => {
+        const webhook = mockWebhooks.find(w => w.id === id)
+        if (!webhook) throw new Error('Webhook not found')
+        return {
+          ...webhook,
+          secret: newSecret,
+          previousSecret,
+          previousSecretExpiresAt,
+        }
+      }),
     }
 
     global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
@@ -197,6 +210,65 @@ describe('WebhookService', () => {
     expect(results[1].error).toBeDefined()
   })
 
+  it('skips duplicate deliveries for the same subscriber and event id', async () => {
+    mockStore.getByEvent = vi.fn(async () => [mockWebhooks[0]])
+    const service = new WebhookService(mockStore)
+    const reserveSpy = vi.mocked(mockStore.reserveWebhookDelivery)
+    const seen = new Set<string>()
+    reserveSpy.mockImplementation(async (subscriberId: string, eventId: string) => {
+      const marker = `${subscriberId}:${eventId}`
+      if (seen.has(marker)) {
+        return false
+      }
+      seen.add(marker)
+      return true
+    })
+
+    const results = await Promise.all([
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+    ])
+
+    expect(results[0]).toHaveLength(1)
+    expect(results[1]).toHaveLength(1)
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('allows different event ids to be delivered independently', async () => {
+    const service = new WebhookService(mockStore)
+
+    await Promise.all([
+      service.emit('bond.created', {
+        address: '0xabc',
+        bondedAmount: '1000',
+        bondStart: 1234567890,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-1' }),
+      service.emit('bond.created', {
+        address: '0xdef',
+        bondedAmount: '2000',
+        bondStart: 1234567891,
+        bondDuration: 86400,
+        active: true,
+      }, { eventId: 'evt-2' }),
+    ])
+
+    expect(fetch).toHaveBeenCalledTimes(4)
+  })
+
   it('delivers to multiple webhooks in parallel', async () => {
     const service = new WebhookService(mockStore)
     const startTime = Date.now()
@@ -216,5 +288,111 @@ describe('WebhookService', () => {
     const duration = Date.now() - startTime
     // Should take ~100ms (parallel) not ~200ms (sequential)
     expect(duration).toBeLessThan(200)
+  })
+
+  describe('rotateSecret', () => {
+    it('rotates via the atomic store.rotateSecret(), not read-modify-write via store.set()', async () => {
+      const service = new WebhookService(mockStore)
+
+      const updated = await service.rotateSecret('wh_1')
+
+      // The whole point of this method: a concurrent rotation of the same
+      // webhook elsewhere can't be silently clobbered by a stale
+      // read-then-set(), because there is no read-then-set at all.
+      expect(mockStore.rotateSecret).toHaveBeenCalledTimes(1)
+      expect(mockStore.set).not.toHaveBeenCalled()
+      expect(updated.secret).not.toBe('secret1')
+      expect(updated.previousSecret).toBe('secret1')
+      expect(updated.previousSecretExpiresAt).toBeTruthy()
+    })
+
+    it('computes previousSecretExpiresAt roughly 24h in the future', async () => {
+      const service = new WebhookService(mockStore)
+      const before = Date.now()
+
+      const updated = await service.rotateSecret('wh_2')
+
+      const expiresMs = new Date(updated.previousSecretExpiresAt!).getTime()
+      expect(expiresMs).toBeGreaterThan(before + 23 * 60 * 60 * 1000)
+      expect(expiresMs).toBeLessThan(before + 25 * 60 * 60 * 1000)
+    })
+
+    it('throws when the webhook does not exist', async () => {
+      const service = new WebhookService(mockStore)
+      await expect(service.rotateSecret('wh_nonexistent')).rejects.toThrow('Webhook not found')
+    })
+
+    it('audit-logs success with the actor tenant and the computed previousSecretExpiresAt', async () => {
+      const mockAudit = { logAction: vi.fn().mockResolvedValue(undefined) }
+      const actor = { id: 'admin_1', email: 'admin@example.com', tenantId: 'tenant_1' }
+      const service = new WebhookService(mockStore, undefined, undefined, mockAudit as any)
+
+      await service.rotateSecret('wh_1', actor, 'req-123')
+
+      expect(mockAudit.logAction).toHaveBeenCalledTimes(1)
+      const [tenantId, actorId, actorEmail, action, resourceId, , details] = mockAudit.logAction.mock.calls[0]
+      expect(tenantId).toBe('tenant_1')
+      expect(actorId).toBe('admin_1')
+      expect(actorEmail).toBe('admin@example.com')
+      expect(action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(resourceId).toBe('wh_1')
+      expect(details).toMatchObject({ previousSecretExpiresAt: expect.any(String) })
+    })
+  })
+
+  describe('replayWebhook', () => {
+    it('throws if DLQ is not configured', async () => {
+      const service = new WebhookService(mockStore)
+      await expect(service.replayWebhook('dlq_1')).rejects.toThrow('DLQ is not configured')
+    })
+
+    it('throws if DLQ entry not found', async () => {
+      const mockDlq = { get: vi.fn().mockResolvedValue(null), push: vi.fn(), list: vi.fn(), markReplayed: vi.fn() }
+      const service = new WebhookService(mockStore, undefined, mockDlq)
+      await expect(service.replayWebhook('dlq_1')).rejects.toThrow('DLQ entry not found')
+    })
+
+    it('replays successfully and marks as replayed', async () => {
+      const mockDlq = { 
+        get: vi.fn().mockResolvedValue({ id: 'dlq_1', webhookId: 'wh_1', payload: { event: 'bond.created', timestamp: '2026-02-25T12:00:00Z', data: {} } }),
+        push: vi.fn(),
+        list: vi.fn(),
+        markReplayed: vi.fn()
+      }
+      const service = new WebhookService(mockStore, undefined, mockDlq)
+
+      const result = await service.replayWebhook('dlq_1')
+      expect(result.success).toBe(true)
+      expect(mockDlq.markReplayed).toHaveBeenCalledWith('dlq_1', expect.any(String))
+      expect(fetch).toHaveBeenCalledTimes(1)
+    })
+
+    it('preserves audit context with REPLAY_WEBHOOK action', async () => {
+      const mockDlq = {
+        get: vi.fn().mockResolvedValue({ id: 'dlq_1', webhookId: 'wh_1', payload: { event: 'bond.created', timestamp: '2026-02-25T12:00:00Z', data: {} } }),
+        push: vi.fn(),
+        list: vi.fn(),
+        markReplayed: vi.fn()
+      }
+      const mockAudit = { logAction: vi.fn().mockResolvedValue({}) }
+      const actor = { id: 'admin_1', email: 'admin@example.com', tenantId: 'tenant_1' }
+
+      const service = new WebhookService(mockStore, undefined, mockDlq, mockAudit as any)
+      await service.replayWebhook('dlq_1', actor, 'req-123')
+
+      expect(mockAudit.logAction).toHaveBeenCalledWith(
+        'tenant_1',
+        'admin_1',
+        'admin@example.com',
+        'REPLAY_WEBHOOK',
+        'dlq_1',
+        expect.any(String),
+        expect.objectContaining({ webhookId: 'wh_1' }),
+        undefined,
+        undefined,
+        undefined,
+        'req-123'
+      )
+    })
   })
 })

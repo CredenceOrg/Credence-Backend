@@ -1,9 +1,8 @@
-#!/bin/sh
-. "$(dirname "$0")/_/husky.sh"
+#!/usr/bin/env sh
 
 # Run Gitleaks protect on staged changes
 # The hook will prevent commit if a secret is detected.
 # Skip if gitleaks is not installed
-if command -v gitleaks &> /dev/null; then
+if command -v gitleaks >/dev/null 2>&1; then
   gitleaks protect --staged
 fi

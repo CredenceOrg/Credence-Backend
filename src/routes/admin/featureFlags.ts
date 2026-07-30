@@ -6,6 +6,13 @@ import {
 } from '../../middleware/auth.js'
 import { FeatureFlagService } from '../../services/featureFlags/index.js'
 import type { ActorInfo } from '../../services/featureFlags/index.js'
+import {
+  createFlagBodySchema,
+  updateFlagBodySchema,
+  setOverrideBodySchema,
+  setTenantRolloutBodySchema,
+} from '../../schemas/featureFlags.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 export function createFeatureFlagAdminRouter(
   service: FeatureFlagService = new FeatureFlagService(),
@@ -23,6 +30,8 @@ export function createFeatureFlagAdminRouter(
     }
   }
 
+  // ── List all flags for the caller's tenant ──────────────────────────────────
+
   router.get(
     '/',
     requireUserAuth,
@@ -34,90 +43,92 @@ export function createFeatureFlagAdminRouter(
         const flags = await service.listFlagsWithOverrides(tenantId)
         res.json({ success: true, data: flags })
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        res.status(400).json({ error: message })
+        sendError(res, ErrorCode.VALIDATION_FAILED, err instanceof Error ? err.message : 'Unknown error')
       }
     },
   )
+
+  // ── Create a new feature flag ───────────────────────────────────────────────
 
   router.post(
     '/',
     requireUserAuth,
     requireAdminRole,
     async (req: Request, res: Response) => {
+      const parsed = createFlagBodySchema.safeParse(req.body)
+      if (!parsed.success) {
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
+        return
+      }
+
       try {
-        const { key, description, defaultEnabled, rolloutPercent } = req.body as {
-          key: string
-          description?: string
-          defaultEnabled?: boolean
-          rolloutPercent?: number
-        }
-        if (!key || typeof key !== 'string') {
-          res.status(400).json({ error: 'key is required and must be a string' })
-          return
-        }
+        const { key, description, defaultEnabled, rolloutPercent } = parsed.data
         const flag = await service.createFlag(
           key,
-          description ?? '',
-          defaultEnabled ?? false,
-          rolloutPercent ?? 0,
+          description,
+          defaultEnabled,
+          rolloutPercent,
           resolveActor(req),
         )
         res.status(201).json({ success: true, data: flag })
       } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown error'
-        res.status(400).json({ error: message })
+        sendError(res, ErrorCode.VALIDATION_FAILED, err instanceof Error ? err.message : 'Unknown error')
       }
     },
   )
+
+  // ── Update an existing flag ─────────────────────────────────────────────────
 
   router.put(
     '/:key',
     requireUserAuth,
     requireAdminRole,
     async (req: Request, res: Response) => {
+      const parsed = updateFlagBodySchema.safeParse(req.body)
+      if (!parsed.success) {
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
+        return
+      }
+
       try {
         const { key } = req.params
-        const { description, defaultEnabled, rolloutPercent } = req.body as {
-          description?: string
-          defaultEnabled?: boolean
-          rolloutPercent?: number
-        }
-        const flag = await service.updateFlag(
-          key,
-          { description, defaultEnabled, rolloutPercent },
-          resolveActor(req),
-        )
+        const flag = await service.updateFlag(key, parsed.data, resolveActor(req))
         res.json({ success: true, data: flag })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
+
+  // ── Boolean per-tenant override (upsert) ───────────────────────────────────
 
   router.post(
     '/:key/overrides',
     requireUserAuth,
     requireAdminRole,
     async (req: Request, res: Response) => {
+      const parsed = setOverrideBodySchema.safeParse(req.body)
+      if (!parsed.success) {
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
+        return
+      }
+
       try {
         const { key } = req.params
-        const { tenantId, enabled } = req.body as { tenantId: string; enabled: boolean }
-        if (!tenantId || typeof enabled !== 'boolean') {
-          res.status(400).json({ error: 'tenantId and enabled are required' })
-          return
-        }
+        const { tenantId, enabled } = parsed.data
         const override = await service.setOverride(key, tenantId, enabled, resolveActor(req))
         res.status(201).json({ success: true, data: override })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )
+
+  // ── Remove boolean per-tenant override ─────────────────────────────────────
 
   router.delete(
     '/:key/overrides/:tenantId',
@@ -130,8 +141,64 @@ export function createFeatureFlagAdminRouter(
         res.json({ success: true })
       } catch (err) {
         const message = err instanceof Error ? err.message : 'Unknown error'
-        const status = message.includes('not found') ? 404 : 400
-        res.status(status).json({ error: message })
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
+      }
+    },
+  )
+
+  // ── Per-tenant rollout percentage (upsert) ─────────────────────────────────
+  //
+  // POST /api/admin/feature-flags/:key/tenant-rollouts
+  //
+  // Sets (or updates) the rollout percentage for a specific tenant.  Sticky
+  // user-id bucketing still applies within the tenant's percent window, so
+  // the same user always gets the same result for the same flag.
+
+  router.post(
+    '/:key/tenant-rollouts',
+    requireUserAuth,
+    requireAdminRole,
+    async (req: Request, res: Response) => {
+      const parsed = setTenantRolloutBodySchema.safeParse(req.body)
+      if (!parsed.success) {
+        sendError(res, ErrorCode.VALIDATION_FAILED, parsed.error.issues[0]?.message ?? 'Validation error', parsed.error.issues)
+        return
+      }
+
+      try {
+        const { key } = req.params
+        const { tenantId, rolloutPercent } = parsed.data
+        const tenantRollout = await service.setTenantRollout(
+          key,
+          tenantId,
+          rolloutPercent,
+          resolveActor(req),
+        )
+        res.status(201).json({ success: true, data: tenantRollout })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
+      }
+    },
+  )
+
+  // ── Remove per-tenant rollout percentage ────────────────────────────────────
+
+  router.delete(
+    '/:key/tenant-rollouts/:tenantId',
+    requireUserAuth,
+    requireAdminRole,
+    async (req: Request, res: Response) => {
+      try {
+        const { key, tenantId } = req.params
+        await service.removeTenantRollout(key, tenantId, resolveActor(req))
+        res.json({ success: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        const code = message.includes('not found') ? ErrorCode.NOT_FOUND : ErrorCode.VALIDATION_FAILED
+        sendError(res, code, message)
       }
     },
   )

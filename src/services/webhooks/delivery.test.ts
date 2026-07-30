@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { deliverWebhook, signPayload } from './delivery.js'
 import type { WebhookConfig, WebhookPayload } from './types.js'
+import { generateWebhookIdempotencyKey } from './idempotency.js'
 import https from 'https'
 
 describe('signPayload', () => {
@@ -25,6 +26,18 @@ describe('signPayload', () => {
     const sig1 = signPayload('{"event":"bond.created"}', secret)
     const sig2 = signPayload('{"event":"bond.slashed"}', secret)
     expect(sig1).not.toBe(sig2)
+  })
+
+  it('throws TypeError when secret is null', () => {
+    expect(() => signPayload('{}', null as unknown as string)).toThrow(TypeError)
+  })
+
+  it('throws TypeError when secret is undefined', () => {
+    expect(() => signPayload('{}', undefined as unknown as string)).toThrow(TypeError)
+  })
+
+  it('throws TypeError when secret is empty string', () => {
+    expect(() => signPayload('{}', '')).toThrow(TypeError)
   })
 })
 
@@ -103,6 +116,49 @@ describe('deliverWebhook', () => {
     const headers = call[1].headers
     const expectedSig = signPayload(JSON.stringify(mockPayload), mockWebhook.secret)
     expect(headers['X-Webhook-Signature']).toBe(expectedSig)
+  })
+
+  it('sends X-Correlation-Id header when a correlation id is provided', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: 'corr-from-request-123' })
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBe('corr-from-request-123')
+  })
+
+  it('omits X-Correlation-Id header when no correlation id is provided', async () => {
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    await deliverWebhook(mockWebhook, mockPayload)
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBeUndefined()
+  })
+
+  it('sanitizes the correlation id before sending it as a header (defends against header injection)', async () => {
+    const { sanitizeCorrelationId } = await import('../../utils/logger.js')
+    global.fetch = vi.fn().mockResolvedValue({ ok: true, status: 200 })
+
+    const raw = 'evil\r\nX-Injected: true'
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: raw })
+
+    const call = (fetch as any).mock.calls[0]
+    expect(call[1].headers['X-Correlation-Id']).toBe(sanitizeCorrelationId(raw))
+    expect(call[1].headers['X-Correlation-Id']).not.toMatch(/[\r\n]/)
+  })
+
+  it('tags logger calls made during delivery with the provided correlation id', async () => {
+    const { tracingContext } = await import('../../utils/logger.js')
+    global.fetch = vi.fn(async () => {
+      // Assert the tracing context is active *during* the delivery attempt.
+      expect(tracingContext.getStore()?.get('correlationId')).toBe('corr-mid-delivery')
+      return { ok: true, status: 200 }
+    })
+
+    await deliverWebhook(mockWebhook, mockPayload, { correlationId: 'corr-mid-delivery' })
+
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 
   it('delivers webhook with mTLS configuration using custom agent', async () => {
@@ -354,6 +410,44 @@ describe('deliverWebhook', () => {
 
     expect(result.success).toBe(true)
     expect(result.attempts).toBe(1)
+  })
+
+  it('clears an idempotency reservation after a failed delivery so retries can succeed', async () => {
+    const reserveCalls: Array<{ subscriberId: string; eventId: string }> = []
+    const idempotencyStore = {
+      reserveWebhookDelivery: vi.fn(async (subscriberId: string, eventId: string) => {
+        reserveCalls.push({ subscriberId, eventId })
+        return true
+      }),
+      clearWebhookDeliveryAttempt: vi.fn(async () => undefined),
+    }
+
+    global.fetch = vi.fn()
+      .mockResolvedValueOnce({ ok: false, status: 500 })
+      .mockResolvedValueOnce({ ok: true, status: 200 })
+
+    const first = await deliverWebhook(mockWebhook, mockPayload, {
+      maxRetries: 0,
+      eventId: 'evt-1',
+      idempotencyStore,
+    })
+    const second = await deliverWebhook(mockWebhook, mockPayload, {
+      maxRetries: 0,
+      eventId: 'evt-1',
+      idempotencyStore,
+    })
+
+    expect(first.success).toBe(false)
+    expect(second.success).toBe(true)
+    expect(idempotencyStore.clearWebhookDeliveryAttempt).toHaveBeenCalledWith(
+      mockWebhook.id,
+      'evt-1'
+    )
+    expect(reserveCalls).toEqual([
+      { subscriberId: mockWebhook.id, eventId: 'evt-1' },
+      { subscriberId: mockWebhook.id, eventId: 'evt-1' },
+    ])
+    expect(generateWebhookIdempotencyKey(mockWebhook.id, 'evt-1')).toMatch(/^[a-f0-9]{64}$/)
   })
 
   it('respects webhook-specific maxAttempts override', async () => {

@@ -290,3 +290,5 @@ SLO targets may be adjusted per environment:
 - [Site Reliability Engineering](https://sre.google/sre-book/table-of-contents/)
 - [Monitoring Documentation](./monitoring.md)
 - [SLA Metrics Documentation](./sla-metrics.md)
+- [Performance Baselines Documentation](./PERF_BASELINE.md)
+

@@ -41,40 +41,58 @@ Each API key is issued with one or more **scopes** that control exactly which en
 | `reports:generate`   | Trigger and poll report generation jobs                            |
 | `exports:read`       | Download report artifacts and audit-log exports                    |
 | `webhooks:admin`     | Manage webhook signing secrets (rotate / revoke)                   |
-| `admin:read`         | Read admin resources (users, audit logs, failed events)            |
-| `admin:write`        | Mutate admin resources (assign roles, revoke keys, replay events, impersonate) |
+| `outbox:reinject`    | Reinsert fixed quarantined outbox events                           |
+| `admin:read`         | Read admin resources (users, audit logs, failed events, imports previews, presets) |
+| `admin:write`        | Mutate admin resources (assign roles, revoke keys, replay events, impersonate, import commits, manage presets) |
+| `flags:read`         | Read feature flag configurations and tenant rollouts               |
+| `flags:write`        | Create, update, and delete feature flags and overrides             |
+| `bond:read`          | Read bond state and status                                         |
+| `bond:write`         | Create and update bond records                                     |
 
 ### Legacy tier aliases (backward-compatible)
 
 Keys issued before the granular scope model was introduced carry one of two legacy values. They continue to work and are automatically expanded:
 
-| Legacy scope  | Expands to                                                                                                                                      |
-|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| `public`      | `trust:read`, `attestations:read`                                                                                                               |
-| `enterprise`  | All granular scopes (full access)                                                                                                               |
+| Legacy scope  | Expands to                                                                                                                                                                                              |
+|---------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `public`      | `trust:read`, `attestations:read`                                                                                                                                                                       |
+| `enterprise`  | All granular scopes: `trust:read`, `attestations:read`, `attestations:write`, `payouts:write`, `reports:generate`, `exports:read`, `webhooks:admin`, `outbox:reinject`, `admin:read`, `admin:write`, `flags:read`, `flags:write`, `bond:read`, `bond:write` |
 
 ### Scope enforcement per endpoint
 
-| Endpoint                                    | Required scope          |
-|---------------------------------------------|-------------------------|
-| `GET /api/trust/*`                          | `trust:read`            |
-| `GET /api/attestations/:identity`           | `attestations:read`     |
-| `GET /api/attestations/:identity/count`     | `attestations:read`     |
-| `POST /api/attestations`                    | `attestations:write`    |
-| `DELETE /api/attestations/:id`              | `attestations:write`    |
-| `POST /api/payouts`                         | `payouts:write`         |
-| `POST /api/reports`                         | `reports:generate`      |
-| `GET /api/reports/:jobId`                   | `reports:generate`      |
-| `GET /api/reports/download/:key`            | *(signed URL — no key)* |
-| `POST /api/admin/webhooks/:id/rotate`       | `webhooks:admin` *(or admin role)* |
+| Endpoint                                    | Required scope                       |
+|---------------------------------------------|--------------------------------------|
+| `GET /api/trust/*`                          | `trust:read`                         |
+| `GET /api/attestations/:address`            | `attestations:read`                  |
+| `POST /api/attestations`                    | `attestations:write`                 |
+| `POST /api/payouts`                         | `payouts:write`                      |
+| `GET /api/transactions/history`             | `trust:read`                         |
+| `POST /api/bulk/verify`                     | `trust:read`                         |
+| `GET /api/reports/top-talkers`              | `exports:read`                       |
+| `POST /api/reports`                         | `reports:generate`                   |
+| `GET /api/reports/:jobId`                   | `reports:generate`                   |
+| `GET /api/reports/download/:key`            | *(signed URL — no key required)*     |
+| `POST /api/imports/preview`                 | `admin:read`                         |
+| `POST /api/imports/preview/:presetId`       | `admin:read`                         |
+| `POST /api/imports/dry-run`                 | `admin:write`                        |
+| `POST /api/imports/dry-run/:presetId`       | `admin:write`                        |
+| `POST /api/imports/commit`                  | `admin:write`                        |
+| `POST /api/imports/commit/:presetId`        | `admin:write`                        |
+| `GET /api/imports/presets`                  | `admin:read`                         |
+| `POST /api/imports/presets`                 | `admin:write`                        |
+| `GET /api/imports/presets/:id`              | `admin:read`                         |
+| `PUT /api/imports/presets/:id`              | `admin:write`                        |
+| `DELETE /api/imports/presets/:id`           | `admin:write`                        |
+| `POST /api/admin/quarantine/:id/reinject`   | `outbox:reinject`                    |
+| `POST /api/admin/webhooks/:id/rotate`       | `webhooks:admin` *(or admin role)*   |
 | `POST /api/admin/webhooks/:id/revoke-previous` | `webhooks:admin` *(or admin role)* |
-| `GET /api/admin/users`                      | admin role              |
-| `GET /api/admin/audit-logs`                 | admin role              |
-| `GET /api/admin/audit-logs/export`          | admin role              |
-| `POST /api/admin/roles/assign`              | admin role              |
-| `POST /api/admin/keys/revoke`               | admin role              |
-| `POST /api/admin/impersonate`               | admin role              |
-| `POST /api/admin/events/replay/:id`         | admin role              |
+| `GET /api/admin/users`                      | admin role                           |
+| `GET /api/admin/audit-logs`                 | admin role                           |
+| `GET /api/admin/audit-logs/export`          | admin role                           |
+| `POST /api/admin/roles/assign`              | admin role                           |
+| `POST /api/admin/keys/revoke`               | admin role                           |
+| `POST /api/admin/impersonate`               | admin role                           |
+| `POST /api/admin/events/replay/:id`         | admin role                           |
 
 ## Subscription Tiers
 
@@ -169,6 +187,7 @@ Response: **204 No Content**. Subsequent requests using the revoked key receive 
 - All key operations (create, revoke, rotate) are logged to the audit log.
 - Rate limits are enforced per tier (integration at the infrastructure layer, e.g. via a reverse proxy or Redis-based limiter).
 - The middleware is **deny-by-default**: if a key does not carry the required scope, the request is rejected with `403 Forbidden` before reaching the handler.
+- For complete claim definitions, header specifications, and consumer middleware, see [docs/JWT_CLAIMS.md](JWT_CLAIMS.md).
 
 - **Timing-safe validation**: Keys are validated by hashing the presented key and performing constant-time checks against stored hashes to mitigate timing attacks. Implementations must avoid early-exit string comparisons on raw keys.
 - **No logging of raw keys**: Never log or persist raw API key values in application logs, error messages, or monitoring systems.

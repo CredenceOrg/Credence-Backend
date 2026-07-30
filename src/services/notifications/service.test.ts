@@ -341,3 +341,73 @@ describe('Notifications failover', () => {
     expect(secondary.send).toHaveBeenCalledTimes(2)
   })
 })
+
+
+describe('NotificationProviderHealthTracker gradual recovery', () => {
+  it('places recovering providers behind healthy ones but ahead of unhealthy ones', () => {
+    const now = 1_000_000
+    let fakeNow = now
+    const tracker = new NotificationProviderHealthTracker(
+      60_000,
+      1,
+      10_000,
+      () => fakeNow
+    )
+
+    const healthyProvider = { name: 'healthy', send: async () => ({ id: '', statusCode: 200 }) }
+    const recoveringProvider = { name: 'recovering', send: async () => ({ id: '', statusCode: 200 }) }
+    const unhealthyProvider = { name: 'unhealthy', send: async () => ({ id: '', statusCode: 200 }) }
+
+    // Track health states
+    tracker.recordFailure('unhealthy', true)
+    tracker.recordFailure('recovering', true)
+    // Move time forward but keep unhealthy still within cooldown
+    fakeNow = now + 30_000
+    // Move recovering past cooldown and mark as recovered
+    const recoveringNow = now + 60_000 + 1
+    fakeNow = recoveringNow
+    tracker.recordSuccess('recovering')
+    // Reset clock to be during unhealthy's cooldown but after recovering's buffer
+    fakeNow = now + 30_000
+
+    const ordered = tracker.orderProviders([unhealthyProvider, healthyProvider, recoveringProvider])
+
+    expect(ordered[0].name).toBe('healthy')
+    expect(ordered[1].name).toBe('recovering')
+    expect(ordered[2].name).toBe('unhealthy')
+  })
+
+  it('treats recovering provider as fully healthy after buffer expires', () => {
+    const now = 1_000_000
+    let fakeNow = now
+    const tracker = new NotificationProviderHealthTracker(
+      60_000,
+      1,
+      10_000,
+      () => fakeNow
+    )
+
+    const provider = { name: 'p', send: async () => ({ id: '', statusCode: 200 }) }
+
+    // Fail, then recover
+    tracker.recordFailure('p', true)
+    fakeNow = now + 60_000 + 1
+    tracker.recordSuccess('p')
+
+    // Still within recovery buffer -> recovering
+    expect(tracker.isRecovering('p')).toBe(true)
+
+    // Advance past recovery buffer
+    fakeNow = now + 60_000 + 1 + 10_000
+    expect(tracker.isRecovering('p')).toBe(false)
+  })
+
+  it('does not apply recovery buffer to providers that never failed', () => {
+    const tracker = new NotificationProviderHealthTracker()
+    const provider = { name: 'p', send: async () => ({ id: '', statusCode: 200 }) }
+
+    tracker.recordSuccess('p')
+    expect(tracker.isRecovering('p')).toBe(false)
+    expect(tracker.orderProviders([provider])[0].name).toBe('p')
+  })
+})

@@ -22,6 +22,10 @@ export {
 export {
   createSharedSecretInterceptor,
   createRequestIdInterceptor,
+  createDeadlineInterceptor,
+  GRPC_DEADLINE_REMAINING_KEY,
+  GRPC_DEFAULT_TIMEOUT_MS,
+  isDeadlineExceededError,
   INTERNAL_TOKEN_HEADER,
 } from './interceptors.js'
 

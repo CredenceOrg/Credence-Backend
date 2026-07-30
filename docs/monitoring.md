@@ -2,9 +2,18 @@
 
 This document describes the monitoring setup for Credence Backend, including Prometheus metrics instrumentation and Grafana dashboard configuration.
 
+> **Need a quick index of what's available to operate on?** See
+> **[`docs/OBSERVABILITY.md`](./OBSERVABILITY.md)** — it lists every
+> Prometheus metric the backend emits, the Grafana panel it appears in,
+> the PromQL behind each alert rule, and runnable triage queries. This
+> document covers *how* to install and configure the stack;
+> `OBSERVABILITY.md` is the operator's reference index for the deployed
+> stack.
+
 ## Overview
 
 The monitoring stack consists of:
+
 - **Prometheus** - Metrics collection and storage
 - **Grafana** - Visualization and dashboards
 - **Application metrics** - Custom business and infrastructure metrics
@@ -14,9 +23,11 @@ The monitoring stack consists of:
 The health router separates liveness and readiness:
 
 - `GET /api/health/live`: process-level liveness only (always `200` while process is up).
-- `GET /api/health` and `GET /api/health/ready`: deep readiness checks for Postgres, Redis, Horizon listener heartbeat, and outbox publisher lease heartbeat.
+- `GET /api/health` and `GET /api/health/ready`: deep readiness checks for Postgres, Redis, Horizon listener heartbeat, and outbox publisher state.
 
-Readiness responses include per-check status (`up`, `down`, `not_configured`) and safe diagnostic fields (for example heartbeat age) without exposing secrets such as connection strings.
+The outbox readiness check now also evaluates the age of the oldest unpublished outbox event. If that lag exceeds `60` seconds, readiness fails and the dependency is reported as `down` with a `lagSeconds` value.
+
+Readiness responses include per-check status (`up`, `down`, `not_configured`) and safe diagnostic fields (for example heartbeat age or outbox lag) without exposing secrets such as connection strings.
 
 ## Architecture
 
@@ -53,143 +64,148 @@ npm install prom-client
 
 Create `src/middleware/metrics.ts`:
 
-
 ```typescript
-import { Request, Response, NextFunction } from 'express'
-import client from 'prom-client'
+import { Request, Response, NextFunction } from "express";
+import client from "prom-client";
 
 // Create a Registry
-export const register = new client.Registry()
+export const register = new client.Registry();
 
 // Add default metrics (CPU, memory, etc.)
-client.collectDefaultMetrics({ register })
+client.collectDefaultMetrics({ register });
 
 // HTTP Metrics
 export const httpRequestsTotal = new client.Counter({
-  name: 'http_requests_total',
-  help: 'Total number of HTTP requests',
-  labelNames: ['method', 'route', 'status'],
-  registers: [register]
-})
+  name: "http_requests_total",
+  help: "Total number of HTTP requests",
+  labelNames: ["method", "route", "status"],
+  registers: [register],
+});
 
 // Health Check Metrics
 export const healthCheckStatus = new client.Gauge({
-  name: 'health_check_status',
-  help: 'Health check status (1 = up, 0 = down)',
-  labelNames: ['dependency'],
-  registers: [register]
-})
+  name: "health_check_status",
+  help: "Health check status (1 = up, 0 = down)",
+  labelNames: ["dependency"],
+  registers: [register],
+});
 
 export const healthCheckDuration = new client.Gauge({
-  name: 'health_check_duration_seconds',
-  help: 'Duration of health checks in seconds',
-  labelNames: ['dependency'],
-  registers: [register]
-})
+  name: "health_check_duration_seconds",
+  help: "Duration of health checks in seconds",
+  labelNames: ["dependency"],
+  registers: [register],
+});
 
 // Business Metrics
 export const reputationScoreCalculations = new client.Counter({
-  name: 'reputation_score_calculations_total',
-  help: 'Total number of reputation score calculations',
-  registers: [register]
-})
+  name: "reputation_score_calculations_total",
+  help: "Total number of reputation score calculations",
+  registers: [register],
+});
 
 export const reputationCalculationDuration = new client.Histogram({
-  name: 'reputation_calculation_duration_seconds',
-  help: 'Duration of reputation calculations in seconds',
+  name: "reputation_calculation_duration_seconds",
+  help: "Duration of reputation calculations in seconds",
   buckets: [0.01, 0.05, 0.1, 0.5, 1, 2, 5],
-  registers: [register]
-})
+  registers: [register],
+});
 
 export const identityVerifications = new client.Counter({
-  name: 'identity_verifications_total',
-  help: 'Total number of identity verifications',
-  labelNames: ['status'],
-  registers: [register]
-})
+  name: "identity_verifications_total",
+  help: "Total number of identity verifications",
+  labelNames: ["status"],
+  registers: [register],
+});
 
 export const bulkVerifications = new client.Counter({
-  name: 'bulk_verifications_total',
-  help: 'Total number of bulk verification requests',
-  labelNames: ['status'],
-  registers: [register]
-})
+  name: "bulk_verifications_total",
+  help: "Total number of bulk verification requests",
+  labelNames: ["status"],
+  registers: [register],
+});
 
 export const bulkVerificationBatchSize = new client.Histogram({
-  name: 'bulk_verification_batch_size',
-  help: 'Size of bulk verification batches',
+  name: "bulk_verification_batch_size",
+  help: "Size of bulk verification batches",
   buckets: [1, 5, 10, 25, 50, 75, 100],
-  registers: [register]
-})
+  registers: [register],
+});
 
 export const identitySyncDuration = new client.Histogram({
-  name: 'identity_sync_duration_seconds',
-  help: 'Duration of identity state sync operations',
-  labelNames: ['operation'],
+  name: "identity_sync_duration_seconds",
+  help: "Duration of identity state sync operations",
+  labelNames: ["operation"],
   buckets: [0.1, 0.5, 1, 2, 5, 10, 30],
-  registers: [register]
-})
+  registers: [register],
+});
 
 // Middleware to track HTTP metrics
-export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
-  const start = Date.now()
-  
-  res.on('finish', () => {
-    const duration = (Date.now() - start) / 1000
-    const route = req.route?.path || req.path
-    
+export function metricsMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const start = Date.now();
+
+  res.on("finish", () => {
+    const duration = (Date.now() - start) / 1000;
+    const route = req.route?.path || req.path;
+
     httpRequestsTotal.inc({
       method: req.method,
       route,
-      status: res.statusCode
-    })
-    
-    httpRequestDuration.observe({
-      method: req.method,
-      route,
-      status: res.statusCode
-    }, duration)
-  })
-  
-  next()
+      status: res.statusCode,
+    });
+
+    httpRequestDuration.observe(
+      {
+        method: req.method,
+        route,
+        status: res.statusCode,
+      },
+      duration,
+    );
+  });
+
+  next();
 }
 ```
-
 
 ### Integrate Metrics into Application
 
 Update `src/index.ts`:
 
 ```typescript
-import express from 'express'
-import { metricsMiddleware, register } from './middleware/metrics.js'
-import { createHealthRouter } from './routes/health.js'
-import { createDefaultProbes } from './services/health/probes.js'
+import express from "express";
+import { metricsMiddleware, register } from "./middleware/metrics.js";
+import { createHealthRouter } from "./routes/health.js";
+import { createDefaultProbes } from "./services/health/probes.js";
 
-const app = express()
-const PORT = process.env.PORT ?? 3000
+const app = express();
+const PORT = process.env.PORT ?? 3000;
 
-app.use(express.json())
+app.use(express.json());
 
 // Add metrics middleware
-app.use(metricsMiddleware)
+app.use(metricsMiddleware);
 
 // Metrics endpoint for Prometheus
-app.get('/metrics', async (req, res) => {
-  res.set('Content-Type', register.contentType)
-  res.end(await register.metrics())
-})
+app.get("/metrics", async (req, res) => {
+  res.set("Content-Type", register.contentType);
+  res.end(await register.metrics());
+});
 
-const healthProbes = createDefaultProbes()
-app.use('/api/health', createHealthRouter(healthProbes))
+const healthProbes = createDefaultProbes();
+app.use("/api/health", createHealthRouter(healthProbes));
 
 // ... rest of your routes
 
 app.listen(PORT, () => {
-  console.log(`Credence API listening on http://localhost:${PORT}`)
-})
+  console.log(`Credence API listening on http://localhost:${PORT}`);
+});
 
-export default app
+export default app;
 ```
 
 ### Instrument Health Checks
@@ -197,23 +213,33 @@ export default app
 Update `src/services/health/checks.ts` to emit metrics:
 
 ```typescript
-import { healthCheckStatus, healthCheckDuration } from '../../middleware/metrics.js'
+import {
+  healthCheckStatus,
+  healthCheckDuration,
+} from "../../middleware/metrics.js";
 
 export async function runHealthChecks(probes: {
-  db?: HealthProbe
-  redis?: HealthProbe
-  external?: HealthProbe
+  db?: HealthProbe;
+  redis?: HealthProbe;
+  external?: HealthProbe;
 }): Promise<HealthResult> {
   // Run checks and measure duration
-  const dbStart = Date.now()
-  const db = probes.db ? await probes.db() : { status: 'not_configured' as const }
-  healthCheckDuration.set({ dependency: 'db' }, (Date.now() - dbStart) / 1000)
-  healthCheckStatus.set({ dependency: 'db' }, db.status === 'up' ? 1 : 0)
+  const dbStart = Date.now();
+  const db = probes.db
+    ? await probes.db()
+    : { status: "not_configured" as const };
+  healthCheckDuration.set({ dependency: "db" }, (Date.now() - dbStart) / 1000);
+  healthCheckStatus.set({ dependency: "db" }, db.status === "up" ? 1 : 0);
 
-  const redisStart = Date.now()
-  const redis = probes.redis ? await probes.redis() : { status: 'not_configured' as const }
-  healthCheckDuration.set({ dependency: 'redis' }, (Date.now() - redisStart) / 1000)
-  healthCheckStatus.set({ dependency: 'redis' }, redis.status === 'up' ? 1 : 0)
+  const redisStart = Date.now();
+  const redis = probes.redis
+    ? await probes.redis()
+    : { status: "not_configured" as const };
+  healthCheckDuration.set(
+    { dependency: "redis" },
+    (Date.now() - redisStart) / 1000,
+  );
+  healthCheckStatus.set({ dependency: "redis" }, redis.status === "up" ? 1 : 0);
 
   // ... rest of health check logic
 }
@@ -224,33 +250,37 @@ export async function runHealthChecks(probes: {
 Update `src/services/identityService.ts`:
 
 ```typescript
-import { identityVerifications, bulkVerifications, bulkVerificationBatchSize } from '../middleware/metrics.js'
+import {
+  identityVerifications,
+  bulkVerifications,
+  bulkVerificationBatchSize,
+} from "../middleware/metrics.js";
 
 export class IdentityService {
   async verifyIdentity(address: string): Promise<IdentityVerification> {
     try {
       // ... verification logic
-      identityVerifications.inc({ status: 'success' })
-      return result
+      identityVerifications.inc({ status: "success" });
+      return result;
     } catch (error) {
-      identityVerifications.inc({ status: 'error' })
-      throw error
+      identityVerifications.inc({ status: "error" });
+      throw error;
     }
   }
 
   async verifyBulk(addresses: string[]): Promise<{
-    results: IdentityVerification[]
-    errors: VerificationError[]
+    results: IdentityVerification[];
+    errors: VerificationError[];
   }> {
-    bulkVerificationBatchSize.observe(addresses.length)
-    
+    bulkVerificationBatchSize.observe(addresses.length);
+
     try {
       // ... bulk verification logic
-      bulkVerifications.inc({ status: 'success' })
-      return { results, errors }
+      bulkVerifications.inc({ status: "success" });
+      return { results, errors };
     } catch (error) {
-      bulkVerifications.inc({ status: 'error' })
-      throw error
+      bulkVerifications.inc({ status: "error" });
+      throw error;
     }
   }
 }
@@ -259,50 +289,60 @@ export class IdentityService {
 Update `src/services/reputation/score.ts`:
 
 ```typescript
-import { reputationScoreCalculations, reputationCalculationDuration } from '../../middleware/metrics.js'
+import {
+  reputationScoreCalculations,
+  reputationCalculationDuration,
+} from "../../middleware/metrics.js";
 
-export function calculateReputationScore(input: ReputationInput): ReputationScore {
-  const start = Date.now()
-  
+export function calculateReputationScore(
+  input: ReputationInput,
+): ReputationScore {
+  const start = Date.now();
+
   // ... calculation logic
-  
-  reputationScoreCalculations.inc()
-  reputationCalculationDuration.observe((Date.now() - start) / 1000)
-  
-  return result
+
+  reputationScoreCalculations.inc();
+  reputationCalculationDuration.observe((Date.now() - start) / 1000);
+
+  return result;
 }
 ```
 
 Update `src/listeners/identityStateSync.ts`:
 
 ```typescript
-import { identitySyncDuration } from '../middleware/metrics.js'
+import { identitySyncDuration } from "../middleware/metrics.js";
 
 export class IdentityStateSync {
   async reconcileByAddress(address: string): Promise<ReconcileResult> {
-    const start = Date.now()
-    
+    const start = Date.now();
+
     try {
       // ... reconciliation logic
-      return result
+      return result;
     } finally {
-      identitySyncDuration.observe({ operation: 'reconcile' }, (Date.now() - start) / 1000)
+      identitySyncDuration.observe(
+        { operation: "reconcile" },
+        (Date.now() - start) / 1000,
+      );
     }
   }
 
   async fullResync(): Promise<FullResyncResult> {
-    const start = Date.now()
-    
+    const start = Date.now();
+
     try {
       // ... full resync logic
-      return result
+      return result;
     } finally {
-      identitySyncDuration.observe({ operation: 'full_resync' }, (Date.now() - start) / 1000)
+      identitySyncDuration.observe(
+        { operation: "full_resync" },
+        (Date.now() - start) / 1000,
+      );
     }
   }
 }
 ```
-
 
 ## Prometheus Configuration
 
@@ -315,14 +355,14 @@ global:
   scrape_interval: 15s
   evaluation_interval: 15s
   external_labels:
-    cluster: 'credence-production'
-    environment: 'production'
+    cluster: "credence-production"
+    environment: "production"
 
 scrape_configs:
-  - job_name: 'credence-backend'
+  - job_name: "credence-backend"
     static_configs:
-      - targets: ['localhost:3000']
-    metrics_path: '/metrics'
+      - targets: ["localhost:3000"]
+    metrics_path: "/metrics"
     scrape_interval: 10s
     scrape_timeout: 5s
 ```
@@ -342,7 +382,7 @@ docker run -d \
 Using Docker Compose (create `docker-compose.yml`):
 
 ```yaml
-version: '3.8'
+version: "3.8"
 
 services:
   prometheus:
@@ -354,10 +394,10 @@ services:
       - ./monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
       - prometheus-data:/prometheus
     command:
-      - '--config.file=/etc/prometheus/prometheus.yml'
-      - '--storage.tsdb.path=/prometheus'
-      - '--web.console.libraries=/usr/share/prometheus/console_libraries'
-      - '--web.console.templates=/usr/share/prometheus/consoles'
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.console.libraries=/usr/share/prometheus/console_libraries"
+      - "--web.console.templates=/usr/share/prometheus/consoles"
     restart: unless-stopped
 
   grafana:
@@ -386,7 +426,6 @@ Start the stack:
 docker-compose up -d
 ```
 
-
 ## Grafana Dashboard
 
 ### Dashboard Overview
@@ -411,6 +450,11 @@ The Credence Backend dashboard (`monitoring/grafana/dashboard.json`) provides co
    - Batch size distribution
    - Operation duration (p95)
 
+4. **Webhook delivery lag (compact summary)**
+   - Oldest queued webhook age and 5m success rate
+   - Spec + PromQL: [WEBHOOK_LAG_DASHBOARD.md](WEBHOOK_LAG_DASHBOARD.md)
+   - Code: `src/metrics/webhookLagDashboard.ts`
+
 ### Importing the Dashboard
 
 #### Method 1: Grafana UI
@@ -430,9 +474,9 @@ Create `monitoring/grafana/provisioning/dashboards/dashboard.yml`:
 apiVersion: 1
 
 providers:
-  - name: 'Credence Dashboards'
+  - name: "Credence Dashboards"
     orgId: 1
-    folder: ''
+    folder: ""
     type: file
     disableDeletion: false
     updateIntervalSeconds: 10
@@ -458,12 +502,12 @@ datasources:
 Update `docker-compose.yml` to mount provisioning configs:
 
 ```yaml
-  grafana:
-    image: grafana/grafana:latest
-    volumes:
-      - grafana-data:/var/lib/grafana
-      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
-      - ./monitoring/grafana/dashboard.json:/etc/grafana/provisioning/dashboards/credence-backend.json
+grafana:
+  image: grafana/grafana:latest
+  volumes:
+    - grafana-data:/var/lib/grafana
+    - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    - ./monitoring/grafana/dashboard.json:/etc/grafana/provisioning/dashboards/credence-backend.json
 ```
 
 Restart Grafana:
@@ -474,42 +518,48 @@ docker-compose restart grafana
 
 The dashboard will be automatically imported and available.
 
-
 ### Dashboard Panels
 
 #### Panel 1: HTTP Error Rate (5xx)
+
 - **Type**: Gauge
 - **Query**: `rate(http_requests_total{job="credence-backend", status=~"5.."}[5m]) / rate(http_requests_total{job="credence-backend"}[5m])`
 - **Purpose**: Monitor server error rate; alerts when > 5%
 
 #### Panel 2: HTTP Request Rate
+
 - **Type**: Time series
 - **Query**: `rate(http_requests_total{job="credence-backend"}[5m])`
 - **Purpose**: Track request volume by endpoint and status
 
 #### Panel 3: HTTP Request Latency
+
 - **Type**: Time series
-- **Queries**: 
+- **Queries**:
   - p95: `histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[5m]))`
   - p50: `histogram_quantile(0.50, rate(http_request_duration_seconds_bucket[5m]))`
 - **Purpose**: Monitor response times; identify slow endpoints
 
 #### Panel 4: HTTP Status Codes Distribution
+
 - **Type**: Time series (stacked)
 - **Query**: `rate(http_requests_total{job="credence-backend"}[5m])`
 - **Purpose**: Visualize 2xx, 4xx, 5xx distribution
 
 #### Panel 5: Database Health
+
 - **Type**: Gauge
 - **Query**: `health_check_status{job="credence-backend", dependency="db"}`
 - **Purpose**: Real-time DB connectivity status
 
 #### Panel 6: Redis Health
+
 - **Type**: Gauge
 - **Query**: `health_check_status{job="credence-backend", dependency="redis"}`
 - **Purpose**: Real-time Redis connectivity status
 
 #### Panel 7: Health Check Duration
+
 - **Type**: Time series
 - **Queries**:
   - DB: `health_check_duration_seconds{dependency="db"}`
@@ -517,6 +567,7 @@ The dashboard will be automatically imported and available.
 - **Purpose**: Monitor health check performance
 
 #### Panel 8: Business Metrics - Operations Rate
+
 - **Type**: Time series
 - **Queries**:
   - `rate(reputation_score_calculations_total[5m])`
@@ -525,6 +576,7 @@ The dashboard will be automatically imported and available.
 - **Purpose**: Track business operation volume
 
 #### Panel 9: Business Operations Duration (p95)
+
 - **Type**: Time series
 - **Queries**:
   - `histogram_quantile(0.95, rate(reputation_calculation_duration_seconds_bucket[5m]))`
@@ -532,15 +584,16 @@ The dashboard will be automatically imported and available.
 - **Purpose**: Monitor performance of critical business operations
 
 #### Panel 10: Avg Bulk Verification Batch Size
+
 - **Type**: Gauge
 - **Query**: `avg(bulk_verification_batch_size)`
 - **Purpose**: Track average batch size for capacity planning
 
 #### Panel 11: Total Verifications (24h)
+
 - **Type**: Stat
 - **Query**: `sum(increase(identity_verifications_total[24h]))`
 - **Purpose**: Daily verification volume
-
 
 ## Alerting
 
@@ -623,15 +676,14 @@ Update `prometheus.yml` to include alerts:
 
 ```yaml
 rule_files:
-  - 'alerts.yml'
+  - "alerts.yml"
 
 alerting:
   alertmanagers:
     - static_configs:
         - targets:
-            - 'alertmanager:9093'
+            - "alertmanager:9093"
 ```
-
 
 ## Deployment
 
@@ -683,23 +735,29 @@ kubectl apply -f k8s/servicemonitor.yaml
 kubectl apply -f k8s/grafana-dashboard-configmap.yaml
 ```
 
+### PostgreSQL Activity Snapshots
+
+Credence Backend now persists a rolling `pg_stat_activity` snapshot every minute into `pg_stat_activity_snapshots` and prunes rows older than 24 hours automatically. This gives operators a bounded postmortem history of active backend sessions without requiring downstream workarounds.
+
 ### Production Considerations
 
 1. **Metrics Retention**: Configure Prometheus retention based on storage capacity
+
    ```yaml
    command:
-     - '--storage.tsdb.retention.time=30d'
-     - '--storage.tsdb.retention.size=50GB'
+     - "--storage.tsdb.retention.time=30d"
+     - "--storage.tsdb.retention.size=50GB"
    ```
 
 2. **High Availability**: Deploy Prometheus with replication
+
    ```yaml
    replicas: 2
    ```
 
 3. **Remote Storage**: Use long-term storage (Thanos, Cortex, or cloud providers)
 
-4. **Security**: 
+4. **Security**:
    - Enable authentication on Grafana
    - Restrict Prometheus access
    - Use TLS for metrics endpoints in production
@@ -715,6 +773,24 @@ kubectl apply -f k8s/grafana-dashboard-configmap.yaml
        cpu: "500m"
    ```
 
+### Metrics Endpoint Security
+
+The `/metrics` endpoint is unauthenticated by design (Prometheus does not send auth headers) but can be restricted to cluster-internal IPs via the `METRICS_ALLOWED_CIDRS` environment variable.
+
+```
+METRICS_ALLOWED_CIDRS=10.0.0.0/8,172.16.0.0/12,192.168.0.0/16
+```
+
+When set, only requests originating from IPs within the listed CIDR ranges can reach `/metrics`. All other IPs receive `403 Forbidden`.
+
+When unset (default), `/metrics` is open — suitable for local development.
+
+For Kubernetes deployments, set this to the cluster pod CIDR in `k8s/configmap.yaml`:
+
+```yaml
+data:
+  METRICS_ALLOWED_CIDRS: "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+```
 
 ## Testing
 
@@ -770,42 +846,95 @@ open http://localhost:3001
 # Navigate to: Dashboards → Credence Backend - API Monitoring
 ```
 
-
 ## Metrics Reference
 
 ### HTTP Metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `http_requests_total` | Counter | method, route, status | Total HTTP requests |
-| `http_request_duration_seconds` | Histogram | method, route, status | Request duration |
+| Metric                          | Type      | Labels                | Description         |
+| ------------------------------- | --------- | --------------------- | ------------------- |
+| `http_requests_total`           | Counter   | method, route, status | Total HTTP requests |
+| `http_request_duration_seconds` | Histogram | method, route, status | Request duration    |
 
 ### Health Metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `health_check_status` | Gauge | dependency | Health status (1=up, 0=down) |
-| `health_check_duration_seconds` | Gauge | dependency | Health check duration |
+| Metric                          | Type  | Labels     | Description                  |
+| ------------------------------- | ----- | ---------- | ---------------------------- |
+| `health_check_status`           | Gauge | dependency | Health status (1=up, 0=down) |
+| `health_check_duration_seconds` | Gauge | dependency | Health check duration        |
 
 ### Pool Metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `pg_pool_total_count` | Gauge | pool | Total clients (active + idle) |
-| `pg_pool_idle_count` | Gauge | pool | Idle clients |
-| `pg_pool_waiting_count` | Gauge | pool | Queued requests waiting |
+| Metric                  | Type  | Labels | Description                   |
+| ----------------------- | ----- | ------ | ----------------------------- |
+| `pg_pool_total_count`   | Gauge | pool   | Total clients (active + idle) |
+| `pg_pool_idle_count`    | Gauge | pool   | Idle clients                  |
+| `pg_pool_waiting_count` | Gauge | pool   | Queued requests waiting       |
 
 ### Business Metrics
 
-| Metric | Type | Labels | Description |
-|--------|------|--------|-------------|
-| `reputation_score_calculations_total` | Counter | - | Total reputation calculations |
-| `reputation_calculation_duration_seconds` | Histogram | - | Calculation duration |
-| `identity_verifications_total` | Counter | status | Total identity verifications |
-| `bulk_verifications_total` | Counter | status | Total bulk verification requests |
-| `bulk_verification_batch_size` | Histogram | - | Batch size distribution |
-| `rate_limit_hits_total` | Counter | tenant, tier | Total rate limit hits grouped by tenant and tier |
-| `identity_sync_duration_seconds` | Histogram | operation | Identity sync duration |
+| Metric                                    | Type      | Labels       | Description                                                                        |
+| ----------------------------------------- | --------- | ------------ | ---------------------------------------------------------------------------------- |
+| `reputation_score_calculations_total`     | Counter   | -            | Total reputation calculations                                                      |
+| `reputation_calculation_duration_seconds` | Histogram | -            | Calculation duration                                                               |
+| `identity_verifications_total`            | Counter   | status       | Total identity verifications                                                       |
+| `bulk_verifications_total`                | Counter   | status       | Total bulk verification requests                                                   |
+| `bulk_verification_batch_size`            | Histogram | -            | Batch size distribution                                                            |
+| `rate_limit_hits_total`                   | Counter   | tenant, tier | Total rate limit hits grouped by tenant and tier                                   |
+| `identity_sync_duration_seconds`          | Histogram | operation    | Identity sync duration                                                             |
+| `queue_backlog_size`                      | Gauge     | topic        | Current number of items pending in the backlog queue per topic; sampled every 15 s |
+
+### Memory & OOM Metrics
+
+| Metric             | Type    | Labels | Description                                   |
+| ------------------ | ------- | ------ | --------------------------------------------- |
+| `oom_events_total` | Counter | -      | Total number of out-of-memory events detected |
+
+## Memory Configuration
+
+To set a maximum memory limit for Node.js (preventing OOM crashes), use the `NODE_MAX_OLD_SPACE_SIZE_MB` environment variable. This sets the `--max-old-space-size` Node.js flag automatically via the entrypoint script.
+
+### Example Usage
+
+#### Local Development
+
+```bash
+# Set 2GB limit
+NODE_MAX_OLD_SPACE_SIZE_MB=2048 npm start
+```
+
+#### Docker
+
+```bash
+docker run -e NODE_MAX_OLD_SPACE_SIZE_MB=2048 credence-backend
+```
+
+#### Docker Compose
+
+```yaml
+services:
+  credence-backend:
+    image: credence-backend
+    environment:
+      - NODE_MAX_OLD_SPACE_SIZE_MB=2048
+```
+
+#### Kubernetes
+
+```yaml
+spec:
+  containers:
+    - name: credence-backend
+      env:
+        - name: NODE_MAX_OLD_SPACE_SIZE_MB
+          value: "2048"
+      resources:
+        requests:
+          memory: "2Gi"
+        limits:
+          memory: "2Gi"
+```
+
+The `NODE_MAX_OLD_SPACE_SIZE_MB` should match your container's memory limit.
 
 ### Default Metrics (from prom-client)
 
@@ -816,15 +945,16 @@ open http://localhost:3001
 - `nodejs_heap_size_used_bytes` - Used heap
 - `nodejs_eventloop_lag_seconds` - Event loop lag
 
-
 ## Troubleshooting
 
 ### Metrics Not Appearing
 
 1. **Check metrics endpoint**:
+
    ```bash
    curl http://localhost:3000/metrics
    ```
+
    If empty or error, verify prom-client is installed and middleware is registered.
 
 2. **Check Prometheus targets**:
@@ -862,6 +992,7 @@ If metrics storage grows too large:
    - Use fixed label sets (e.g., status: success/error)
 
 2. **Adjust retention**:
+
    ```yaml
    --storage.tsdb.retention.time=15d
    ```
@@ -888,21 +1019,24 @@ time curl http://localhost:3000/metrics
 ```
 
 If slow:
+
 - Reduce histogram buckets
 - Disable default metrics if not needed
 - Use summary instead of histogram for high-cardinality data
 
-
 ## Screenshots
 
 ### Dashboard Overview
+
 The dashboard provides a comprehensive view of:
+
 - Real-time error rates and request volumes
 - Latency percentiles (p50, p95) across all endpoints
 - Infrastructure health (DB, Redis) with status indicators
 - Business metrics showing verification rates and batch sizes
 
 ### Key Visualizations
+
 1. **Top Row**: Error rate gauge, request rate time series, latency percentiles
 2. **Middle Row**: Status code distribution, DB health, Redis health
 3. **Bottom Rows**: Health check durations, business operation rates, and daily totals
@@ -910,6 +1044,7 @@ The dashboard provides a comprehensive view of:
 ## Next Steps
 
 1. **Install dependencies**:
+
    ```bash
    npm install prom-client
    ```
@@ -917,6 +1052,7 @@ The dashboard provides a comprehensive view of:
 2. **Implement metrics middleware** (see code examples above)
 
 3. **Deploy monitoring stack**:
+
    ```bash
    docker-compose up -d
    ```
@@ -938,6 +1074,7 @@ The dashboard provides a comprehensive view of:
 ## Support
 
 For issues or questions:
+
 - Check the [troubleshooting section](#troubleshooting)
 - Review Prometheus and Grafana logs
 - Consult the metrics reference for available metrics

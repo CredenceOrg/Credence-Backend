@@ -27,6 +27,7 @@ import {
   type WsMessage,
 } from "../routes/ws.js";
 import { InMemoryApiKeyRepository } from "../repositories/apiKeyRepository.js";
+import { wsEvictedSlowConsumersTotal } from "../observability/customMetrics.js";
 
 describe("TrustScoreNotifier", () => {
   beforeEach(() => {
@@ -615,9 +616,10 @@ describe("WebSocket Auth & Upgrade", () => {
       ws.once("message", (raw) =>
         resolve(JSON.parse(raw.toString()) as WsMessage),
       );
-      ws.once("error", () => resolve("error"));
+      ws.once("error", (e) => resolve("error: " + e.message));
       ws.once("close", () => resolve("close"));
     });
+    console.log("MSG IS:", msg);
     expect((msg as WsMessage).type).toBe("subscribe_success");
     // ctx.close() drains the server-side connection; no explicit ws.close() needed.
   });
@@ -752,6 +754,47 @@ describe("WebSocket Backpressure", () => {
 
       slowClient.close();
       fastClient.close();
+    } finally {
+      await ctx.close();
+    }
+  });
+
+  it("should evict slow consumers when bufferedAmount exceeds highWaterMark", async () => {
+    const ctx = await createTestServer({
+      backpressureThreshold: 300,
+      highWaterMark: 200,
+    });
+    try {
+      const client = await connectAndSubscribe(ctx.baseUrl, "0xevict", ctx.apiKey);
+
+      const [serverWs] = ctx.wss.clients;
+
+      // Force bufferedAmount above highWaterMark
+      Object.defineProperty(serverWs, "bufferedAmount", {
+        get: () => 250,
+        configurable: true,
+      });
+
+      // Get current metric value
+      const metricBefore = (await wsEvictedSlowConsumersTotal.get()).values[0]?.value || 0;
+
+      const closePromise = new Promise<{ code: number; reason: string }>((resolve) => {
+        client.once("close", (code, reason) => {
+          resolve({ code, reason: reason.toString() });
+        });
+      });
+
+      // Trigger a message send which will cause eviction
+      trustScoreNotifier.publish("0xevict", 42);
+
+      const { code, reason } = await closePromise;
+      expect(code).toBe(1013);
+      expect(reason).toBe("slow_consumer");
+
+      // Verify the metric was incremented
+      const metricAfter = (await wsEvictedSlowConsumersTotal.get()).values[0]?.value || 0;
+      expect(metricAfter).toBe(metricBefore + 1);
+
     } finally {
       await ctx.close();
     }

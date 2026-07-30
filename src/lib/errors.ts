@@ -1,3 +1,4 @@
+import type { Response } from 'express'
 import {
   ErrorCode as ErrorCodeRegistry,
   getErrorCatalogEntry,
@@ -91,6 +92,12 @@ export class AppError extends Error {
   }
 }
 
+export class CrawlerBlockedError extends AppError {
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.CRAWLER_BLOCKED).defaultMessage) {
+    super(message, ErrorCodeRegistry.CRAWLER_BLOCKED)
+  }
+}
+
 /**
  * Specific error for validation failures (e.g. Zod).
  */
@@ -100,6 +107,19 @@ export class ValidationError extends AppError {
     details?: unknown
   ) {
     super(message, ErrorCodeRegistry.VALIDATION_FAILED, undefined, details)
+  }
+}
+
+/**
+ * Specific error for redirect targets that fail open-redirect validation
+ * (protocol-relative URLs, backslash tricks, or hosts outside the allowlist).
+ */
+export class UnsafeRedirectError extends AppError {
+  constructor(
+    message: string = getErrorCatalogEntry(ErrorCodeRegistry.UNSAFE_REDIRECT_TARGET).defaultMessage,
+    details?: unknown
+  ) {
+    super(message, ErrorCodeRegistry.UNSAFE_REDIRECT_TARGET, undefined, details)
   }
 }
 
@@ -138,4 +158,82 @@ export class ServiceUnavailableError extends AppError {
   constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.SERVICE_UNAVAILABLE).defaultMessage) {
     super(message, ErrorCodeRegistry.SERVICE_UNAVAILABLE)
   }
+}
+
+/**
+ * Specific error for request bodies that exceed the configured size limit.
+ */
+export class RequestTooLargeError extends AppError {
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.REQUEST_TOO_LARGE).defaultMessage) {
+    super(message, ErrorCodeRegistry.REQUEST_TOO_LARGE)
+  }
+}
+
+/**
+ * Thrown when an optimistic-locking update is rejected because another writer
+ * incremented the `version` between the caller's read and write.
+ *
+ * Callers should re-fetch the resource, re-apply their change, and retry.
+ */
+export class OptimisticLockError extends AppError {
+  /** The address (or identifier) of the resource that conflicted. */
+  public readonly resourceAddress: string
+  /** The version the caller expected to find. */
+  public readonly expectedVersion: number
+
+  constructor(resourceAddress: string, expectedVersion: number) {
+    super(
+      `Optimistic lock conflict: resource "${resourceAddress}" was modified by another writer (expected version ${expectedVersion}). Re-fetch and retry.`,
+      ErrorCodeRegistry.OPTIMISTIC_LOCK_CONFLICT,
+      undefined,
+      { resourceAddress, expectedVersion },
+    )
+    this.resourceAddress = resourceAddress
+    this.expectedVersion = expectedVersion
+  }
+}
+
+/**
+ * Specific error for missing required security headers.
+ */
+export class MissingSecurityHeaderError extends AppError {
+  constructor(
+    message: string = getErrorCatalogEntry(ErrorCodeRegistry.MISSING_SECURITY_HEADER).defaultMessage,
+    details?: unknown
+  ) {
+    super(message, ErrorCodeRegistry.MISSING_SECURITY_HEADER, undefined, details)
+  }
+}
+
+/**
+ * Send a structured error response using the centralized error catalog.
+ *
+ * This is a convenience helper for route handlers that need to return an
+ * error directly (rather than throwing an AppError through next()). It
+ * produces the same `{ error, code, error_code, details? }` envelope as
+ * the global error-handler middleware.
+ *
+ * In production, only the catalog default message is returned (no PII).
+ *
+ * @param statusOverride - Optional HTTP status override. When provided, the
+ *   response uses this status instead of the catalog default. Use sparingly
+ *   to preserve backward compatibility with existing API contracts.
+ */
+export function sendError(
+  res: Response,
+  code: ErrorCodeValue,
+  message?: string,
+  details?: unknown,
+  statusOverride?: number,
+): void {
+  const catalogEntry = getErrorCatalogEntry(code)
+  const status = statusOverride ?? getHttpStatus(catalogEntry)
+  const isProduction = process.env.NODE_ENV === 'production'
+
+  res.status(status).json({
+    error: isProduction ? catalogEntry.defaultMessage : (message ?? catalogEntry.defaultMessage),
+    code: catalogEntry.code,
+    error_code: catalogEntry.code,
+    ...(!isProduction && details !== undefined ? { details } : {}),
+  })
 }

@@ -10,9 +10,13 @@ export default defineConfig({
       "src/**/*.spec.ts",
       "src/**/__tests__/**/*.ts",
       "tests/integration/**/*.test.ts",
+      "tests/jobs/**/*.test.ts",
       "tests/repositories/**/*.test.ts",
       "tests/routes/**/*.test.ts",
+      "tests/rbac/**/*.test.ts",
+      "tests/rbac.test.ts",
       "monitoring/**/*.test.ts",
+      "scripts/**/*.test.ts",
     ],
     coverage: {
       provider: "istanbul",

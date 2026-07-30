@@ -5,6 +5,7 @@ import { rateLimit } from '../middleware/rateLimit.js'
 import { auditLogService } from '../services/audit/index.js'
 import type { AuditLogService } from '../services/audit/index.js'
 import { loadConfig } from '../config/index.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
 
 const EXPORT_RATE_LIMIT = rateLimit({
   namespace: 'ratelimit:audit-export',
@@ -55,17 +56,26 @@ export function createAuditLogRouter(service: AuditLogService = auditLogService)
       const to = req.query.to ? new Date(req.query.to as string) : now
 
       if (isNaN(from.getTime()) || isNaN(to.getTime())) {
-        res.status(400).json({ error: 'InvalidDateRange', message: 'from/to must be valid ISO date strings' })
+        sendError(res, ErrorCode.VALIDATION_FAILED, 'from/to must be valid ISO date strings')
+        return
+      }
+
+      // SECURITY: Scope the export to the caller's own tenant. Never allow a
+      // blanket cross-tenant export — there is no "super admin" role in this
+      // RBAC system, so every admin must be confined to their own tenant.
+      const tenantId = (req as Request & { user?: { tenantId?: string } }).user?.tenantId
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'MissingTenantContext',
+          message: 'Tenant context is required to export audit logs',
+        })
         return
       }
 
       // Validate export window is not too large
       const windowMs = to.getTime() - from.getTime()
       if (windowMs > maxWindowMs) {
-        res.status(400).json({
-          error: 'WindowTooLarge',
-          message: `Export window cannot exceed ${maxWindowDays} days`,
-        })
+        sendError(res, ErrorCode.VALIDATION_FAILED, `Export window cannot exceed ${maxWindowDays} days`)
         return
       }
 
@@ -76,7 +86,7 @@ export function createAuditLogRouter(service: AuditLogService = auditLogService)
 
       let stream: any
       try {
-        stream = service.exportLogsStream(from, to, undefined, { allowSuperScope: true })
+        stream = service.exportLogsStream(from, to, tenantId)
 
         // Set up gzip only after successfully starting the stream
         let outputStream: any = res
@@ -102,7 +112,7 @@ export function createAuditLogRouter(service: AuditLogService = auditLogService)
         }
 
         if (!res.headersSent) {
-          res.status(500).json({ error: 'ExportFailed', message: 'Failed to export audit logs' })
+          sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, 'Failed to export audit logs')
         } else {
           res.end()
         }

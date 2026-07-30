@@ -122,6 +122,14 @@ The test suite covers:
 - Force-exit when grace period expires (exit 1 + metric)
 - Double-signal triggers immediate force-exit
 - SIGTERM arriving before HTTP server is ready
+- Against a real `http.Server` (`src/gracefulShutdown.realServer.test.ts`):
+  a genuinely in-flight request is drained to completion, the pool/Redis are
+  closed, and the process exits 0 well inside the grace period; a request
+  that outlives the grace period instead forces exit 1 at the deadline
+
+## Signal Handling in Production
+
+In the production entrypoint (`src/index.ts`), the process listens for `SIGTERM` and `SIGINT` signals, routing them directly to the `GracefulShutdownManager.shutdown()` method. This ensures that the application executes the full, ordered cleanup process (draining in-flight requests, stopping schedulers, closing database pools, disconnecting Redis, etc.) before exiting.
 
 ## Operational runbook
 

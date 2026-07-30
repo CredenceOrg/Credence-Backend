@@ -4,7 +4,7 @@ import type { AuditLogService } from '../audit/index.js'
 import { AuditAction } from '../audit/index.js'
 
 /** Grace period during which the previous secret remains valid for client verification. */
-const PREVIOUS_SECRET_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
+export const PREVIOUS_SECRET_TTL_MS = 24 * 60 * 60 * 1000 // 24 hours
 
 export class WebhookNotFoundError extends Error {
   constructor(webhookId: string) {
@@ -30,13 +30,14 @@ export class WebhookRotationService {
     webhookId: string,
     actorId: string,
     actorEmail: string,
+    tenantId: string,
     ipAddress?: string,
   ): Promise<WebhookSecretRotationResult> {
     const webhook = await this.store.get(webhookId)
 
     if (!webhook) {
       void this.audit.logAction({
-        tenantId: 'tenant-unknown',
+        tenantId,
         actorId,
         actorEmail,
         action: AuditAction.ROTATE_WEBHOOK_SECRET,
@@ -58,7 +59,7 @@ export class WebhookRotationService {
     await this.store.rotateSecret(webhookId, newSecret, webhook.secret, previousSecretExpiresAt)
 
     void this.audit.logAction({
-      tenantId: 'tenant-unknown',
+      tenantId,
       actorId,
       actorEmail,
       action: AuditAction.ROTATE_WEBHOOK_SECRET,

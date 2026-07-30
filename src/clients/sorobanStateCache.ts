@@ -58,7 +58,7 @@ export interface SorobanStateCacheOptions {
 
 export class SorobanStateCache {
   private readonly ttlMs: number
-  private readonly l1: LRUCache<string, unknown>
+  private readonly l1: LRUCache<string, any>
   private readonly redis: CacheService
   /** Whether caching is disabled (ttlMs === 0). */
   public readonly disabled: boolean
@@ -67,7 +67,7 @@ export class SorobanStateCache {
     this.ttlMs = options.ttlMs
     this.disabled = options.ttlMs === 0
 
-    this.l1 = new LRUCache<string, unknown>({
+    this.l1 = new LRUCache<string, any>({
       max: options.maxL1Entries ?? 500,
       // LRU TTL is in milliseconds; skip when caching is disabled
       ttl: this.disabled ? undefined : this.ttlMs,
@@ -121,10 +121,11 @@ export class SorobanStateCache {
       }
     } catch (err) {
       // Redis errors must never surface as RPC errors — log and fall through
-      logger.warn(
-        { err, key },
-        'sorobanStateCache: Redis get failed, falling through to RPC',
-      )
+      logger.warn({
+        err,
+        key,
+        msg: 'sorobanStateCache: Redis get failed, falling through to RPC',
+      })
     }
 
     sorobanStateCacheMissesTotal.inc(labels)
@@ -156,10 +157,11 @@ export class SorobanStateCache {
       const ttlSeconds = Math.max(1, Math.ceil(this.ttlMs / 1000))
       await this.redis.set(REDIS_NAMESPACE, key, value, ttlSeconds)
     } catch (err) {
-      logger.warn(
-        { err, key },
-        'sorobanStateCache: Redis set failed, entry lives in L1 only',
-      )
+      logger.warn({
+        err,
+        key,
+        msg: 'sorobanStateCache: Redis set failed, entry lives in L1 only',
+      })
     }
   }
 
@@ -176,7 +178,7 @@ export class SorobanStateCache {
     try {
       await this.redis.delete(REDIS_NAMESPACE, key)
     } catch (err) {
-      logger.warn({ err, key }, 'sorobanStateCache: Redis delete failed during invalidate')
+      logger.warn({ err, key, msg: 'sorobanStateCache: Redis delete failed during invalidate' })
     }
   }
 }

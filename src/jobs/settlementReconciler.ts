@@ -1,6 +1,6 @@
 import { Horizon } from '@stellar/stellar-sdk'
 import type { Queryable } from '../db/repositories/queryable.js'
-import { recordSettlementDrift } from '../middleware/metrics.js'
+import { recordSettlementDrift, setSettlementUnmatchedCount } from '../middleware/metrics.js'
 import { logger } from '../utils/logger.js'
 
 export interface SettlementReconcilerOptions {
@@ -15,6 +15,8 @@ export interface SettlementReconcilerOptions {
 }
 
 export interface ReconciliationResult {
+  /** UUID of the persisted run row (null when persistence fails). */
+  runId: string | null
   checked: number
   discrepancies: number
   errors: number
@@ -44,6 +46,7 @@ export class SettlementReconciler {
     this.log('[SettlementReconciler] Starting reconciliation run')
     const startMs = Date.now()
 
+    let runId: string | null = null
     let checked = 0
     let discrepancies = 0
     let errors = 0
@@ -104,7 +107,7 @@ export class SettlementReconciler {
               transactionHash: hash,
               amount: settlement.amount,
               updatedAt: settlement.updated_at
-            })
+            }, runId)
 
             recordSettlementDrift('state_mismatch')
           }
@@ -122,7 +125,7 @@ export class SettlementReconciler {
               amount: settlement.amount,
               updatedAt: settlement.updated_at,
               error: 'Transaction not found on Stellar Horizon'
-            })
+            }, runId)
 
             recordSettlementDrift('missing_on_chain')
           } else {
@@ -144,16 +147,74 @@ export class SettlementReconciler {
       `[SettlementReconciler] Reconciliation run finished. checked=${checked} discrepancies=${discrepancies} errors=${errors} duration=${durationMs}ms`
     )
 
-    return { checked, discrepancies, errors }
+    // Persist run summary
+    runId = await this.persistRunSummary(checked, discrepancies, errors)
+
+    // Update linked findings with the run_id
+    // (findings were inserted during the loop above without a run_id;
+    //  we patch them now that we have the run row)
+    if (runId && discrepancies > 0) {
+      await this.linkFindingsToRun(runId)
+    }
+
+    // Update the Prometheus gauge
+    setSettlementUnmatchedCount(discrepancies)
+
+    return { runId, checked, discrepancies, errors }
   }
 
   /**
-   * Persists a reconciliation finding to the database
+   * Persists a reconciliation run summary to the database.
+   * @returns The UUID of the created run row, or null on failure.
+   */
+  private async persistRunSummary(
+    checked: number,
+    discrepancies: number,
+    errors: number
+  ): Promise<string | null> {
+    try {
+      const res = await this.db.query<{ id: string }>(
+        `INSERT INTO settlement_reconciliation_runs (checked, discrepancies, errors)
+         VALUES ($1, $2, $3)
+         RETURNING id`,
+        [checked, discrepancies, errors]
+      )
+      return res.rows[0]?.id ?? null
+    } catch (err: any) {
+      this.log(
+        `[SettlementReconciler] Failed to persist run summary: ${err?.message || err}`
+      )
+      return null
+    }
+  }
+
+  /**
+   * Links findings that were created during this run (with NULL run_id)
+   * to the newly created run row.
+   */
+  private async linkFindingsToRun(runId: string): Promise<void> {
+    try {
+      await this.db.query(
+        `UPDATE settlement_reconciliation_findings
+         SET run_id = $1
+         WHERE run_id IS NULL`,
+        [runId]
+      )
+    } catch (err: any) {
+      this.log(
+        `[SettlementReconciler] Failed to link findings to run ${runId}: ${err?.message || err}`
+      )
+    }
+  }
+
+  /**
+   * Persists a reconciliation finding to the database.
    */
   private async recordFinding(
     settlementId: string,
     findingType: 'state_mismatch' | 'missing_on_chain',
-    details: Record<string, any>
+    details: Record<string, any>,
+    _runId: string | null
   ): Promise<void> {
     try {
       await this.db.query(

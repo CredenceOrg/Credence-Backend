@@ -33,6 +33,7 @@ export class ApiKeysRepository {
       id: row.id.toString(),
       hashedKey: row.hashed_key,
       prefix: row.prefix,
+      scope: row.scopes[0] as KeyScope,
       scopes: row.scopes as KeyScope[],
       tier: row.tier,
       ownerId: row.owner_id,
@@ -62,6 +63,7 @@ export class ApiKeysRepository {
       id: row.id.toString(),
       hashedKey: row.hashed_key,
       prefix: row.prefix,
+      scope: row.scopes[0] as KeyScope,
       scopes: row.scopes as KeyScope[],
       tier: row.tier,
       ownerId: row.owner_id,
@@ -107,6 +109,7 @@ export class ApiKeysRepository {
     return result.rows.map((row: any) => ({
       id: row.id.toString(),
       prefix: row.prefix,
+      scope: row.scopes[0] as KeyScope,
       scopes: row.scopes as KeyScope[],
       tier: row.tier,
       ownerId: row.owner_id,

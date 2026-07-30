@@ -8,8 +8,12 @@ coverage
 .env.*
 !.env.example
 
+# Generated SBOM (produced by `npm run sbom:generate`)
+sbom.json
+
 # Monitoring data
 monitoring/data/
 prometheus-data/
 grafana-data/
 node_modules
+.kimchi/

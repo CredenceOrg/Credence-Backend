@@ -1,3 +1,4 @@
+import crypto from 'crypto'
 import { newDb } from 'pg-mem'
 import type { IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
@@ -6,6 +7,71 @@ import { createOutboxSchema } from '../schema'
 
 async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
     const db = newDb()
+
+    // Register % operator
+    db.public.registerOperator({
+        operator: '%',
+        left: db.public.getType('integer'),
+        right: db.public.getType('integer'),
+        returns: db.public.getType('integer'),
+        implementation: (a: number, b: number) => a % b
+    })
+
+    // Register md5 function
+    db.public.registerFunction({
+        name: 'md5',
+        args: [db.public.getType('text')],
+        returns: db.public.getType('text'),
+        implementation: (str: string) => {
+            if (str === null || str === undefined) return null
+            return crypto.createHash('md5').update(str).digest('hex')
+        }
+    })
+
+    // Register substr function
+    db.public.registerFunction({
+        name: 'substr',
+        args: [db.public.getType('text'), db.public.getType('integer'), db.public.getType('integer')],
+        returns: db.public.getType('text'),
+        implementation: (str: string, start: number, length: number) => {
+            if (str === null || str === undefined) return null
+            return str.substring(start - 1, start - 1 + length)
+        }
+    })
+
+    // Register hash_md5_id_to_int function
+    db.public.registerFunction({
+        name: 'hash_md5_id_to_int',
+        args: [db.public.getType('integer')],
+        returns: db.public.getType('integer'),
+        implementation: (id: number) => {
+            const hash = crypto.createHash('md5').update(String(id)).digest('hex')
+            const sub = hash.substring(0, 8)
+            return parseInt(sub, 16)
+        }
+    })
+
+    // Intercept query and rewrite cast syntax to use the registered function
+    let interceptor: any
+    const subscribe = () => {
+        interceptor = db.public.interceptQueries(query => {
+            if (query.includes("('x'||substr(md5(id::text),1,8))::bit(32)::int")) {
+                const rewritten = query.replace(
+                    "('x'||substr(md5(id::text),1,8))::bit(32)::int",
+                    "hash_md5_id_to_int(id)"
+                )
+                interceptor.unsubscribe()
+                try {
+                    const res = db.public.query(rewritten)
+                    return res.rows
+                } finally {
+                    subscribe()
+                }
+            }
+            return null
+        })
+    }
+    subscribe()
 
     db.public.registerFunction({
         name: 'gen_random_uuid',
@@ -42,7 +108,11 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
             error_message TEXT,
             trace_id TEXT,
             span_id TEXT,
-            tracestate TEXT
+            tracestate TEXT,
+            shard_count INTEGER,
+            shard_id INTEGER,
+            correlation_id TEXT,
+            publish_idempotency_key TEXT
         );
     `)
 
@@ -131,5 +201,41 @@ describe('Outbox bounded retries and backoff', () => {
         const events = await repo.claimEvents(pool, consumerId, 10, 60)
         // Should skip t1 and return t2 then t3 preserving order
         expect(events.map(e => e.id)).toEqual([BigInt(t2.rows[0].id), BigInt(t3.rows[0].id)])
+    })
+
+    it('caps the backoff delay at 3600s even when 2^retryCount would be far larger', async () => {
+        const insert = await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            ['agg', 'cap2', 't', JSON.stringify({}), 'processing', 15, 20]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const before = Date.now()
+        await repo.markFailed(pool, id, 'timeout')
+
+        const check = await pool.query('SELECT next_attempt_at FROM event_outbox WHERE id = $1', [id.toString()])
+        const nextAttemptAt = new Date(check.rows[0].next_attempt_at).getTime()
+        const deltaSeconds = (nextAttemptAt - before) / 1000
+
+        // Uncapped this would be 2^16 = 65536s (~18 hours); capped it must stay near 3600s.
+        expect(deltaSeconds).toBeGreaterThan(3000)
+        expect(deltaSeconds).toBeLessThanOrEqual(3600 + 5)
+    })
+
+    it('sanitizes the error message before persisting it (truncation + secret redaction)', async () => {
+        const insert = await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+            ['agg', 'sanitize', 't', JSON.stringify({}), 'processing', 0, 5]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const seed = 'S' + 'A'.repeat(55)
+        await repo.markFailed(pool, id, `webhook rejected signer ${seed}`)
+
+        const check = await pool.query('SELECT error_message FROM event_outbox WHERE id = $1', [id.toString()])
+        expect(check.rows[0].error_message).not.toContain(seed)
+        expect(check.rows[0].error_message).toContain('[REDACTED]')
     })
 })

@@ -1,15 +1,22 @@
-﻿export interface BackoffOptions {
+﻿export type JitterStrategy = 'none' | 'full' | 'equal' | 'decorrelated';
+
+export interface BackoffOptions {
   baseMs?: number;
   maxMs?: number;
   maxAttempts?: number;
+  jitter?: JitterStrategy;
+  randomFn?: () => number;
 }
 
 export class BoundedBackoff {
   private readonly baseMs: number;
   private readonly maxMs: number;
   private readonly maxAttempts: number;
+  private readonly jitter: JitterStrategy;
+  private readonly randomFn: () => number;
   private attempt = 0;
   private totalReconnects = 0;
+  private previousDelay: number;
   private pendingTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingReject: ((reason: unknown) => void) | null = null;
   private stopped = false;
@@ -18,6 +25,26 @@ export class BoundedBackoff {
     this.baseMs = opts.baseMs ?? 500;
     this.maxMs = opts.maxMs ?? 30_000;
     this.maxAttempts = opts.maxAttempts ?? 0;
+    this.jitter = opts.jitter ?? 'full';
+    this.randomFn = opts.randomFn ?? Math.random;
+    this.previousDelay = this.baseMs;
+  }
+
+  private computeDelay(cap: number): number {
+    switch (this.jitter) {
+      case 'none':
+        return Math.floor(cap);
+      case 'full':
+        return Math.floor(this.randomFn() * cap);
+      case 'equal': {
+        const half = cap / 2;
+        return Math.floor(half + this.randomFn() * half);
+      }
+      case 'decorrelated': {
+        const delay = Math.floor(this.baseMs + this.randomFn() * (this.previousDelay * 3 - this.baseMs));
+        return Math.min(cap, delay);
+      }
+    }
   }
 
   wait(): Promise<void> {
@@ -27,7 +54,8 @@ export class BoundedBackoff {
         reject({ exhausted: true }); return;
       }
       const cap = Math.min(this.maxMs, this.baseMs * Math.pow(2, this.attempt));
-      const delay = Math.floor(Math.random() * cap);
+      const delay = this.computeDelay(cap);
+      this.previousDelay = delay >= 0 ? delay : 0;
       this.attempt += 1;
       this.totalReconnects += 1;
       this.pendingReject = reject;
@@ -39,7 +67,7 @@ export class BoundedBackoff {
     });
   }
 
-  reset(): void { this.attempt = 0; }
+  reset(): void { this.attempt = 0; this.previousDelay = this.baseMs; }
 
   stop(): void {
     this.stopped = true;

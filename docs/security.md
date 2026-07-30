@@ -1,247 +1,112 @@
-# Security Architecture
-
-## API Key Scope Model
-
-### Granular Scopes (Least Privilege)
-
-Every API key is issued with an explicit set of **scopes** that determine which endpoints it may call. The middleware enforces a **deny-by-default** policy: if the key's granted scopes do not cover the required scope, the request is rejected with `403 Forbidden` before reaching any handler.
-
-| Scope                | Grants access to                                                   |
-|----------------------|--------------------------------------------------------------------|
-| `trust:read`         | Trust scores and bond read endpoints                               |
-| `attestations:read`  | Attestation list and count endpoints                               |
-| `attestations:write` | Create and revoke attestations                                     |
-| `payouts:write`      | Payout / settlement creation                                       |
-| `reports:generate`   | Report job creation and status polling                             |
-| `exports:read`       | Report artifact downloads and audit-log exports                    |
-| `webhooks:admin`     | Webhook secret rotation and revocation                             |
-| `admin:read`         | Admin read operations (users, audit logs, failed events)           |
-| `admin:write`        | Admin write operations (role assignment, key revocation, impersonation, event replay) |
-
-Legacy `public` and `enterprise` values are still accepted and automatically expanded to their respective scope sets (see `docs/api-keys.md`).
-
-### Scope Enforcement Implementation
-
-`src/middleware/auth.ts` exports:
-
-- **`ApiScope`** — enum of all valid scope strings.
-- **`SCOPE_SETS`** — maps legacy tier names to their expanded `Set<ApiScope>`.
-- **`scopeSatisfies(grantedScopes, requiredScope)`** — pure function; returns `true` when the granted set covers the required scope (including legacy expansion).
-- **`requireApiKey(requiredScope)`** — Express middleware factory. Reads the key from `X-API-Key` or `Authorization: Bearer`, validates it, checks scope, and attaches `{ key, scopes, scope }` to `req.apiKey`.
-
-### Scope Assignment at Key Creation
-
-When issuing a key via `generateApiKey` / `InMemoryApiKeyRepository.create`, pass an explicit `scopes` array:
-
-```typescript
-repo.create('owner-id', 'trust:read', 'free', ['trust:read', 'attestations:read'])
-```
-
-The `scopes` array is stored on `StoredApiKey` and preserved through key rotation.
-
-### Security Properties
-
-- **Deny-by-default**: missing or insufficient scope → `403` before handler execution.
-- **No scope escalation**: a key can only be rotated to the same or narrower scope set.
-- **Audit trail**: every `403` response includes `requiredScope` and `grantedScopes` for debugging without leaking key material.
-- **Backward compatibility**: existing `enterprise` keys continue to work and satisfy all granular scopes.
-
----
-
-## Encrypted Evidence Storage
-
-Dispute and slash evidence submitted to the platform often contain sensitive user data. To ensure privacy, security, and integrity, all evidence is encrypted at rest before being saved to the database or object storage.
-
-### Encryption Standard
-- **Algorithm**: AES-256-GCM (Galois/Counter Mode).
-- **Key Management**: Managed via environment variables (`EVIDENCE_ENCRYPTION_KEY`). It must be exactly 32 bytes.
-- **Integrity Validation**: GCM provides an authentication tag (`authTag`). During decryption, this tag ensures the data has not been tampered with or corrupted in the storage layer.
-
-### Access Control (RBAC)
-Access to decrypted evidence is strictly limited using Role-Based Access Control.
-- **USER**: Denied access to view encrypted evidence blobs.
-- **ARBITRATOR**: Granted access to retrieve and decrypt evidence for reviewing active disputes.
-- **GOVERNANCE**: Granted access to retrieve and decrypt evidence for auditing, slashing events, and platform management.
-
-### Evidence Audit Trail
-
-All sensitive evidence actions are written to the immutable audit stream:
-
-### Crypto-Shred for Evidence at End-of-Retention
-
-At end-of-retention (configured per entity via `RETENTION_TTL_EVIDENCE_DAYS`), evidence records are cryptographically shredded to ensure data is permanently unrecoverable.
-
-**Per-row DEK (Data Encryption Key):**
-- Each evidence record generates a random 32-byte AES-256 DEK at upload time.
-- The DEK encrypts the evidence payload (AES-256-GCM).
-- The DEK is itself encrypted ("wrapped") with the tenant-level KEK (AES-256-GCM).
-- Both the ciphertext and the wrapped DEK are stored alongside the record.
-
-**Shred process:**
-1. The `DataRetentionJob` identifies expired evidence records (based on `created_at` + TTL).
-2. Records with `legal_hold = true` are skipped.
-3. For each eligible record:
-   a. A signed proof-of-erasure JWT is created: `{ evidence_id, erased_at, nonce, tenant_id, actor_id }` — signed with the keyManager RSA key (PS256).
-   b. The wrapped DEK, IV, auth tag, and encrypted blob are all zeroized.
-   c. `shredded_at` is set to the current timestamp.
-   d. An `EVIDENCE_SHREDDED` audit log entry is written containing the signed proof JWT.
-4. The metadata row is then soft-deleted (`deleted_at` set, `encrypted_blob` cleared).
-
-**Proof-of-erasure:**
-- Each shred produces a JWT signed by the keyManager (HSM-backed in production).
-- The JWT includes a random UUID nonce, preventing replay attacks.
-- Proofs can be retrieved via `GET /v1/admin/erasure-proof/:id` for regulator response.
-- The audit log's hash chain provides additional tamper evidence.
-
-**Legal hold override:**
-- Evidence flagged with `legal_hold = true` is immune to retention-based crypto-shred.
-- The `setLegalHold(evidenceId, boolean)` method on `EvidenceStorageService` controls this flag.
-
-**Crash recovery:**
-- If a crash occurs during shred, the next retention run checks `shredded_at` on each record.
-- Already-shredded records are idempotently skipped (a new proof is still generated).
-
-## API Key Handling (Integrations)
-
-- **Hashed storage**: API keys are never stored in plain text. Only a SHA-256 hash of the raw key is persisted.
-- **Shown once**: The raw key is returned exactly once at creation/rotation and must be stored securely by the integrator.
-- **Timing-safe validation**: Key comparisons are performed via constant-time hash checks to avoid timing attacks; raw keys are not logged.
-- **Rotation & revocation**: Keys can be rotated or revoked. Rotation issues a new raw key and revokes the previous one; revocation immediately prevents further access.
-- **Test isolation**: Tests should generate keys via the API/key-service helpers and must reset the in-memory store between runs.
-
-Never commit raw API keys, test fixtures with live keys, or example bearer tokens to source control or documentation. Use placeholder values or generated keys in tests and CI only.
-
-- `EVIDENCE_UPLOADED` when evidence is stored
-- `EVIDENCE_ACCESSED` when evidence is decrypted and returned
-
-Each event includes actor metadata, action name, timestamp, and evidence resource id, enabling compliance queries by actor, resource, and time range.
+# Security
 
 ## Rate Limiting
 
+Credence enforces tiered, per-key rate limiting on all `/api/*` routes to prevent
+abuse and ensure fair resource allocation across tenants.
+
 ### Architecture
 
-Rate limiting is enforced in `src/middleware/rateLimit.ts` using Redis fixed-window counters. Two independent counters are maintained per request:
+Two independent **fixed-window counters** are checked per request:
 
-1. **Tenant bucket** — keyed by `ratelimit:<namespace>:tenant:<ownerId>:<windowStart>`. Enforces the tier ceiling shared across all API keys belonging to the same owner.
-2. **Per-key bucket** — keyed by `ratelimit:<namespace>:key:<keyId>:<windowStart>`. Enforces the same tier ceiling scoped to a single API key, preventing one noisy key from exhausting the shared tenant budget.
+| Counter       | Redis key format                    | Scope                                                                 |
+| ------------- | ------------------------------------ | --------------------------------------------------------------------- |
+| Tenant bucket | `ratelimit:api:tenant:<tenantId>`   | Enforces the tier ceiling shared across **all** keys of the same owner |
+| Key bucket    | `ratelimit:api:key:<keyId>:<tier>`  | Prevents a **single** noisy key from exhausting the shared tenant budget |
 
-A request is rejected (HTTP 429) when **either** counter exceeds the limit for the request's subscription tier.
+The key bucket includes the subscription tier in its Redis key so that a key
+changing tiers (e.g. upgrading from `free` to `pro`) receives a fresh counter
+scoped to the new tier.  A request is rejected with HTTP `429` when **either**
+counter exceeds its limit.
 
-### Fail-closed mode (production default)
+### Tiers
 
-When Redis is unavailable the middleware behaviour is controlled by `RATE_LIMIT_FAIL_OPEN`:
+| Tier         | Default limit (per 60 s window) | Configurable via                       |
+| ------------ | ------------------------------- | -------------------------------------- |
+| `free`       | 100 requests                    | `RATE_LIMIT_MAX_FREE`                  |
+| `pro`        | 1 000 requests                  | `RATE_LIMIT_MAX_PRO`                   |
+| `enterprise` | 10 000 requests                 | `RATE_LIMIT_MAX_ENTERPRISE`            |
 
-- **`false` (default in `NODE_ENV=production`)** — the middleware returns `503 Service Unavailable`. This is the secure default: a Redis outage cannot be exploited to bypass rate limits.
-- **`true` (default in `development` / `test`)** — the middleware passes the request through. Useful for local development where Redis may not always be running.
+### Fail-open vs Fail-closed
 
-The catch-block fallback in `src/app.ts` also derives `failOpen` from `NODE_ENV`, so a `validateConfig` failure at startup cannot silently disable limits in production.
+When Redis is unreachable the rate limiter must decide whether to allow or block
+traffic.  This behaviour is controlled by `RATE_LIMIT_FAIL_OPEN`:
 
-### Prometheus metric
+| Mode        | `RATE_LIMIT_FAIL_OPEN`          | Redis-down behaviour                        | Default                        |
+| ----------- | ------------------------------- | ------------------------------------------- | ------------------------------ |
+| **Fail-closed** | `false`                    | Returns `503 Service Unavailable`           | **Production** (safe default)  |
+| **Fail-open**   | `true`                     | Passes the request through with full budget | Dev / test environments        |
 
-`rate_limit_rejected_total` (counter) is incremented on every rejected request with labels:
+**Security rationale:** Fail-closed is the safe default in production.  If an
+attacker can trigger a Redis outage (e.g. via resource exhaustion), fail-open
+would let them bypass rate limiting entirely and hammer the API without
+restriction.  With fail-closed, the attack surface shrinks: Redis down means
+the API is unavailable rather than unprotected.
 
-| Label | Values |
-|-------|--------|
-| `tier` | `free`, `pro`, `enterprise` |
-| `key_id` | API key id, or `none` |
-| `reason` | `tenant_limit`, `key_limit`, `redis_unavailable` |
+### Startup Validation
 
-`rate_limit_hits_total` (counter) is emitted for each request that exceeds either the tenant or per-key quota. Labels:
+The application performs the following safety checks at startup:
 
-| Label | Values |
-|-------|--------|
-| `tenant` | Resolved tenant identifier, or `unknown` for unauthenticated requests |
-| `tier` | `free`, `pro`, `enterprise` |
+1. **Config validation** (`src/config/index.ts`): The `envSchema.superRefine`
+   rejects production deployments that explicitly set
+   `RATE_LIMIT_FAIL_OPEN=true` or `AUTH_RATE_LIMIT_FAIL_OPEN=true`.
+   This prevents operators from accidentally deploying with rate limiting
+   disabled during Redis outages.
 
-### Environment variables
+2. **Catch-block fallback** (`src/app.ts`): If environment validation throws
+   (e.g. missing required vars), the fallback defaults to **fail-closed** in
+   production (`failOpen: false`) and logs an error-level message so the issue
+   is visible in monitoring.
 
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `RATE_LIMIT_ENABLED` | `true` | Enable / disable rate limiting |
-| `RATE_LIMIT_WINDOW_SEC` | `60` | Fixed-window size in seconds |
-| `RATE_LIMIT_MAX_FREE` | `100` | Max requests per window for free tier |
-| `RATE_LIMIT_MAX_PRO` | `1000` | Max requests per window for pro tier |
-| `RATE_LIMIT_MAX_ENTERPRISE` | `10000` | Max requests per window for enterprise tier |
-| `RATE_LIMIT_FAIL_OPEN` | `false` in prod, `true` in dev/test | Fail-open (`true`) or fail-closed (`false`) on Redis error |
+3. **Per-route helpers**: The `rateLimit()` backward-compatible helper also
+   defaults fail-closed in production unless explicitly overridden.
 
-### Security considerations
+### Response Headers
 
-- **Misconfiguration cannot disable limits in production.** The `RATE_LIMIT_FAIL_OPEN` default is `false` when `NODE_ENV=production`, and the startup fallback in `src/app.ts` mirrors this.
-- **Key identifiers are never stored in plain text.** When no authenticated record is present, the tenant id is derived from a truncated SHA-256 hash of the API key or Bearer token.
-- **Per-key isolation** ensures that a compromised or misbehaving key cannot exhaust the rate budget of other keys belonging to the same tenant.
+| Header                  | Description                                               |
+| ----------------------- | --------------------------------------------------------- |
+| `X-RateLimit-Limit`     | Max requests allowed in the current window                |
+| `X-RateLimit-Remaining` | Requests remaining (tighter of tenant vs key budget)      |
+| `X-RateLimit-Reset`     | Unix timestamp when the window resets                     |
+| `Retry-After`           | Seconds before retrying (only on `429`)                   |
 
-## Secret Scanning Response Playbook
+### Prometheus Metrics
 
-- **Detect**: Gitleaks runs in CI weekly and as a pre‑commit hook. If a secret is found, the CI job fails and the pre‑commit aborts.
-- **Alert**: The CI workflow uploads a `gitleaks-report.json` artifact. Review the findings in the GitHub Actions UI.
-- **Triage**:
-  - Verify the secret is indeed exposed and not an allow‑listed fixture.
-  - Determine the severity (e.g., exposed private key vs. dummy token).
-- **Remediation**:
-  - Revoke the leaked credential immediately (rotate API keys, reset passwords, invalidate tokens).
-  - Remove the secret from the repository history using `git filter-repo` or `bfg` if necessary, then force‑push.
-  - Update the `.gitleaks.toml` allowlist if the secret is a legitimate test fixture.
-- **Post‑mortem**:
-  - Document the incident in the security incident log.
-  - Add unit tests to ensure similar patterns are caught by the allowlist.
-  - Review CI configuration to ensure no secrets leak in future releases.
+| Metric                         | Labels                  | Description                              |
+| ------------------------------ | ----------------------- | ---------------------------------------- |
+| `rate_limit_rejected_total`    | `tier`, `key_id`, `reason` | Counter of rejected requests by rejection reason (`tenant_limit`, `key_limit`, `redis_unavailable`) |
+| `rate_limit_hits_total`        | `tenant`, `tier`         | Counter of rate limit hits by tenant and tier |
 
-For more details see the [Gitleaks documentation](https://github.com/gitleaks/gitleaks).
+### X-Forwarded-For Spoofing Prevention
 
----
+The rate limiter uses `req.socket.remoteAddress` (the TCP-layer peer address)
+instead of `req.ip` to determine the client IP.  When Express `trust proxy` is
+enabled, `req.ip` is derived from the leftmost `X-Forwarded-For` entry — which
+is fully attacker-controlled.  Using `socket.remoteAddress` eliminates this
+attack vector; an adversary cannot rotate their IP by forging headers.
 
-## Dependency Vulnerability Scanning & SLAs
+### Tenant Isolation
 
-To ensure a secure supply chain, the platform automatically scans third-party dependencies for known Common Vulnerabilities and Exposures (CVEs) and enforces strict response time Service Level Agreements (SLAs).
+Each authenticated tenant's rate limit is tracked independently.
+Unauthenticated requests are rate-limited per IP address (via
+`socket.remoteAddress`).  Tenant overrides (configured via the admin
+`/api/admin/rate-limit-overrides` endpoints) can raise or lower the effective
+tier ceiling on a per-tenant basis without affecting other tenants.
 
-### Scanning Architecture
+### Environment Variables
 
-Vulnerability scanning is orchestrated in `.github/workflows/vuln-scan.yml` and is triggered on every Pull Request targeting `main`/`develop` as well as on a **nightly cron schedule** (at 00:00 UTC).
+| Variable                       | Default (dev) | Default (prod) | Description                             |
+| ------------------------------ | ------------- | -------------- | --------------------------------------- |
+| `RATE_LIMIT_ENABLED`           | `true`        | `true`         | Master switch for API rate limiting     |
+| `RATE_LIMIT_WINDOW_SEC`        | `60`          | `60`           | Fixed-window duration in seconds        |
+| `RATE_LIMIT_MAX_FREE`          | `100`         | `100`          | Requests per window for free tier       |
+| `RATE_LIMIT_MAX_PRO`           | `1000`        | `1000`         | Requests per window for pro tier        |
+| `RATE_LIMIT_MAX_ENTERPRISE`    | `10000`       | `10000`        | Requests per window for enterprise tier |
+| `RATE_LIMIT_FAIL_OPEN`         | `true`        | `false`        | Redis-down behaviour (see above)        |
+| `AUTH_RATE_LIMIT_ENABLED`      | `true`        | `true`         | Master switch for auth rate limiting    |
+| `AUTH_RATE_LIMIT_WINDOW_SEC`   | `60`          | `60`           | Auth rate-limit window duration         |
+| `AUTH_RATE_LIMIT_MAX_PER_TENANT` | `20`        | `20`           | Max auth requests per tenant per window |
+| `AUTH_RATE_LIMIT_FAIL_OPEN`    | `true`        | `false`        | Auth rate-limit Redis-down behaviour    |
 
-The pipeline runs two complementary scanning engines:
-1. **`npm audit` (Production-only)**: Focused specifically on production runtime dependencies (`npm audit --omit=dev`), ensuring that development tools (like local compilers or test libraries) do not block release workflows unless they present runtime risk.
-2. **Trivy SBOM Scan (`trivy fs .`)**: Conducts a complete filesystem-level static security scan across all packages, lockfiles, and configuration declarations.
-
-A custom-built, fully unit-tested severity gate engine (`scripts/security-gate.ts`) parses the output of both tools. If any vulnerability is found matching or exceeding the configured severity threshold (default is **HIGH**), the script prints the offending advisory details and exits with `1`, **failing the build**.
-
-### Pull Request SBOM Component Diff
-
-`.github/workflows/sbom-diff.yml` runs on pull requests to `main` and `develop`. The workflow checks out both the pull request head and base commit, generates CycloneDX SBOM files for each dependency graph, and runs `scripts/sbom-component-diff.js` to compare their component lists.
-
-The workflow posts or updates a single pull request comment named **SBOM component changes**. The comment shows the count and names of components added by the pull request and components removed relative to the base branch, giving operators and downstream consumers a quick supply-chain review surface without downloading SBOM artifacts.
-
-Developers can run the same local smoke check with:
-
-```bash
-npm run sbom:check
-```
-
-### Response SLA Matrix
-
-Vulnerabilities discovered in production dependencies must be triaged, patched, and resolved according to the following strict SLA timeline:
-
-| Severity Level | Definition | SLA for Resolution / Mitigation | Enforced CI Gate |
-| :--- | :--- | :--- | :--- |
-| **SEV1 (Critical & High)** | CVEs classified as High or Critical (CVSS $\ge 7.0$). Poses immediate risk of exposure, data leak, or compromise. | **Within 24 Hours** from detection. | Yes (Blocks build immediately) |
-| **SEV2 (Medium / Moderate)** | CVEs classified as Medium or Moderate (CVSS $4.0 - 6.9$). Lower exploitability or limited impact. | **Within 7 Days** from detection. | Alerting / Policy Warning |
-| **SEV3 (Low)** | CVEs classified as Low (CVSS $< 4.0$) or located in development-only dependencies. | Best effort (Targeted in next minor/patch release). | No |
-
-### Auto-PR Grouping & Renovate Configuration
-
-Dependency updates are automated using **Renovate** (`renovate.json`). Security patches and upgrades are automatically generated and grouped by ecosystem to prevent PR fatigue:
-* **`npm-ecosystem-updates`**: Groups all JavaScript/TypeScript runtime and dev package updates.
-* **`github-actions-updates`**: Groups GitHub Actions workflow updates.
-* **`docker-ecosystem-updates`**: Groups base image updates for Dockerfiles and Compose configurations.
-
-> [!IMPORTANT]
-> **Manual Human Review Gate**: Renovate is strictly configured to **never auto-merge major version upgrades** (`automerge: false`). All major dependency upgrades require developer triage, comprehensive integration test suite passes, and peer approval to protect against breaking API changes and supply chain injection.
-
-### Handling False Positives, Ignored CVEs & Overrides
-
-When an upstream dependency contains a vulnerability that cannot be immediately patched (e.g., no patch version is available yet) or represents a confirmed false positive that is non-exploitable in our architecture:
-1. Conduct an impact assessment with security owners.
-2. If approved, add the package or specific CVE ID to the ignore allowlist in the pipeline:
-   ```bash
-   npx tsx scripts/security-gate.ts --file audit-report.json --threshold high --ignore-cve CVE-YYYY-XXXXX --ignore-pkg package-name
-   ```
-3. Document the bypass justification, the expiration date of the exception, and the signed security ticket reference in the commit message and PR description.
+> **Warning:** Do not set `RATE_LIMIT_FAIL_OPEN=true` in production.  The
+> application will refuse to start with this configuration.

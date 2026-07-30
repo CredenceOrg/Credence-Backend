@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import dotenv from 'dotenv'
+import { logger } from '../utils/logger.js'
 import {
   enforceRetryPolicyCaps,
   type ProviderRetryPolicies,
@@ -7,6 +8,10 @@ import {
   type RetryPolicy,
   type RetryPolicyOverrides,
 } from '../lib/retryPolicy.js'
+import {
+  type ExtendedRetryPolicy,
+  type ExtendedRetryPolicyOverrides,
+} from '../clients/retryExecutor.js'
 
 dotenv.config()
 
@@ -17,12 +22,30 @@ export const envSchema = z.object({
       .default('600') // 10 minutes
       .transform(Number)
       .pipe(z.number().int().min(60).max(86400)),
+    // Bond cache TTL (seconds)
+    BOND_CACHE_TTL_SECONDS: z
+      .string()
+      .default('300') // 5 minutes
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(86400)),
+    // Attestation cache TTL (seconds)
+    ATTESTATION_CACHE_TTL_SECONDS: z
+      .string()
+      .default('300') // 5 minutes
+      .transform(Number)
+      .pipe(z.number().int().min(1).max(86400)),
     // Webhook payload size cap in bytes
     WEBHOOK_PAYLOAD_SIZE_CAP: z
       .string()
       .default('262144') // 256 KiB
       .transform(Number)
       .pipe(z.number().int().min(1024).max(10485760)), // 1KB to 10MB
+    // Node.js max old space size (MB) - sets --max-old-space-size
+    NODE_MAX_OLD_SPACE_SIZE_MB: z
+      .string()
+      .optional()
+      .transform(val => val ? Number(val) : undefined)
+      .pipe(z.union([z.undefined(), z.number().int().min(128).max(32768)])), // 128MB to 32GB
   // Server
   PORT: z
     .string()
@@ -45,7 +68,7 @@ export const envSchema = z.object({
     .pipe(z.number().int().min(1).max(200)),
   DB_POOL_IDLE_TIMEOUT_MS: z
     .string()
-    .default('30000')
+    .default('300000') // 5 minutes: kills idle connections to keep pool counts predictable (#724)
     .transform(Number)
     .pipe(z.number().int().min(0)),
   DB_POOL_CONNECTION_TIMEOUT_MS: z
@@ -53,6 +76,11 @@ export const envSchema = z.object({
     .default('5000')
     .transform(Number)
     .pipe(z.number().int().min(1000).max(30000)),
+  DB_TENANT_CONNECTION_BUDGET: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(200)),
   DB_STATEMENT_TIMEOUT_MS: z
     .string()
     .default('30000')
@@ -63,6 +91,30 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1).max(50)),
+  /**
+   * Maximum connections in the read-replica pool. Falls back to DB_POOL_MAX
+   * when unset, so a single knob resizes the primary pool and the replica
+   * pool together by default. Set explicitly if the replica node should run
+   * with a different connection budget than the primary (#887).
+   */
+  DB_REPLICA_POOL_MAX: z
+    .string()
+    .optional()
+    .transform((val) => (val !== undefined && val !== '' ? Number(val) : undefined))
+    .pipe(z.union([z.undefined(), z.number().int().min(1).max(200)])),
+  /**
+   * Maximum acceptable replication lag (ms) before withReplica() falls back
+   * to the primary pool. Default: 1000 ms.
+   *
+   * Deliberately kept without a DB_ prefix to match the existing documented
+   * name in docs/architecture.md — renaming would silently break any
+   * deployment that already sets this variable.
+   */
+  MAX_REPLICA_LAG_MS: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
   DB_LOCK_TIMEOUT_READONLY_MS: z
     .string()
     .default('1000')
@@ -78,6 +130,29 @@ export const envSchema = z.object({
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(100).max(60000)),
+  /**
+   * Minimum query duration (ms) that triggers a slow-query log entry with
+   * the query's EXPLAIN plan attached. Set to 0 to disable. Default: 1000
+   * (1 second) — see docs/observability.md#slow-query-logging.
+   */
+  SLOW_QUERY_THRESHOLD_MS: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  /**
+   * Maximum number of distinct query-text shapes tracked per pool in the
+   * prepared-statement name cache (see src/db/pool.ts). Bounds server-side
+   * prepared-statement memory; queries evicted from the cache still work,
+   * they just fall back to an unnamed (re-parsed) statement until they're
+   * reused often enough to re-enter the cache. Default: 200 — see
+   * docs/observability.md#prepared-statement-cache.
+   */
+  DB_PREPARED_STATEMENT_CACHE_MAX: z
+    .string()
+    .default('200')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10000)),
 
   // Redis
   REDIS_URL: z.string().url({ message: 'REDIS_URL must be a valid URL' }),
@@ -111,9 +186,26 @@ export const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().nonnegative()),
 
+  /**
+   * Max-age (seconds) for the Cache-Control header on the JWKS endpoint.
+   * Default: 300 (5 minutes).
+   */
+  JWKS_CACHE_MAX_AGE_SECONDS: z
+    .string()
+    .default('300')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+
   // JWT key rotation — private key source
   KEY_PRIVATE_PEM: z.string().optional(),
   KEY_INITIAL_KID: z.string().optional(),
+
+  // Dev mode – enables dev-only endpoints (e.g. fault injection for chaos testing).
+  // Must NOT be set to "true" in production.
+  DEV_MODE: z
+    .string()
+    .default('false')
+    .transform((val: string) => val === 'true'),
 
   // Feature flags
   ENABLE_TRUST_SCORING: z
@@ -124,6 +216,15 @@ export const envSchema = z.object({
     .string()
     .default('false')
     .transform((val: string) => val === 'true'),
+  MAINTENANCE_MODE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val: string) => val === 'true'),
+  MAINTENANCE_MODE_RETRY_AFTER_SECONDS: z
+    .string()
+    .default('60')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(86400)),
 
   // Outbox
   OUTBOX_ENABLED: z
@@ -155,6 +256,22 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+
+  // Outbox worker leadership lease (advisory-lock based)
+  OUTBOX_LEADER_LEASE_ENABLED: z
+    .string()
+    .default('false')
+    .transform((val) => val === 'true'),
+  OUTBOX_LEADER_LEASE_RETRY_MS: z
+    .string()
+    .default('5000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(60000)),
+  OUTBOX_LEADER_LEASE_HEARTBEAT_MS: z
+    .string()
+    .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(60000)),
 
   // Request snapshots retention
   REQUEST_SNAPSHOT_RETENTION_DAYS: z
@@ -206,7 +323,24 @@ export const envSchema = z.object({
   OUTBOUND_RETRY_WEBHOOK_BACKOFF_MULTIPLIER: z.coerce.number().min(1).optional(),
   OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY: z.enum(['none', 'full', 'equal']).optional(),
 
+  // Custom retryable errors and status codes
+  OUTBOUND_RETRY_DEFAULT_RETRYABLE_STATUS_CODES: z.string().optional(),
+  OUTBOUND_RETRY_DEFAULT_RETRYABLE_ERRORS: z.string().optional(),
+
+  OUTBOUND_RETRY_SOROBAN_RETRYABLE_STATUS_CODES: z.string().optional(),
+  OUTBOUND_RETRY_SOROBAN_RETRYABLE_ERRORS: z.string().optional(),
+  OUTBOUND_RETRY_SOROBAN_TIMEOUT_MS: z.coerce.number().int().min(1).optional(),
+
+  OUTBOUND_RETRY_WEBHOOK_RETRYABLE_STATUS_CODES: z.string().optional(),
+  OUTBOUND_RETRY_WEBHOOK_RETRYABLE_ERRORS: z.string().optional(),
+  OUTBOUND_RETRY_WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1).optional(),
+
   // Timeout budgets
+  TIMEOUT_GLOBAL_MS: z
+    .string()
+    .default('30000') // 30s default global budget
+    .transform(Number)
+    .pipe(z.number().int().min(1000).max(300000)),
   TIMEOUT_DB_MS: z
     .string()
     .default('2000')
@@ -272,11 +406,39 @@ export const envSchema = z.object({
       return process.env.NODE_ENV !== 'production'
     }),
 
+  // Auth endpoint rate limiting (login / refresh)
+  AUTH_RATE_LIMIT_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val: string) => val === 'true'),
+  AUTH_RATE_LIMIT_WINDOW_SEC: z
+    .string()
+    .default('60')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(3600)),
+  AUTH_RATE_LIMIT_MAX_PER_TENANT: z
+    .string()
+    .default('20')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  AUTH_RATE_LIMIT_FAIL_OPEN: z
+    .string()
+    .optional()
+    .transform((val) => {
+      if (val !== undefined) return val === 'true'
+      return process.env.NODE_ENV !== 'production'
+    }),
+
   // Credits / billing
   ENDPOINT_COST_WEIGHTS: z.string().default('{"default":1,"/bulk/verify":10,"/reports":5}'),
   DEFAULT_MONTHLY_CREDITS: z
     .string()
     .default('10000')
+    .transform(Number)
+    .pipe(z.number().int().min(0)),
+  DEFAULT_LOW_CREDIT_THRESHOLD: z
+    .string()
+    .default('100')
     .transform(Number)
     .pipe(z.number().int().min(0)),
 
@@ -323,11 +485,34 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
-  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+  /**
+   * How long (ms) the breaker stays OPEN and rejects all requests immediately
+   * after tripping. Default: 10 000 ms (10 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS: z
     .string()
     .default('10000')
     .transform(Number)
     .pipe(z.number().int().min(1000)),
+  /**
+   * How long (ms) after the breaker trips before a probe is allowed.
+   * Must be ≥ SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS. Default: 30 000 ms (30 s).
+   */
+  SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS: z
+    .string()
+    .default('30000')
+    .transform(Number)
+    .pipe(z.number().int().min(1000)),
+  /**
+   * @deprecated Use SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS instead.
+   * Kept for backwards compatibility; maps to halfOpenAfterMs when the new
+   * variable is not set.
+   */
+  SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: z
+    .string()
+    .optional()
+    .transform((v) => (v !== undefined ? Number(v) : undefined))
+    .pipe(z.number().int().min(1000).optional()),
   /**
    * Short-TTL read-through cache for getIdentityState() responses.
    * Set to 0 to disable caching entirely.
@@ -346,12 +531,108 @@ export const envSchema = z.object({
     .transform(Number)
     .pipe(z.number().int().min(1).max(3650)),
 
+  /**
+   * Maximum rows allowed in a single authenticated data export.
+   * Requests that would exceed this are rejected before streaming starts.
+   */
+  EXPORT_MAX_ROWS: z
+    .string()
+    .default('100000')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10_000_000)),
+
   // Report generation
   REPORT_MAX_CONCURRENT_JOBS_PER_ORG: z
     .string()
     .default('10')
     .transform(Number)
     .pipe(z.number().int().min(0).max(1000)),
+
+  // Metrics endpoint CIDR whitelist (comma-separated IPv4 CIDRs)
+  METRICS_ALLOWED_CIDRS: z.string().optional(),
+
+  // Idempotency middleware
+  /** TTL in seconds for idempotency keys (default: 86400 = 24 hours). */
+  IDEMPOTENCY_TTL_SECONDS: z
+    .string()
+    .default('86400')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(604800)), // 1 s to 7 days
+  /** Interval in ms between idempotency key sweeper runs (default: 3600000 = 1 hour). */
+  IDEMPOTENCY_SWEEPER_INTERVAL_MS: z
+    .string()
+    .default('3600000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)), // minimum 1 minute
+
+  // Expired-sessions sweeper
+  /** TTL in seconds for session rows (default: 86400 = 24 hours). */
+  SESSION_TTL_SECONDS: z
+    .string()
+    .default('86400')
+    .transform(Number)
+    .pipe(z.number().int().min(60).max(2592000)), // 1 min to 30 days
+  /** Interval in ms between expired-sessions sweeper runs (default: 3600000 = 1 hour). */
+  SESSION_SWEEP_INTERVAL_MS: z
+    .string()
+    .default('3600000')
+    .transform(Number)
+    .pipe(z.number().int().min(60000)), // minimum 1 minute
+
+  // Response compression
+  /**
+   * Master switch for the response-compression middleware (default: true).
+   * When false, the application never compresses responses; useful for local
+   * debugging without gzip overhead.
+   */
+  COMPRESSION_ENABLED: z
+    .string()
+    .default('true')
+    .transform((val) => val === 'true'),
+  /**
+   * Minimum response body size in bytes before compression is applied
+   * (default: 1024). Responses smaller than this are sent uncompressed to
+   * avoid wasting CPU on tiny payloads where the gzip header overhead exceeds
+   * the savings. Clamped to a safe band [0, 10 MiB].
+   */
+  COMPRESSION_THRESHOLD_BYTES: z
+    .string()
+    .default('1024')
+    .transform(Number)
+    .pipe(z.number().int().min(0).max(10485760)),
+}).superRefine((data, ctx) => {
+  if (data.NODE_ENV === 'production' && data.CORS_ORIGIN === '*') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['CORS_ORIGIN'],
+      message: 'Wildcard CORS origin (*) is prohibited in production environment',
+    })
+  }
+
+  // Security guard: explicitly setting fail-open in production silently
+  // disables rate limiting when Redis is unavailable.  This check catches
+  // the misconfiguration at startup before it can be exploited.
+  if (data.NODE_ENV === 'production' && process.env.RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables rate limiting when Redis is unavailable — exposing the API to abuse. ' +
+        'Remove RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
+
+  if (data.NODE_ENV === 'production' && process.env.AUTH_RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['AUTH_RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'AUTH_RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables auth rate limiting when Redis is unavailable. ' +
+        'Remove AUTH_RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -360,9 +641,18 @@ export interface Config {
   trustScoreCache: {
     ttl: number
   }
+  bondCache: {
+    ttl: number
+  }
+  attestationCache: {
+    ttl: number
+  }
   port: number
   nodeEnv: 'development' | 'production' | 'test'
   logLevel: 'debug' | 'info' | 'warn' | 'error'
+  memory: {
+    maxOldSpaceSizeMb?: number
+  }
   db: {
     url: string
     lockTimeouts: {
@@ -379,6 +669,16 @@ export interface Config {
     workerPool: {
       max: number
     }
+    replicaPool: {
+      /** Maximum connections in the read-replica pool. Defaults to db.pool.max when DB_REPLICA_POOL_MAX is unset. */
+      max: number
+    }
+    /** Maximum acceptable replica lag (ms) before withReplica() falls back to the primary pool. */
+    maxReplicaLagMs: number
+    /** Minimum query duration (ms) that triggers a slow-query log entry. 0 disables. */
+    slowQueryThresholdMs: number
+    /** Max distinct query-text shapes tracked per pool in the prepared-statement name cache. */
+    preparedStatementCacheMax: number
   }
   redis: {
     url: string
@@ -397,10 +697,17 @@ export interface Config {
     privateKeyPem?: string
     /** Optional kid assigned to the key loaded from privateKeyPem. */
     initialKid?: string
+    /** Max-age (seconds) for the JWKS endpoint Cache-Control header. */
+    jwksCacheMaxAgeSeconds: number
   }
+  devMode: boolean
   features: {
     trustScoring: boolean
     bondEvents: boolean
+  }
+  maintenanceMode: {
+    enabled: boolean
+    retryAfterSeconds: number
   }
   outbox: {
     enabled: boolean
@@ -409,6 +716,11 @@ export interface Config {
     publishedRetentionDays: number
     failedRetentionDays: number
     cleanupIntervalMs: number
+    leaderLease: {
+      enabled: boolean
+      retryIntervalMs: number
+      heartbeatIntervalMs: number
+    }
   }
   requestSnapshots: {
     retentionDays: number
@@ -425,6 +737,7 @@ export interface Config {
     origin: string
   }
   timeouts: {
+    global: number
     db: number
     cache: number
     queue: number
@@ -434,8 +747,8 @@ export interface Config {
   }
   outboundHttp: {
     retry: {
-      defaults: RetryPolicy
-      providers: Record<string, RetryPolicyOverrides | undefined>
+      defaults: ExtendedRetryPolicy
+      providers: Record<string, ExtendedRetryPolicyOverrides | undefined>
     }
   }
   rateLimit: {
@@ -444,6 +757,12 @@ export interface Config {
     maxFree: number
     maxPro: number
     maxEnterprise: number
+    failOpen: boolean
+  }
+  authRateLimit: {
+    enabled: boolean
+    windowSec: number
+    maxPerTenant: number
     failOpen: boolean
   }
   reputation: {
@@ -457,7 +776,16 @@ export interface Config {
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
-    cooldownPeriodMs: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs: number
   }
   sorobanStateCache: {
     /** TTL in milliseconds. 0 = disabled. */
@@ -466,12 +794,36 @@ export interface Config {
   auditLog: {
     exportMaxWindowDays: number
   }
+  export: {
+    /** Max rows per authenticated export; oversized requests are rejected early. */
+    maxRows: number
+  }
   reports: {
     maxConcurrentJobsPerOrg: number
   }
   endpointCostWeights: Record<string, number>
   credits: {
     defaultMonthly: number
+    defaultLowCreditThreshold: number
+  }
+  metricsAllowedCidrs: string[] | undefined
+  idempotency: {
+    /** TTL in seconds for HTTP idempotency keys. Default: 86400 (24 h). */
+    ttlSeconds: number
+    /** Interval in ms between sweeper cleanup runs. Default: 3600000 (1 h). */
+    sweeperIntervalMs: number
+  }
+  sessionSweep: {
+    /** TTL in seconds for session rows. Default: 86400 (24 h). */
+    ttlSeconds: number
+    /** Interval in ms between sweeper runs. Default: 3600000 (1 h). */
+    sweepIntervalMs: number
+  }
+  compression: {
+    /** Whether response compression is enabled. Default: true. */
+    enabled: boolean
+    /** Minimum response body size in bytes before compression is applied. Default: 1024. */
+    thresholdBytes: number
   }
 }
 
@@ -487,7 +839,7 @@ function parseCostWeights(raw: string): Record<string, number> {
   }
 }
 
-function hasRetryOverride(overrides: RetryPolicyOverrides): boolean {
+function hasRetryOverride(overrides: ExtendedRetryPolicyOverrides): boolean {
   return Object.values(overrides).some((value) => value !== undefined)
 }
 
@@ -497,28 +849,48 @@ function createRetryOverride(params: {
   maxDelayMs?: number
   backoffMultiplier?: number
   jitterStrategy?: RetryJitterStrategy
-}): RetryPolicyOverrides | undefined {
-  const overrides: RetryPolicyOverrides = {
+  retryableErrors?: string[]
+  retryableStatusCodes?: number[]
+  timeoutMs?: number
+}): ExtendedRetryPolicyOverrides | undefined {
+  const overrides: ExtendedRetryPolicyOverrides = {
     maxAttempts: params.maxAttempts,
     baseDelayMs: params.baseDelayMs,
     maxDelayMs: params.maxDelayMs,
     backoffMultiplier: params.backoffMultiplier,
     jitterStrategy: params.jitterStrategy,
+    retryableErrors: params.retryableErrors,
+    retryableStatusCodes: params.retryableStatusCodes,
+    timeoutMs: params.timeoutMs,
   }
 
   return hasRetryOverride(overrides) ? overrides : undefined
 }
 
-function mapEnvToConfig(env: Env): Config {
-  const defaultRetryPolicy = enforceRetryPolicyCaps({
-    maxAttempts: env.OUTBOUND_RETRY_MAX_ATTEMPTS,
-    baseDelayMs: env.OUTBOUND_RETRY_BASE_DELAY_MS,
-    maxDelayMs: env.OUTBOUND_RETRY_MAX_DELAY_MS,
-    backoffMultiplier: env.OUTBOUND_RETRY_BACKOFF_MULTIPLIER,
-    jitterStrategy: env.OUTBOUND_RETRY_JITTER_STRATEGY,
-  })
+const parseCommaSeparatedNumbers = (val?: string): number[] | undefined => {
+  if (!val) return undefined
+  return val.split(',').map(s => parseInt(s.trim(), 10)).filter(n => !isNaN(n))
+}
 
-  const providerPolicies: Record<string, RetryPolicyOverrides | undefined> = {}
+const parseCommaSeparatedStrings = (val?: string): string[] | undefined => {
+  if (!val) return undefined
+  return val.split(',').map(s => s.trim()).filter(s => s.length > 0)
+}
+
+function mapEnvToConfig(env: Env): Config {
+  const defaultRetryPolicy = {
+    ...enforceRetryPolicyCaps({
+      maxAttempts: env.OUTBOUND_RETRY_MAX_ATTEMPTS,
+      baseDelayMs: env.OUTBOUND_RETRY_BASE_DELAY_MS,
+      maxDelayMs: env.OUTBOUND_RETRY_MAX_DELAY_MS,
+      backoffMultiplier: env.OUTBOUND_RETRY_BACKOFF_MULTIPLIER,
+      jitterStrategy: env.OUTBOUND_RETRY_JITTER_STRATEGY,
+    }),
+    retryableErrors: parseCommaSeparatedStrings(env.OUTBOUND_RETRY_DEFAULT_RETRYABLE_ERRORS),
+    retryableStatusCodes: parseCommaSeparatedNumbers(env.OUTBOUND_RETRY_DEFAULT_RETRYABLE_STATUS_CODES),
+  }
+
+  const providerPolicies: Record<string, ExtendedRetryPolicyOverrides | undefined> = {}
 
   const sorobanOverride = createRetryOverride({
     maxAttempts: env.OUTBOUND_RETRY_SOROBAN_MAX_ATTEMPTS,
@@ -526,6 +898,9 @@ function mapEnvToConfig(env: Env): Config {
     maxDelayMs: env.OUTBOUND_RETRY_SOROBAN_MAX_DELAY_MS,
     backoffMultiplier: env.OUTBOUND_RETRY_SOROBAN_BACKOFF_MULTIPLIER,
     jitterStrategy: env.OUTBOUND_RETRY_SOROBAN_JITTER_STRATEGY,
+    retryableErrors: parseCommaSeparatedStrings(env.OUTBOUND_RETRY_SOROBAN_RETRYABLE_ERRORS),
+    retryableStatusCodes: parseCommaSeparatedNumbers(env.OUTBOUND_RETRY_SOROBAN_RETRYABLE_STATUS_CODES),
+    timeoutMs: env.OUTBOUND_RETRY_SOROBAN_TIMEOUT_MS,
   })
 
   if (sorobanOverride) {
@@ -538,6 +913,9 @@ function mapEnvToConfig(env: Env): Config {
     maxDelayMs: env.OUTBOUND_RETRY_WEBHOOK_MAX_DELAY_MS,
     backoffMultiplier: env.OUTBOUND_RETRY_WEBHOOK_BACKOFF_MULTIPLIER,
     jitterStrategy: env.OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY,
+    retryableErrors: parseCommaSeparatedStrings(env.OUTBOUND_RETRY_WEBHOOK_RETRYABLE_ERRORS),
+    retryableStatusCodes: parseCommaSeparatedNumbers(env.OUTBOUND_RETRY_WEBHOOK_RETRYABLE_STATUS_CODES),
+    timeoutMs: env.OUTBOUND_RETRY_WEBHOOK_TIMEOUT_MS,
   })
 
   if (webhookOverride) {
@@ -548,6 +926,9 @@ function mapEnvToConfig(env: Env): Config {
     port: env.PORT,
     nodeEnv: env.NODE_ENV,
     logLevel: env.LOG_LEVEL,
+    memory: {
+      maxOldSpaceSizeMb: env.NODE_MAX_OLD_SPACE_SIZE_MB
+    },
     db: {
       url: env.DB_URL,
       lockTimeouts: {
@@ -564,6 +945,13 @@ function mapEnvToConfig(env: Env): Config {
       workerPool: {
         max: env.DB_WORKER_POOL_MAX,
       },
+      replicaPool: {
+        // Fall back to the primary pool size when not explicitly configured.
+        max: env.DB_REPLICA_POOL_MAX ?? env.DB_POOL_MAX,
+      },
+      maxReplicaLagMs: env.MAX_REPLICA_LAG_MS,
+      slowQueryThresholdMs: env.SLOW_QUERY_THRESHOLD_MS,
+      preparedStatementCacheMax: env.DB_PREPARED_STATEMENT_CACHE_MAX,
     },
     redis: {
       url: env.REDIS_URL,
@@ -576,10 +964,16 @@ function mapEnvToConfig(env: Env): Config {
       clockSkewSeconds: env.KEY_CLOCK_SKEW_SECONDS,
       privateKeyPem: env.KEY_PRIVATE_PEM,
       initialKid: env.KEY_INITIAL_KID,
+      jwksCacheMaxAgeSeconds: env.JWKS_CACHE_MAX_AGE_SECONDS,
     },
+    devMode: env.DEV_MODE,
     features: {
       trustScoring: env.ENABLE_TRUST_SCORING,
       bondEvents: env.ENABLE_BOND_EVENTS,
+    },
+    maintenanceMode: {
+      enabled: env.MAINTENANCE_MODE_ENABLED,
+      retryAfterSeconds: env.MAINTENANCE_MODE_RETRY_AFTER_SECONDS,
     },
     outbox: {
       enabled: env.OUTBOX_ENABLED,
@@ -588,6 +982,11 @@ function mapEnvToConfig(env: Env): Config {
       publishedRetentionDays: env.OUTBOX_PUBLISHED_RETENTION_DAYS,
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
+      leaderLease: {
+        enabled: env.OUTBOX_LEADER_LEASE_ENABLED,
+        retryIntervalMs: env.OUTBOX_LEADER_LEASE_RETRY_MS,
+        heartbeatIntervalMs: env.OUTBOX_LEADER_LEASE_HEARTBEAT_MS,
+      },
     },
     requestSnapshots: {
       retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,
@@ -601,6 +1000,7 @@ function mapEnvToConfig(env: Env): Config {
       origin: env.CORS_ORIGIN,
     },
     timeouts: {
+      global: env.TIMEOUT_GLOBAL_MS,
       db: env.TIMEOUT_DB_MS,
       cache: env.TIMEOUT_CACHE_MS,
       queue: env.TIMEOUT_QUEUE_MS,
@@ -622,6 +1022,12 @@ function mapEnvToConfig(env: Env): Config {
       maxEnterprise: env.RATE_LIMIT_MAX_ENTERPRISE,
       failOpen: env.RATE_LIMIT_FAIL_OPEN,
     },
+    authRateLimit: {
+      enabled: env.AUTH_RATE_LIMIT_ENABLED,
+      windowSec: env.AUTH_RATE_LIMIT_WINDOW_SEC,
+      maxPerTenant: env.AUTH_RATE_LIMIT_MAX_PER_TENANT,
+      failOpen: env.AUTH_RATE_LIMIT_FAIL_OPEN,
+    },
     reputation: {
       scoringModelVersion: env.REPUTATION_MODEL_VERSION,
       bondScoreMax: env.REPUTATION_BOND_SCORE_MAX,
@@ -634,9 +1040,20 @@ function mapEnvToConfig(env: Env): Config {
     trustScoreCache: {
       ttl: env.TRUST_SCORE_CACHE_TTL,
     },
+    bondCache: {
+      ttl: env.BOND_CACHE_TTL_SECONDS,
+    },
+    attestationCache: {
+      ttl: env.ATTESTATION_CACHE_TTL_SECONDS,
+    },
     sorobanCircuitBreaker: {
       failureThreshold: env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
-      cooldownPeriodMs: env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+      openWindowMs: env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+      // Prefer the explicit HALF_OPEN_AFTER_MS; fall back to deprecated COOLDOWN_MS.
+      halfOpenAfterMs:
+        env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS ??
+        env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS ??
+        30_000,
     },
     sorobanStateCache: {
       ttlMs: env.SOROBAN_STATE_CACHE_TTL_MS,
@@ -644,12 +1061,31 @@ function mapEnvToConfig(env: Env): Config {
     auditLog: {
       exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
     },
+    export: {
+      maxRows: env.EXPORT_MAX_ROWS,
+    },
     reports: {
       maxConcurrentJobsPerOrg: env.REPORT_MAX_CONCURRENT_JOBS_PER_ORG,
     },
     endpointCostWeights: parseCostWeights(env.ENDPOINT_COST_WEIGHTS),
     credits: {
       defaultMonthly: env.DEFAULT_MONTHLY_CREDITS,
+      defaultLowCreditThreshold: env.DEFAULT_LOW_CREDIT_THRESHOLD,
+    },
+    metricsAllowedCidrs: env.METRICS_ALLOWED_CIDRS
+      ? env.METRICS_ALLOWED_CIDRS.split(',').map(s => s.trim()).filter(Boolean)
+      : undefined,
+    idempotency: {
+      ttlSeconds: env.IDEMPOTENCY_TTL_SECONDS,
+      sweeperIntervalMs: env.IDEMPOTENCY_SWEEPER_INTERVAL_MS,
+    },
+    sessionSweep: {
+      ttlSeconds: env.SESSION_TTL_SECONDS,
+      sweepIntervalMs: env.SESSION_SWEEP_INTERVAL_MS,
+    },
+    compression: {
+      enabled: env.COMPRESSION_ENABLED,
+      thresholdBytes: env.COMPRESSION_THRESHOLD_BYTES,
     },
   }
 
@@ -688,9 +1124,12 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     return validateConfig(env)
   } catch (err) {
     if (err instanceof ConfigValidationError) {
-      console.error(`\n❌ ${err.message}`)
-      console.error('\nPlease check your .env file or environment variables.\n')
-      process.exit(1)
+      // Don't exit in test environment
+      if (process.env.NODE_ENV !== 'test') {
+        logger.error(`\n❌ ${err.message}`)
+        logger.error('\nPlease check your .env file or environment variables.\n')
+        process.exit(1)
+      }
     }
     throw err
   }

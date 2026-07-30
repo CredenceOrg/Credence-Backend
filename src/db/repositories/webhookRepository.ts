@@ -4,6 +4,24 @@ import type { WebhookConfig, WebhookStore, WebhookEventType } from '../../servic
 export class PostgresWebhookRepository implements WebhookStore {
   constructor(private readonly pool: Pool) {}
 
+  async reserveWebhookDelivery(subscriberId: string, eventId: string, idempotencyKey: string): Promise<boolean> {
+    const { rowCount } = await this.pool.query(
+      `INSERT INTO webhook_delivery_keys (subscriber_id, event_id, idempotency_key, created_at)
+       VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (subscriber_id, event_id) DO NOTHING`,
+      [subscriberId, eventId, idempotencyKey]
+    )
+
+    return (rowCount ?? 0) > 0
+  }
+
+  async clearWebhookDeliveryAttempt(subscriberId: string, eventId: string): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM webhook_delivery_keys WHERE subscriber_id = $1 AND event_id = $2',
+      [subscriberId, eventId]
+    )
+  }
+
   async getByEvent(event: WebhookEventType): Promise<WebhookConfig[]> {
     const { rows } = await this.pool.query(
       'SELECT * FROM webhook_configs WHERE active = true AND $1 = ANY(events)',

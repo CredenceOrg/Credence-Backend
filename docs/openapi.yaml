@@ -17,6 +17,43 @@ components:
       format: null
       minLength: 1
       maxLength: null
+    assignRoleBodySchema:
+      def:
+        type: object
+        shape:
+          userId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          role:
+            def:
+              type: enum
+              entries:
+                SUPER_ADMIN: super-admin
+                ADMIN: admin
+                VERIFIER: verifier
+                USER: user
+            type: enum
+            enum:
+              SUPER_ADMIN: super-admin
+              ADMIN: admin
+              VERIFIER: verifier
+              USER: user
+            options:
+              - super-admin
+              - admin
+              - verifier
+              - user
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     attestationEventSchema:
       def:
         type: object
@@ -250,6 +287,211 @@ components:
           def:
             type: never
           type: never
+      type: object
+    auditChainStatusQuerySchema:
+      def:
+        type: object
+        shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    auditChainStatusResponseSchema:
+      def:
+        type: object
+        shape:
+          lastVerifiedHeight:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          verifiedAt:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: datetime
+                        check: string_format
+                        offset: false
+                        local: false
+                        precision: null
+                        pattern: {}
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: datetime
+                minLength: null
+                maxLength: null
+            type: nullable
+          status:
+            def:
+              type: enum
+              entries:
+                valid: valid
+                break_detected: break_detected
+                never_run: never_run
+            type: enum
+            enum:
+              valid: valid
+              break_detected: break_detected
+              never_run: never_run
+            options:
+              - valid
+              - break_detected
+              - never_run
+          firstBreakSeq:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: nullable
+                  innerType:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 9007199254740991
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                type: nullable
+            type: optional
+          violationCount:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          rowsChecked:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    auditChainVerificationStatusSchema:
+      def:
+        type: enum
+        entries:
+          valid: valid
+          break_detected: break_detected
+          never_run: never_run
+      type: enum
+      enum:
+        valid: valid
+        break_detected: break_detected
+        never_run: never_run
+      options:
+        - valid
+        - break_detected
+        - never_run
+    auditLogExportQuerySchema:
+      def:
+        type: object
+        shape:
+          from:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
+          to:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: regex
+                minLength: null
+                maxLength: null
+            type: optional
       type: object
     bondCreationEventSchema:
       def:
@@ -595,6 +837,73 @@ components:
             isFinite: true
             format: safeint
       type: object
+    createFlagBodySchema:
+      def:
+        type: object
+        shape:
+          key:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: 128
+          description:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: null
+                maxLength: 512
+              defaultValue: ""
+            type: default
+          defaultEnabled:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: boolean
+                type: boolean
+              defaultValue: false
+            type: default
+          rolloutPercent:
+            def:
+              type: default
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+              defaultValue: 0
+            type: default
+      type: object
     createPayoutSchema:
       def:
         type: object
@@ -909,15 +1218,18 @@ components:
                 trust_score_summary: trust_score_summary
                 bond_audit: bond_audit
                 attestation_export: attestation_export
+                top_talkers: top_talkers
             type: enum
             enum:
               trust_score_summary: trust_score_summary
               bond_audit: bond_audit
               attestation_export: attestation_export
+              top_talkers: top_talkers
             options:
               - trust_score_summary
               - bond_audit
               - attestation_export
+              - top_talkers
         catchall:
           def:
             type: never
@@ -1005,6 +1317,42 @@ components:
                 isInt: true
                 isFinite: true
                 format: safeint
+            type: optional
+      type: object
+    createWalletBodySchema:
+      def:
+        type: object
+        shape:
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          initialBalance:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          currency:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
             type: optional
       type: object
     dismissDisputeBodySchema:
@@ -1253,6 +1601,1545 @@ components:
             minLength: null
             maxLength: null
       type: object
+    featureFlagOverrideResponseSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          flagId:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          enabled:
+            def:
+              type: boolean
+            type: boolean
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          updatedAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    featureFlagResponseSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          key:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: 128
+          description:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          defaultEnabled:
+            def:
+              type: boolean
+            type: boolean
+          rolloutPercent:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          updatedAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    featureFlagTenantRolloutResponseSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          flagId:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          rolloutPercent:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          updatedAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    featureFlagWithOverrideResponseSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          key:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: 128
+          description:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          defaultEnabled:
+            def:
+              type: boolean
+            type: boolean
+          rolloutPercent:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          updatedAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+          override:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: uuid
+                              check: string_format
+                              abort: false
+                              pattern: {}
+                            type: string
+                            format: uuid
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: uuid
+                      minLength: null
+                      maxLength: null
+                    flagId:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: uuid
+                              check: string_format
+                              abort: false
+                              pattern: {}
+                            type: string
+                            format: uuid
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: uuid
+                      minLength: null
+                      maxLength: null
+                    tenantId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    enabled:
+                      def:
+                        type: boolean
+                      type: boolean
+                    createdAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    updatedAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: object
+            type: nullable
+          tenantRollout:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: uuid
+                              check: string_format
+                              abort: false
+                              pattern: {}
+                            type: string
+                            format: uuid
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: uuid
+                      minLength: null
+                      maxLength: null
+                    flagId:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: uuid
+                              check: string_format
+                              abort: false
+                              pattern: {}
+                            type: string
+                            format: uuid
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: uuid
+                      minLength: null
+                      maxLength: null
+                    tenantId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    rolloutPercent:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          - {}
+                          - {}
+                      type: number
+                      minValue: 0
+                      maxValue: 100
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    createdAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    updatedAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                type: object
+            type: nullable
+          effectiveEnabled:
+            def:
+              type: boolean
+            type: boolean
+          effectiveRolloutPercent:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    flagErrorResponseSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    flagKeyParamsSchema:
+      def:
+        type: object
+        shape:
+          key:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: 128
+      type: object
+    flagKeyTenantParamsSchema:
+      def:
+        type: object
+        shape:
+          key:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+                - {}
+            type: string
+            format: regex
+            minLength: 1
+            maxLength: 128
+          tenantId:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: 256
+      type: object
+    flagListResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: uuid
+                              check: string_format
+                              abort: false
+                              pattern: {}
+                            type: string
+                            format: uuid
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: uuid
+                      minLength: null
+                      maxLength: null
+                    key:
+                      def:
+                        type: string
+                        checks:
+                          - {}
+                          - {}
+                          - {}
+                      type: string
+                      format: regex
+                      minLength: 1
+                      maxLength: 128
+                    description:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    defaultEnabled:
+                      def:
+                        type: boolean
+                      type: boolean
+                    rolloutPercent:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          - {}
+                          - {}
+                      type: number
+                      minValue: 0
+                      maxValue: 100
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    createdAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    updatedAt:
+                      def:
+                        type: string
+                        checks:
+                          - def:
+                              type: string
+                              format: datetime
+                              check: string_format
+                              offset: false
+                              local: false
+                              precision: null
+                              pattern: {}
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: string
+                      format: datetime
+                      minLength: null
+                      maxLength: null
+                    override:
+                      def:
+                        type: nullable
+                        innerType:
+                          def:
+                            type: object
+                            shape:
+                              id:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: uuid
+                                        check: string_format
+                                        abort: false
+                                        pattern: {}
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: uuid
+                                minLength: null
+                                maxLength: null
+                              flagId:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: uuid
+                                        check: string_format
+                                        abort: false
+                                        pattern: {}
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: uuid
+                                minLength: null
+                                maxLength: null
+                              tenantId:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                              enabled:
+                                def:
+                                  type: boolean
+                                type: boolean
+                              createdAt:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                              updatedAt:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                          type: object
+                      type: nullable
+                    tenantRollout:
+                      def:
+                        type: nullable
+                        innerType:
+                          def:
+                            type: object
+                            shape:
+                              id:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: uuid
+                                        check: string_format
+                                        abort: false
+                                        pattern: {}
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: uuid
+                                minLength: null
+                                maxLength: null
+                              flagId:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: uuid
+                                        check: string_format
+                                        abort: false
+                                        pattern: {}
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: uuid
+                                minLength: null
+                                maxLength: null
+                              tenantId:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                              rolloutPercent:
+                                def:
+                                  type: number
+                                  checks:
+                                    - def:
+                                        type: number
+                                        check: number_format
+                                        abort: false
+                                        format: safeint
+                                      type: number
+                                      minValue: -9007199254740991
+                                      maxValue: 9007199254740991
+                                      isInt: true
+                                      isFinite: true
+                                      format: safeint
+                                    - {}
+                                    - {}
+                                type: number
+                                minValue: 0
+                                maxValue: 100
+                                isInt: true
+                                isFinite: true
+                                format: safeint
+                              createdAt:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                              updatedAt:
+                                def:
+                                  type: string
+                                  checks:
+                                    - def:
+                                        type: string
+                                        format: datetime
+                                        check: string_format
+                                        offset: false
+                                        local: false
+                                        precision: null
+                                        pattern: {}
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: string
+                                format: datetime
+                                minLength: null
+                                maxLength: null
+                          type: object
+                      type: nullable
+                    effectiveEnabled:
+                      def:
+                        type: boolean
+                      type: boolean
+                    effectiveRolloutPercent:
+                      def:
+                        type: number
+                        checks:
+                          - def:
+                              type: number
+                              check: number_format
+                              abort: false
+                              format: safeint
+                            type: number
+                            minValue: -9007199254740991
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          - {}
+                          - {}
+                      type: number
+                      minValue: 0
+                      maxValue: 100
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  id:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: uuid
+                            check: string_format
+                            abort: false
+                            pattern: {}
+                          type: string
+                          format: uuid
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: uuid
+                    minLength: null
+                    maxLength: null
+                  key:
+                    def:
+                      type: string
+                      checks:
+                        - {}
+                        - {}
+                        - {}
+                    type: string
+                    format: regex
+                    minLength: 1
+                    maxLength: 128
+                  description:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  defaultEnabled:
+                    def:
+                      type: boolean
+                    type: boolean
+                  rolloutPercent:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                  createdAt:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+                  updatedAt:
+                    def:
+                      type: string
+                      checks:
+                        - def:
+                            type: string
+                            format: datetime
+                            check: string_format
+                            offset: false
+                            local: false
+                            precision: null
+                            pattern: {}
+                          type: string
+                          format: datetime
+                          minLength: null
+                          maxLength: null
+                    type: string
+                    format: datetime
+                    minLength: null
+                    maxLength: null
+                  override:
+                    def:
+                      type: nullable
+                      innerType:
+                        def:
+                          type: object
+                          shape:
+                            id:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: uuid
+                                      check: string_format
+                                      abort: false
+                                      pattern: {}
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: uuid
+                              minLength: null
+                              maxLength: null
+                            flagId:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: uuid
+                                      check: string_format
+                                      abort: false
+                                      pattern: {}
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: uuid
+                              minLength: null
+                              maxLength: null
+                            tenantId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            enabled:
+                              def:
+                                type: boolean
+                              type: boolean
+                            createdAt:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                            updatedAt:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    type: nullable
+                  tenantRollout:
+                    def:
+                      type: nullable
+                      innerType:
+                        def:
+                          type: object
+                          shape:
+                            id:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: uuid
+                                      check: string_format
+                                      abort: false
+                                      pattern: {}
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: uuid
+                              minLength: null
+                              maxLength: null
+                            flagId:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: uuid
+                                      check: string_format
+                                      abort: false
+                                      pattern: {}
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: uuid
+                              minLength: null
+                              maxLength: null
+                            tenantId:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                            rolloutPercent:
+                              def:
+                                type: number
+                                checks:
+                                  - def:
+                                      type: number
+                                      check: number_format
+                                      abort: false
+                                      format: safeint
+                                    type: number
+                                    minValue: -9007199254740991
+                                    maxValue: 9007199254740991
+                                    isInt: true
+                                    isFinite: true
+                                    format: safeint
+                                  - {}
+                                  - {}
+                              type: number
+                              minValue: 0
+                              maxValue: 100
+                              isInt: true
+                              isFinite: true
+                              format: safeint
+                            createdAt:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                            updatedAt:
+                              def:
+                                type: string
+                                checks:
+                                  - def:
+                                      type: string
+                                      format: datetime
+                                      check: string_format
+                                      offset: false
+                                      local: false
+                                      precision: null
+                                      pattern: {}
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: string
+                              format: datetime
+                              minLength: null
+                              maxLength: null
+                        type: object
+                    type: nullable
+                  effectiveEnabled:
+                    def:
+                      type: boolean
+                    type: boolean
+                  effectiveRolloutPercent:
+                    def:
+                      type: number
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 0
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+              type: object
+      type: object
+    flagResponseEnvelopeSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                key:
+                  def:
+                    type: string
+                    checks:
+                      - {}
+                      - {}
+                      - {}
+                  type: string
+                  format: regex
+                  minLength: 1
+                  maxLength: 128
+                description:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                defaultEnabled:
+                  def:
+                    type: boolean
+                  type: boolean
+                rolloutPercent:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                createdAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+                updatedAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: object
+      type: object
     governanceErrorSchema:
       def:
         type: object
@@ -1271,6 +3158,703 @@ components:
             format: null
             minLength: null
             maxLength: null
+      type: object
+    inviteMemberBodySchema:
+      def:
+        type: object
+        shape:
+          userId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          email:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: email
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: email
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: email
+            minLength: null
+            maxLength: null
+          role:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: enum
+                  entries:
+                    owner: owner
+                    admin: admin
+                    member: member
+                type: enum
+                enum:
+                  owner: owner
+                  admin: admin
+                  member: member
+                options:
+                  - owner
+                  - admin
+                  - member
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    issueImpersonationTokenBodySchema:
+      def:
+        type: object
+        shape:
+          targetUserId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          ttlSeconds:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 3600
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    listRateLimitOverridesResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: array
+              element:
+                def:
+                  type: object
+                  shape:
+                    id:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                      type: optional
+                    tenantId:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                    rateLimit:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                    windowSize:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                    reason:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                    createdAt:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                    updatedAt:
+                      def:
+                        type: optional
+                        innerType:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                      type: optional
+                type: object
+            type: array
+            element:
+              def:
+                type: object
+                shape:
+                  id:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: number
+                          checks: []
+                        type: number
+                        minValue: null
+                        maxValue: null
+                        isInt: false
+                        isFinite: true
+                        format: null
+                    type: optional
+                  tenantId:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                  rateLimit:
+                    def:
+                      type: number
+                      checks: []
+                    type: number
+                    minValue: null
+                    maxValue: null
+                    isInt: false
+                    isFinite: true
+                    format: null
+                  windowSize:
+                    def:
+                      type: number
+                      checks: []
+                    type: number
+                    minValue: null
+                    maxValue: null
+                    isInt: false
+                    isFinite: true
+                    format: null
+                  reason:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+                  createdAt:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+                  updatedAt:
+                    def:
+                      type: optional
+                      innerType:
+                        def:
+                          type: string
+                        type: string
+                        format: null
+                        minLength: null
+                        maxLength: null
+                    type: optional
+              type: object
+      type: object
+    migrationsDryRunBodySchema:
+      def:
+        type: object
+        shape:
+          count:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          file:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          skipPreflight:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: boolean
+                type: boolean
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    migrationsDryRunQuerySchema:
+      def:
+        type: object
+        shape:
+          count:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 9007199254740991
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          file:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          skipPreflight:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: pipe
+                  in:
+                    def:
+                      type: enum
+                      entries:
+                        "true": "true"
+                        "false": "false"
+                    type: enum
+                    enum:
+                      "true": "true"
+                      "false": "false"
+                    options:
+                      - "true"
+                      - "false"
+                  out:
+                    def:
+                      type: transform
+                    type: transform
+                type: pipe
+                in:
+                  def:
+                    type: enum
+                    entries:
+                      "true": "true"
+                      "false": "false"
+                  type: enum
+                  enum:
+                    "true": "true"
+                    "false": "false"
+                  options:
+                    - "true"
+                    - "false"
+                out:
+                  def:
+                    type: transform
+                  type: transform
+            type: optional
+      type: object
+    migrationsDryRunResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                applied:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: array
+                  element:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                sql:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: array
+                  element:
+                    def:
+                      type: string
+                    type: string
+                    format: null
+                    minLength: null
+                    maxLength: null
+                sqlText:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                count:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+            type: object
+      type: object
+    overrideResponseEnvelopeSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                flagId:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                tenantId:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                enabled:
+                  def:
+                    type: boolean
+                  type: boolean
+                createdAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+                updatedAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: object
+      type: object
+    paginationLinksSchema:
+      def:
+        type: object
+        shape:
+          self:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: url
+                    check: string_format
+                    abort: false
+                  type: string
+                  format: url
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: url
+            minLength: null
+            maxLength: null
+          first:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          prev:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          next:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
+          last:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - def:
+                        type: string
+                        format: url
+                        check: string_format
+                        abort: false
+                      type: string
+                      format: url
+                      minLength: null
+                      maxLength: null
+                type: string
+                format: url
+                minLength: null
+                maxLength: null
+            type: optional
       type: object
     policyListQuerySchema:
       def:
@@ -1444,6 +4028,333 @@ components:
             minLength: 1
             maxLength: null
       type: object
+    rateLimitOverrideSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks: []
+                type: number
+                minValue: null
+                maxValue: null
+                isInt: false
+                isFinite: true
+                format: null
+            type: optional
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          rateLimit:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          windowSize:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          reason:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          createdAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          updatedAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    reconciliationFindingSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          settlementId:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          findingType:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          details:
+            def:
+              type: record
+              keyType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+              valueType:
+                def:
+                  type: unknown
+                type: unknown
+            type: record
+            keyType:
+              def:
+                type: string
+              type: string
+              format: null
+              minLength: null
+              maxLength: null
+            valueType:
+              def:
+                type: unknown
+              type: unknown
+          createdAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    reconciliationRunSummarySchema:
+      def:
+        type: object
+        shape:
+          checked:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          discrepancies:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          errors:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          runAt:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: datetime
+                    check: string_format
+                    offset: false
+                    local: false
+                    precision: null
+                    pattern: {}
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: datetime
+            minLength: null
+            maxLength: null
+      type: object
+    redirectTargetSchema:
+      def:
+        type: string
+        checks:
+          - {}
+          - def:
+              type: custom
+              check: custom
+            type: custom
+      type: string
+      format: null
+      minLength: 1
+      maxLength: null
+    removeRateLimitOverrideBodySchema:
+      def:
+        type: object
+        shape:
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 3
+            maxLength: null
+      type: object
+    replayEventBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    replayWebhookBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     reportJobParamsSchema:
       def:
         type: object
@@ -1465,15 +4376,18 @@ components:
           trust_score_summary: trust_score_summary
           bond_audit: bond_audit
           attestation_export: attestation_export
+          top_talkers: top_talkers
       type: enum
       enum:
         trust_score_summary: trust_score_summary
         bond_audit: bond_audit
         attestation_export: attestation_export
+        top_talkers: top_talkers
       options:
         - trust_score_summary
         - bond_audit
         - attestation_export
+        - top_talkers
     resolveDisputeBodySchema:
       def:
         type: object
@@ -1487,6 +4401,671 @@ components:
             format: null
             minLength: 1
             maxLength: null
+      type: object
+    revokeApiKeyBodySchema:
+      def:
+        type: object
+        shape:
+          userId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          apiKey:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    rolloutPercentSchema:
+      def:
+        type: number
+        checks:
+          - def:
+              type: number
+              check: number_format
+              abort: false
+              format: safeint
+            type: number
+            minValue: -9007199254740991
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          - {}
+          - {}
+      type: number
+      minValue: 0
+      maxValue: 100
+      isInt: true
+      isFinite: true
+      format: safeint
+    setOverrideBodySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: 256
+          enabled:
+            def:
+              type: boolean
+            type: boolean
+      type: object
+    setRateLimitOverrideBodySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          rateLimit:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 1
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          windowSize:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+            type: number
+            minValue: 1
+            maxValue: 9007199254740991
+            isInt: true
+            isFinite: true
+            format: safeint
+          reason:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 3
+            maxLength: null
+      type: object
+    setRateLimitOverrideResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: number
+                        checks: []
+                      type: number
+                      minValue: null
+                      maxValue: null
+                      isInt: false
+                      isFinite: true
+                      format: null
+                  type: optional
+                tenantId:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                rateLimit:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                windowSize:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                reason:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+                createdAt:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+                updatedAt:
+                  def:
+                    type: optional
+                    innerType:
+                      def:
+                        type: string
+                      type: string
+                      format: null
+                      minLength: null
+                      maxLength: null
+                  type: optional
+            type: object
+      type: object
+    setTenantRolloutBodySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+              checks:
+                - {}
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: 256
+          rolloutPercent:
+            def:
+              type: number
+              checks:
+                - def:
+                    type: number
+                    check: number_format
+                    abort: false
+                    format: safeint
+                  type: number
+                  minValue: -9007199254740991
+                  maxValue: 9007199254740991
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                - {}
+                - {}
+            type: number
+            minValue: 0
+            maxValue: 100
+            isInt: true
+            isFinite: true
+            format: safeint
+      type: object
+    settlementReconciliationQuerySchema:
+      def:
+        type: object
+        shape:
+          cursor:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: default
+                  innerType:
+                    def:
+                      type: number
+                      coerce: true
+                      checks:
+                        - def:
+                            type: number
+                            check: number_format
+                            abort: false
+                            format: safeint
+                          type: number
+                          minValue: -9007199254740991
+                          maxValue: 9007199254740991
+                          isInt: true
+                          isFinite: true
+                          format: safeint
+                        - {}
+                        - {}
+                    type: number
+                    minValue: 1
+                    maxValue: 100
+                    isInt: true
+                    isFinite: true
+                    format: safeint
+                  defaultValue: 20
+                type: default
+            type: optional
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    settlementReconciliationResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: nullable
+              innerType:
+                def:
+                  type: object
+                  shape:
+                    summary:
+                      def:
+                        type: object
+                        shape:
+                          checked:
+                            def:
+                              type: number
+                              checks:
+                                - def:
+                                    type: number
+                                    check: number_format
+                                    abort: false
+                                    format: safeint
+                                  type: number
+                                  minValue: -9007199254740991
+                                  maxValue: 9007199254740991
+                                  isInt: true
+                                  isFinite: true
+                                  format: safeint
+                                - {}
+                            type: number
+                            minValue: 0
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          discrepancies:
+                            def:
+                              type: number
+                              checks:
+                                - def:
+                                    type: number
+                                    check: number_format
+                                    abort: false
+                                    format: safeint
+                                  type: number
+                                  minValue: -9007199254740991
+                                  maxValue: 9007199254740991
+                                  isInt: true
+                                  isFinite: true
+                                  format: safeint
+                                - {}
+                            type: number
+                            minValue: 0
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          errors:
+                            def:
+                              type: number
+                              checks:
+                                - def:
+                                    type: number
+                                    check: number_format
+                                    abort: false
+                                    format: safeint
+                                  type: number
+                                  minValue: -9007199254740991
+                                  maxValue: 9007199254740991
+                                  isInt: true
+                                  isFinite: true
+                                  format: safeint
+                                - {}
+                            type: number
+                            minValue: 0
+                            maxValue: 9007199254740991
+                            isInt: true
+                            isFinite: true
+                            format: safeint
+                          runAt:
+                            def:
+                              type: string
+                              checks:
+                                - def:
+                                    type: string
+                                    format: datetime
+                                    check: string_format
+                                    offset: false
+                                    local: false
+                                    precision: null
+                                    pattern: {}
+                                  type: string
+                                  format: datetime
+                                  minLength: null
+                                  maxLength: null
+                            type: string
+                            format: datetime
+                            minLength: null
+                            maxLength: null
+                      type: object
+                    findings:
+                      def:
+                        type: object
+                        shape:
+                          data:
+                            def:
+                              type: array
+                              element:
+                                def:
+                                  type: object
+                                  shape:
+                                    id:
+                                      def:
+                                        type: string
+                                        checks:
+                                          - def:
+                                              type: string
+                                              format: uuid
+                                              check: string_format
+                                              abort: false
+                                              pattern: {}
+                                            type: string
+                                            format: uuid
+                                            minLength: null
+                                            maxLength: null
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                    settlementId:
+                                      def:
+                                        type: string
+                                        checks:
+                                          - def:
+                                              type: string
+                                              format: uuid
+                                              check: string_format
+                                              abort: false
+                                              pattern: {}
+                                            type: string
+                                            format: uuid
+                                            minLength: null
+                                            maxLength: null
+                                      type: string
+                                      format: uuid
+                                      minLength: null
+                                      maxLength: null
+                                    findingType:
+                                      def:
+                                        type: string
+                                      type: string
+                                      format: null
+                                      minLength: null
+                                      maxLength: null
+                                    details:
+                                      def:
+                                        type: record
+                                        keyType:
+                                          def:
+                                            type: string
+                                          type: string
+                                          format: null
+                                          minLength: null
+                                          maxLength: null
+                                        valueType:
+                                          def:
+                                            type: unknown
+                                          type: unknown
+                                      type: record
+                                      keyType:
+                                        def:
+                                          type: string
+                                        type: string
+                                        format: null
+                                        minLength: null
+                                        maxLength: null
+                                      valueType:
+                                        def:
+                                          type: unknown
+                                        type: unknown
+                                    createdAt:
+                                      def:
+                                        type: string
+                                        checks:
+                                          - def:
+                                              type: string
+                                              format: datetime
+                                              check: string_format
+                                              offset: false
+                                              local: false
+                                              precision: null
+                                              pattern: {}
+                                            type: string
+                                            format: datetime
+                                            minLength: null
+                                            maxLength: null
+                                      type: string
+                                      format: datetime
+                                      minLength: null
+                                      maxLength: null
+                                type: object
+                            type: array
+                            element:
+                              def:
+                                type: object
+                                shape:
+                                  id:
+                                    def:
+                                      type: string
+                                      checks:
+                                        - def:
+                                            type: string
+                                            format: uuid
+                                            check: string_format
+                                            abort: false
+                                            pattern: {}
+                                          type: string
+                                          format: uuid
+                                          minLength: null
+                                          maxLength: null
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                                  settlementId:
+                                    def:
+                                      type: string
+                                      checks:
+                                        - def:
+                                            type: string
+                                            format: uuid
+                                            check: string_format
+                                            abort: false
+                                            pattern: {}
+                                          type: string
+                                          format: uuid
+                                          minLength: null
+                                          maxLength: null
+                                    type: string
+                                    format: uuid
+                                    minLength: null
+                                    maxLength: null
+                                  findingType:
+                                    def:
+                                      type: string
+                                    type: string
+                                    format: null
+                                    minLength: null
+                                    maxLength: null
+                                  details:
+                                    def:
+                                      type: record
+                                      keyType:
+                                        def:
+                                          type: string
+                                        type: string
+                                        format: null
+                                        minLength: null
+                                        maxLength: null
+                                      valueType:
+                                        def:
+                                          type: unknown
+                                        type: unknown
+                                    type: record
+                                    keyType:
+                                      def:
+                                        type: string
+                                      type: string
+                                      format: null
+                                      minLength: null
+                                      maxLength: null
+                                    valueType:
+                                      def:
+                                        type: unknown
+                                      type: unknown
+                                  createdAt:
+                                    def:
+                                      type: string
+                                      checks:
+                                        - def:
+                                            type: string
+                                            format: datetime
+                                            check: string_format
+                                            offset: false
+                                            local: false
+                                            precision: null
+                                            pattern: {}
+                                          type: string
+                                          format: datetime
+                                          minLength: null
+                                          maxLength: null
+                                    type: string
+                                    format: datetime
+                                    minLength: null
+                                    maxLength: null
+                              type: object
+                          page:
+                            def:
+                              type: object
+                              shape:
+                                nextCursor:
+                                  def:
+                                    type: nullable
+                                    innerType:
+                                      def:
+                                        type: string
+                                      type: string
+                                      format: null
+                                      minLength: null
+                                      maxLength: null
+                                  type: nullable
+                                hasMore:
+                                  def:
+                                    type: boolean
+                                  type: boolean
+                                limit:
+                                  def:
+                                    type: number
+                                    checks:
+                                      - def:
+                                          type: number
+                                          check: number_format
+                                          abort: false
+                                          format: safeint
+                                        type: number
+                                        minValue: -9007199254740991
+                                        maxValue: 9007199254740991
+                                        isInt: true
+                                        isFinite: true
+                                        format: safeint
+                                  type: number
+                                  minValue: -9007199254740991
+                                  maxValue: 9007199254740991
+                                  isInt: true
+                                  isFinite: true
+                                  format: safeint
+                            type: object
+                      type: object
+                type: object
+            type: nullable
       type: object
     slashRequestPathParamsSchema:
       def:
@@ -2436,6 +6015,371 @@ components:
               - approve
               - reject
       type: object
+    tenantRolloutResponseEnvelopeSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: literal
+              values:
+                - true
+            type: literal
+            values: {}
+          data:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                flagId:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                tenantId:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                rolloutPercent:
+                  def:
+                    type: number
+                    checks:
+                      - def:
+                          type: number
+                          check: number_format
+                          abort: false
+                          format: safeint
+                        type: number
+                        minValue: -9007199254740991
+                        maxValue: 9007199254740991
+                        isInt: true
+                        isFinite: true
+                        format: safeint
+                      - {}
+                      - {}
+                  type: number
+                  minValue: 0
+                  maxValue: 100
+                  isInt: true
+                  isFinite: true
+                  format: safeint
+                createdAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+                updatedAt:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: datetime
+                          check: string_format
+                          offset: false
+                          local: false
+                          precision: null
+                          pattern: {}
+                        type: string
+                        format: datetime
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: datetime
+                  minLength: null
+                  maxLength: null
+            type: object
+      type: object
+    topTalkerEntrySchema:
+      def:
+        type: object
+        shape:
+          tenantId:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          requestCount:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          percentage:
+            def:
+              type: number
+              checks: []
+            type: number
+            minValue: null
+            maxValue: null
+            isInt: false
+            isFinite: true
+            format: null
+          lastRequestAt:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                type: string
+                format: null
+                minLength: null
+                maxLength: null
+            type: optional
+      type: object
+    topTalkersQuerySchema:
+      def:
+        type: object
+        shape:
+          limit:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+          windowMinutes:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  coerce: true
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 1
+                maxValue: 1440
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+      type: object
+    topTalkersResponseSchema:
+      def:
+        type: object
+        shape:
+          success:
+            def:
+              type: boolean
+            type: boolean
+          data:
+            def:
+              type: object
+              shape:
+                windowStart:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowEnd:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                windowMinutes:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                totalRequests:
+                  def:
+                    type: number
+                    checks: []
+                  type: number
+                  minValue: null
+                  maxValue: null
+                  isInt: false
+                  isFinite: true
+                  format: null
+                topTalkers:
+                  def:
+                    type: array
+                    element:
+                      def:
+                        type: object
+                        shape:
+                          tenantId:
+                            def:
+                              type: string
+                            type: string
+                            format: null
+                            minLength: null
+                            maxLength: null
+                          requestCount:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          percentage:
+                            def:
+                              type: number
+                              checks: []
+                            type: number
+                            minValue: null
+                            maxValue: null
+                            isInt: false
+                            isFinite: true
+                            format: null
+                          lastRequestAt:
+                            def:
+                              type: optional
+                              innerType:
+                                def:
+                                  type: string
+                                type: string
+                                format: null
+                                minLength: null
+                                maxLength: null
+                            type: optional
+                      type: object
+                  type: array
+                  element:
+                    def:
+                      type: object
+                      shape:
+                        tenantId:
+                          def:
+                            type: string
+                          type: string
+                          format: null
+                          minLength: null
+                          maxLength: null
+                        requestCount:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        percentage:
+                          def:
+                            type: number
+                            checks: []
+                          type: number
+                          minValue: null
+                          maxValue: null
+                          isInt: false
+                          isFinite: true
+                          format: null
+                        lastRequestAt:
+                          def:
+                            type: optional
+                            innerType:
+                              def:
+                                type: string
+                              type: string
+                              format: null
+                              minLength: null
+                              maxLength: null
+                          type: optional
+                    type: object
+            type: object
+      type: object
     transactionsHistoryQuerySchema:
       def:
         type: object
@@ -2636,6 +6580,89 @@ components:
       def:
         type: object
         shape: {}
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
+    updateFlagBodySchema:
+      def:
+        type: object
+        shape:
+          description:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: string
+                  checks:
+                    - {}
+                type: string
+                format: null
+                minLength: null
+                maxLength: 512
+            type: optional
+          defaultEnabled:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: boolean
+                type: boolean
+            type: optional
+          rolloutPercent:
+            def:
+              type: optional
+              innerType:
+                def:
+                  type: number
+                  checks:
+                    - def:
+                        type: number
+                        check: number_format
+                        abort: false
+                        format: safeint
+                      type: number
+                      minValue: -9007199254740991
+                      maxValue: 9007199254740991
+                      isInt: true
+                      isFinite: true
+                      format: safeint
+                    - {}
+                    - {}
+                type: number
+                minValue: 0
+                maxValue: 100
+                isInt: true
+                isFinite: true
+                format: safeint
+            type: optional
+        checks:
+          - def:
+              type: custom
+              check: custom
+            type: custom
+      type: object
+    updateMemberRoleBodySchema:
+      def:
+        type: object
+        shape:
+          role:
+            def:
+              type: enum
+              entries:
+                owner: owner
+                admin: admin
+                member: member
+            type: enum
+            enum:
+              owner: owner
+              admin: admin
+              member: member
+            options:
+              - owner
+              - admin
+              - member
         catchall:
           def:
             type: never
@@ -2852,6 +6879,39 @@ components:
             type: never
           type: never
       type: object
+    versionResponseSchema:
+      def:
+        type: object
+        shape:
+          service:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          gitSha:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          buildTimestamp:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          nodeVersion:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
     voteChoiceSchema:
       def:
         type: enum
@@ -2999,6 +7059,174 @@ components:
             format: datetime
             minLength: null
             maxLength: null
+      type: object
+    walletDebitBodySchema:
+      def:
+        type: object
+        shape:
+          amount:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+      type: object
+    walletDebitResponseSchema:
+      def:
+        type: object
+        shape:
+          wallet:
+            def:
+              type: object
+              shape:
+                id:
+                  def:
+                    type: string
+                    checks:
+                      - def:
+                          type: string
+                          format: uuid
+                          check: string_format
+                          abort: false
+                          pattern: {}
+                        type: string
+                        format: uuid
+                        minLength: null
+                        maxLength: null
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+                address:
+                  def:
+                    type: string
+                    checks:
+                      - {}
+                  type: string
+                  format: null
+                  minLength: 1
+                  maxLength: null
+                balance:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                currency:
+                  def:
+                    type: string
+                  type: string
+                  format: null
+                  minLength: null
+                  maxLength: null
+                createdAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+                updatedAt:
+                  def:
+                    type: date
+                  type: date
+                  minDate: null
+                  maxDate: null
+            type: object
+          previousBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          newBalance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          debitedAmount:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletErrorSchema:
+      def:
+        type: object
+        shape:
+          error:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+      type: object
+    walletSchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - def:
+                    type: string
+                    format: uuid
+                    check: string_format
+                    abort: false
+                    pattern: {}
+                  type: string
+                  format: uuid
+                  minLength: null
+                  maxLength: null
+            type: string
+            format: uuid
+            minLength: null
+            maxLength: null
+          address:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+          balance:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          currency:
+            def:
+              type: string
+            type: string
+            format: null
+            minLength: null
+            maxLength: null
+          createdAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
+          updatedAt:
+            def:
+              type: date
+            type: date
+            minDate: null
+            maxDate: null
       type: object
     withdrawalEventSchema:
       def:
@@ -3153,6 +7381,120 @@ components:
             isFinite: true
             format: safeint
       type: object
+    VersionResponse:
+      type: object
+      properties:
+        service:
+          type: string
+          example: credence-backend
+        gitSha:
+          type: string
+          example: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+        buildTimestamp:
+          type: string
+          example: 2026-06-25T20:00:00.000Z
+        nodeVersion:
+          type: string
+          example: v20.10.0
+      required:
+        - service
+        - gitSha
+        - buildTimestamp
+        - nodeVersion
+    Wallet:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Wallet UUID (auto-generated by Postgres)
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address
+          example: 0xTestAddress1
+        balance:
+          type: string
+          description: Current balance as a decimal string (NUMERIC(36,18))
+          example: "100.000000000000000000"
+        currency:
+          type: string
+          description: Currency code
+          example: USD
+        createdAt:
+          type: string
+          format: date-time
+          description: UTC timestamp when the wallet was created
+        updatedAt:
+          type: string
+          format: date-time
+          description: UTC timestamp of the last balance change
+      required:
+        - id
+        - address
+        - balance
+        - currency
+        - createdAt
+        - updatedAt
+    WalletError:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Wallet abc not found
+      required:
+        - error
+    CreateWalletBody:
+      type: object
+      properties:
+        address:
+          type: string
+          minLength: 1
+          description: Blockchain wallet address (must be unique)
+          example: 0xNewAddress
+        initialBalance:
+          type: string
+          description: Optional initial balance as a decimal string. Defaults to "0".
+          example: "50"
+        currency:
+          type: string
+          description: Currency code. Defaults to "USD".
+          example: USD
+      required:
+        - address
+    WalletDebitResponse:
+      type: object
+      properties:
+        wallet:
+          $ref: "#/components/schemas/Wallet"
+        previousBalance:
+          type: string
+          description: Wallet balance before the debit
+          example: "100.000000000000000000"
+        newBalance:
+          type: string
+          description: Wallet balance after the debit
+          example: "74.500000000000000000"
+        debitedAmount:
+          type: string
+          description: Amount that was debited
+          example: "25.50"
+      required:
+        - wallet
+        - previousBalance
+        - newBalance
+        - debitedAmount
+    WalletDebitBody:
+      type: object
+      properties:
+        amount:
+          type: string
+          minLength: 1
+          description: Positive decimal string amount to deduct from the wallet balance.
+          example: "25.50"
+      required:
+        - amount
     BondResponse:
       type: object
       properties:
@@ -3557,6 +7899,327 @@ components:
           example: Insufficient evidence provided
       required:
         - reason
+    FlagListResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/FeatureFlagWithOverrideResponse"
+      required:
+        - success
+        - data
+    FeatureFlagWithOverrideResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[a-z0-9_-]+$
+          description: Unique flag identifier (slug)
+          example: new-scoring-weights
+        description:
+          type: string
+          example: Enable new scoring algorithm
+        defaultEnabled:
+          type: boolean
+          example: false
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+        createdAt:
+          type: string
+          format: date-time
+          example: 2025-01-01T00:00:00.000Z
+        updatedAt:
+          type: string
+          format: date-time
+          example: 2025-01-15T12:00:00.000Z
+        override:
+          $ref: "#/components/schemas/FeatureFlagOverrideResponse"
+        tenantRollout:
+          $ref: "#/components/schemas/FeatureFlagTenantRolloutResponse"
+        effectiveEnabled:
+          type: boolean
+          description: Resolved enabled state for the current tenant (accounts for
+            override, per-tenant rollout, global rollout, and default)
+          example: true
+        effectiveRolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Effective rollout percentage used for user-level sticky bucketing
+            (per-tenant rollout takes precedence over global)
+          example: 25
+      required:
+        - id
+        - key
+        - description
+        - defaultEnabled
+        - rolloutPercent
+        - createdAt
+        - updatedAt
+        - override
+        - tenantRollout
+        - effectiveEnabled
+        - effectiveRolloutPercent
+    FeatureFlagOverrideResponse:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 5d7e4a12-0a3b-4c9d-bf82-1e2f3a4b5c6d
+        flagId:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        tenantId:
+          type: string
+          example: tenant-abc
+        enabled:
+          type: boolean
+          example: true
+        createdAt:
+          type: string
+          format: date-time
+          example: 2025-01-01T00:00:00.000Z
+        updatedAt:
+          type: string
+          format: date-time
+          example: 2025-01-15T12:00:00.000Z
+      required:
+        - id
+        - flagId
+        - tenantId
+        - enabled
+        - createdAt
+        - updatedAt
+      description: Per-tenant boolean override, if set
+    FeatureFlagTenantRolloutResponse:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+        flagId:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        tenantId:
+          type: string
+          example: tenant-abc
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+        createdAt:
+          type: string
+          format: date-time
+          example: 2025-01-01T00:00:00.000Z
+        updatedAt:
+          type: string
+          format: date-time
+          example: 2025-01-15T12:00:00.000Z
+      required:
+        - id
+        - flagId
+        - tenantId
+        - rolloutPercent
+        - createdAt
+        - updatedAt
+      description: Per-tenant rollout percentage override, if set
+    FlagErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Feature flag 'unknown-flag' not found
+      required:
+        - error
+    FlagResponseEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/FeatureFlagResponse"
+      required:
+        - success
+        - data
+    FeatureFlagResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: 3fa85f64-5717-4562-b3fc-2c963f66afa6
+        key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[a-z0-9_-]+$
+          description: Unique flag identifier (slug)
+          example: new-scoring-weights
+        description:
+          type: string
+          example: Enable new scoring algorithm
+        defaultEnabled:
+          type: boolean
+          example: false
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+        createdAt:
+          type: string
+          format: date-time
+          example: 2025-01-01T00:00:00.000Z
+        updatedAt:
+          type: string
+          format: date-time
+          example: 2025-01-15T12:00:00.000Z
+      required:
+        - id
+        - key
+        - description
+        - defaultEnabled
+        - rolloutPercent
+        - createdAt
+        - updatedAt
+    CreateFlagBody:
+      type: object
+      properties:
+        key:
+          type: string
+          minLength: 1
+          maxLength: 128
+          pattern: ^[a-z0-9_-]+$
+          description: Unique flag identifier (slug)
+          example: new-scoring-weights
+        description:
+          type: string
+          maxLength: 512
+          default: ""
+          description: Human-readable description of the flag
+          example: Enable new scoring algorithm for gradual rollout
+        defaultEnabled:
+          type: boolean
+          default: false
+          description: Default enabled state when no override or rollout applies
+          example: false
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          default: 0
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+      required:
+        - key
+    UpdateFlagBody:
+      type: object
+      properties:
+        description:
+          type: string
+          maxLength: 512
+          description: New description for the flag
+          example: Updated description
+        defaultEnabled:
+          type: boolean
+          description: New default enabled state
+          example: true
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+    OverrideResponseEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/FeatureFlagOverrideResponse"
+      required:
+        - success
+        - data
+    SetOverrideBody:
+      type: object
+      properties:
+        tenantId:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Tenant identifier to apply the override to
+          example: tenant-abc
+        enabled:
+          type: boolean
+          description: Whether the flag is enabled for this tenant (overrides rollout)
+          example: true
+      required:
+        - tenantId
+        - enabled
+    TenantRolloutResponseEnvelope:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - true
+        data:
+          $ref: "#/components/schemas/FeatureFlagTenantRolloutResponse"
+      required:
+        - success
+        - data
+    SetTenantRolloutBody:
+      type: object
+      properties:
+        tenantId:
+          type: string
+          minLength: 1
+          maxLength: 256
+          description: Tenant identifier to apply the per-tenant rollout to
+          example: tenant-abc
+        rolloutPercent:
+          type: integer
+          minimum: 0
+          maximum: 100
+          description: Rollout percentage (0–100). 0 = disabled for all, 100 = enabled for
+            all.
+          example: 25
+      required:
+        - tenantId
+        - rolloutPercent
   securitySchemes:
     bearerAuth:
       type: http
@@ -3627,6 +8290,20 @@ paths:
                   - status
                   - service
                   - version
+  /api/version:
+    get:
+      summary: Build version
+      description: Returns the running build's git SHA, build timestamp, and Node
+        version, so support/on-call can confirm which build is deployed.
+      tags:
+        - Health
+      responses:
+        "200":
+          description: Version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
   /.well-known/jwks.json:
     get:
       summary: JWKS
@@ -3642,6 +8319,50 @@ paths:
                 type: object
                 additionalProperties:
                   nullable: true
+  /api/dev/fault-injection:
+    post:
+      summary: Fault injection
+      description: Returns a configurable HTTP error (default 500) with a structured
+        JSON body. Only available when DEV_MODE is enabled (404 otherwise).
+        Intended for chaos / retry testing.
+      tags:
+        - Dev
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses:
+        "200":
+          description: Simulated fault response
+          content:
+            application/json: {}
+        "400":
+          description: Validation error (invalid statusCode or message too long)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "404":
+          description: DEV_MODE is disabled
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
   /api/trust/{address}:
     get:
       summary: Get trust score
@@ -3893,6 +8614,70 @@ paths:
             application/json:
               schema:
                 nullable: true
+  /api/wallets:
+    post:
+      summary: Create a wallet
+      description: Creates a new wallet with an optional initial balance.
+      tags:
+        - Wallets
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateWalletBody"
+      responses:
+        "201":
+          description: Wallet created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Wallet"
+        "409":
+          description: A wallet with this address already exists
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+  /api/wallets/{id}/debit:
+    post:
+      summary: Debit a wallet
+      description: Atomically debits the specified amount from a wallet balance. Fails
+        if the balance would go negative.
+      tags:
+        - Wallets
+      parameters:
+        - schema:
+            type: string
+            format: uuid
+          required: true
+          name: id
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WalletDebitBody"
+      responses:
+        "200":
+          description: Debit successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletDebitResponse"
+        "404":
+          description: Wallet not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
+        "422":
+          description: Insufficient balance
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WalletError"
   /api/bond/{address}:
     get:
       summary: Get bond status
@@ -4318,3 +9103,652 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DisputeTransitionError"
+  /api/admin/feature-flags:
+    get:
+      summary: List feature flags
+      description: Returns all feature flags with their effective state (override,
+        per-tenant rollout, global rollout, or default) for the caller's tenant.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Feature flag list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagListResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+    post:
+      summary: Create a feature flag
+      description: Creates a new feature flag. The flag key must be unique across the
+        system.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateFlagBody"
+      responses:
+        "201":
+          description: Feature flag created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagResponseEnvelope"
+        "400":
+          description: Validation error (e.g. invalid key format, rolloutPercent out of
+            range)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/feature-flags/{key}:
+    put:
+      summary: Update a feature flag
+      description: Updates one or more fields on an existing feature flag. All fields
+        are optional.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9_-]+$
+            description: Unique flag identifier (slug)
+            example: new-scoring-weights
+          required: true
+          description: Unique flag identifier (slug)
+          name: key
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateFlagBody"
+      responses:
+        "200":
+          description: Feature flag updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagResponseEnvelope"
+        "400":
+          description: Validation error or no fields provided
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "404":
+          description: Feature flag not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/feature-flags/{key}/overrides:
+    post:
+      summary: Set a per-tenant boolean override
+      description: Creates or updates a boolean on/off override for a specific tenant.
+        A boolean override always takes the highest precedence, superseding any
+        per-tenant rollout or global rollout.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9_-]+$
+            description: Unique flag identifier (slug)
+            example: new-scoring-weights
+          required: true
+          description: Unique flag identifier (slug)
+          name: key
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetOverrideBody"
+      responses:
+        "201":
+          description: Override created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverrideResponseEnvelope"
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "404":
+          description: Feature flag not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/feature-flags/{key}/overrides/{tenantId}:
+    delete:
+      summary: Remove a per-tenant boolean override
+      description: Removes a boolean override for a specific tenant. After removal the
+        tenant falls back to per-tenant rollout (if configured), global rollout,
+        or defaultEnabled.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9_-]+$
+            description: Unique flag identifier (slug)
+            example: new-scoring-weights
+          required: true
+          description: Unique flag identifier (slug)
+          name: key
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+            description: Tenant identifier
+            example: tenant-abc
+          required: true
+          description: Tenant identifier
+          name: tenantId
+          in: path
+      responses:
+        "200":
+          description: Override removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                required:
+                  - success
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "404":
+          description: Override not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/feature-flags/{key}/tenant-rollouts:
+    post:
+      summary: Set a per-tenant rollout percentage
+      description: Creates or updates a per-tenant rollout percentage for a flag.
+        Allows different tenants to receive the flag at different rollout
+        speeds. Sticky user-id bucketing (SHA-256 hash of flagKey:userId) still
+        applies within the tenant's percentage window. A boolean override (if
+        present) always takes precedence over this setting.
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9_-]+$
+            description: Unique flag identifier (slug)
+            example: new-scoring-weights
+          required: true
+          description: Unique flag identifier (slug)
+          name: key
+          in: path
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SetTenantRolloutBody"
+      responses:
+        "201":
+          description: Per-tenant rollout created or updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TenantRolloutResponseEnvelope"
+        "400":
+          description: Validation error (e.g. rolloutPercent out of range)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+        "404":
+          description: Feature flag not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/feature-flags/{key}/tenant-rollouts/{tenantId}:
+    delete:
+      summary: Remove a per-tenant rollout percentage
+      description: Removes a per-tenant rollout percentage. After removal the tenant
+        falls back to the global rollout percent (or defaultEnabled if that is
+        also 0).
+      tags:
+        - Feature Flags
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 128
+            pattern: ^[a-z0-9_-]+$
+            description: Unique flag identifier (slug)
+            example: new-scoring-weights
+          required: true
+          description: Unique flag identifier (slug)
+          name: key
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+            maxLength: 256
+            description: Tenant identifier
+            example: tenant-abc
+          required: true
+          description: Tenant identifier
+          name: tenantId
+          in: path
+      responses:
+        "200":
+          description: Per-tenant rollout removed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - true
+                required:
+                  - success
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FlagErrorResponse"
+  /api/admin/migrations/dry-run:
+    get:
+      summary: Migration dry-run (GET)
+      description: Previews the SQL statements that would be executed by the next
+        pending database migration up.
+      tags:
+        - Admin Migrations
+      security:
+        - bearerAuth: []
+      parameters:
+        - schema:
+            type: integer
+            minimum: 0
+            exclusiveMinimum: true
+          required: false
+          name: count
+          in: query
+        - schema:
+            type: string
+          required: false
+          name: file
+          in: query
+        - schema:
+            type: string
+            enum:
+              - "true"
+              - "false"
+          required: false
+          name: skipPreflight
+          in: query
+      responses:
+        "200":
+          description: Dry run completed successfully with pending SQL statements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      applied:
+                        type: array
+                        items:
+                          type: string
+                      sql:
+                        type: array
+                        items:
+                          type: string
+                      sqlText:
+                        type: string
+                      count:
+                        type: number
+                    required:
+                      - applied
+                      - sql
+                      - sqlText
+                      - count
+                required:
+                  - success
+                  - data
+        "400":
+          description: Migration dry run failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - success
+                  - error
+                  - message
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+    post:
+      summary: Migration dry-run (POST)
+      description: Previews the SQL statements that would be executed by the next
+        pending database migration up.
+      tags:
+        - Admin Migrations
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                count:
+                  type: integer
+                  minimum: 0
+                  exclusiveMinimum: true
+                file:
+                  type: string
+                skipPreflight:
+                  type: boolean
+              additionalProperties: false
+      responses:
+        "200":
+          description: Dry run completed successfully with pending SQL statements
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      applied:
+                        type: array
+                        items:
+                          type: string
+                      sql:
+                        type: array
+                        items:
+                          type: string
+                      sqlText:
+                        type: string
+                      count:
+                        type: number
+                    required:
+                      - applied
+                      - sql
+                      - sqlText
+                      - count
+                required:
+                  - success
+                  - data
+        "400":
+          description: Migration dry run failed
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    enum:
+                      - false
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - success
+                  - error
+                  - message
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+  /api/admin/replay-event:
+    post:
+      summary: Replay a failed inbound event
+      description: Replays a specific failed inbound event by id (passed in body) to
+        its registered handler pipeline. Audit-logged via
+        ReplayService.replayEvent.
+      tags:
+        - Admin
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                id:
+                  type: string
+                  minLength: 1
+              required:
+                - id
+              additionalProperties: false
+      responses:
+        "200":
+          description: Event replayed successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                    example: true
+                  message:
+                    type: string
+                    example: Event successfully replayed
+                required:
+                  - success
+                  - message
+        "400":
+          description: Validation error
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "404":
+          description: Event not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+  /api/admin/system/backup-status:
+    get:
+      summary: System Backup Status
+      description: Returns the status of the continuous WAL archiving backup job.
+      tags:
+        - Admin System
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Backup status returned successfully
+          content:
+            application/json: {}
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message

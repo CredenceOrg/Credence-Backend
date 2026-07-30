@@ -88,6 +88,14 @@ export async function batchUpdate(
               RAISE NOTICE 'Batch %: % rows processed, % remaining', 
                   batches_processed, batch_count, remaining;
               
+              -- Live status backfill tracking
+              IF total_count > 0 THEN
+                  PERFORM set_config('application_name', 
+                      'backfill ${tableName}: ' || total_processed || '/' || total_count || ' (' || 
+                      ROUND((total_processed::numeric / total_count::numeric) * 100, 1) || '%)', 
+                      false);
+              END IF;
+              
               -- Commit if configured
               IF batches_processed % ${finalConfig.commitInterval} = 0 THEN
                   COMMIT;
@@ -186,6 +194,14 @@ export async function batchDelete(
               RAISE NOTICE 'Batch %: % rows deleted, % remaining', 
                   batches_processed, batch_count, remaining;
               
+              -- Live status backfill tracking
+              IF total_count > 0 THEN
+                  PERFORM set_config('application_name', 
+                      'backfill ${tableName}: ' || total_processed || '/' || total_count || ' (' || 
+                      ROUND((total_processed::numeric / total_count::numeric) * 100, 1) || '%)', 
+                      false);
+              END IF;
+              
               -- Commit to free up space
               COMMIT;
               
@@ -271,6 +287,14 @@ export async function batchInsertSelect(
               
               RAISE NOTICE 'Batch %: % rows inserted, % remaining', 
                   batches_processed, batch_count, remaining;
+              
+              -- Live status backfill tracking
+              IF total_count > 0 THEN
+                  PERFORM set_config('application_name', 
+                      'backfill ${targetTable}: ' || total_processed || '/' || total_count || ' (' || 
+                      ROUND((total_processed::numeric / total_count::numeric) * 100, 1) || '%)', 
+                      false);
+              END IF;
               
               -- Commit periodically
               IF batches_processed % ${finalConfig.commitInterval} = 0 THEN

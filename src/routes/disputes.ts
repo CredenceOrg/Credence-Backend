@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from 'express'
 import { type AuthenticatedRequest, requireUserAuth } from '../middleware/auth.js'
 import { ErrorCode, getErrorCatalogEntry } from '../lib/errorCatalog.js'
+import { sendError } from '../lib/errors.js'
 import {
   dismissDispute,
   getDispute,
@@ -12,6 +13,7 @@ import {
 import {
   parsePaginationParams,
   buildCursorEnvelope,
+  buildCursorPaginationLinks,
   encodeCursor,
   MAX_LIMIT,
   PaginationValidationError,
@@ -67,7 +69,7 @@ router.post('/', requireUserAuth, async (req: Request, res: Response) => {
       status: 'failure',
       errorMessage: message,
     })
-    res.status(400).json({ error: 'BadRequest', message })
+    sendError(res, ErrorCode.VALIDATION_FAILED, message)
   }
 })
 
@@ -77,7 +79,7 @@ router.get('/', requireUserAuth, (req: Request, res: Response) => {
 
   const status = req.query.status as string | undefined
   if (status && !DISPUTE_STATES.includes(status as any)) {
-    res.status(400).json({ error: 'BadRequest', message: `Invalid status: ${status}` })
+    sendError(res, ErrorCode.VALIDATION_FAILED, `Invalid status: ${status}`)
     return
   }
 
@@ -86,10 +88,10 @@ router.get('/', requireUserAuth, (req: Request, res: Response) => {
     pag = parsePaginationParams(req.query, { maxLimit: MAX_LIMIT })
   } catch (error) {
     if (error instanceof PaginationValidationError) {
-      res.status(400).json({ error: 'BadRequest', message: error.details[0]?.message || 'Invalid pagination parameters' })
+      sendError(res, ErrorCode.VALIDATION_FAILED, error.details[0]?.message || 'Invalid pagination parameters')
       return
     }
-    res.status(400).json({ error: 'BadRequest', message: 'Invalid pagination parameters' })
+    sendError(res, ErrorCode.VALIDATION_FAILED, 'Invalid pagination parameters')
     return
   }
 
@@ -98,21 +100,28 @@ router.get('/', requireUserAuth, (req: Request, res: Response) => {
     { limit: pag.limit, cursor: pag.decodedCursor }
   )
 
+  const nextCursor = result.hasMore && result.data.length > 0
+    ? encodeCursor(result.data[result.data.length - 1].createdAt, result.data[result.data.length - 1].id)
+    : null
+
   const envelope = buildCursorEnvelope(result.data, {
     limit: pag.limit,
     hasMore: result.hasMore,
-    nextCursor: result.hasMore && result.data.length > 0
-      ? encodeCursor(result.data[result.data.length - 1].createdAt, result.data[result.data.length - 1].id)
-      : null,
+    nextCursor,
   })
 
-  res.status(200).json(envelope)
+  const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
+  res.status(200).json({
+    ...envelope,
+    links: buildCursorPaginationLinks(fullUrl, pag.limit, nextCursor),
+  })
 })
 
 router.get('/:id', requireUserAuth, (req: Request, res: Response) => {
   const dispute = getDispute(req.params.id)
   if (!dispute) {
-    res.status(404).json({ error: 'NotFound', message: 'Dispute not found' })
+    sendError(res, ErrorCode.NOT_FOUND, 'Dispute not found')
     return
   }
 

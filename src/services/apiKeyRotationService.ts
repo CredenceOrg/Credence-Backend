@@ -44,7 +44,7 @@ export class ApiKeyRotationService {
     tier: SubscriptionTier = 'free',
     ipAddress?: string,
   ): Promise<CreateApiKeyResult> {
-    const result = this.repo.create(ownerId, scope, tier)
+    const result = await this.repo.create(ownerId, scope, tier)
 
     await this.audit.logAction({
       tenantId: this.resolveTenantId(),
@@ -119,11 +119,23 @@ export class ApiKeyRotationService {
       return null
     }
 
-    const newKey = this.repo.rotate(keyId)
+    const newKey = await this.repo.rotate(keyId)
 
     // Guard: rotate() checks the same conditions, but a concurrent revoke
     // between our findById and this call could yield null here.
     if (!newKey) {
+      await this.audit.logAction({
+        tenantId: this.resolveTenantId(),
+        actorId,
+        actorEmail,
+        action: AuditAction.ROTATE_API_KEY,
+        resourceType: 'api_key',
+        resourceId: keyId,
+        details: { keyId, reason: 'rotation_failed_after_validation' },
+        status: 'failure',
+        errorMessage: 'API key rotation failed',
+        ipAddress,
+      })
       return null
     }
 
@@ -165,7 +177,7 @@ export class ApiKeyRotationService {
     ipAddress?: string,
   ): Promise<boolean> {
     const existing = this.repo.findById(keyId)
-    const revoked = this.repo.revoke(keyId)
+    const revoked = await this.repo.revoke(keyId)
 
     await this.audit.logAction({
       tenantId: this.resolveTenantId(),
@@ -194,7 +206,7 @@ export class ApiKeyRotationService {
    * @param ownerId - Owner whose keys should be listed.
    * @returns Array of key metadata records (active and revoked).
    */
-  listKeys(ownerId: string): Omit<StoredApiKey, 'hashedKey'>[] {
+  async listKeys(ownerId: string): Promise<Omit<StoredApiKey, 'hashedKey'>[]> {
     return this.repo.listByOwner(ownerId)
   }
 }

@@ -1,9 +1,12 @@
 import {
-  getBackoffDelayMs,
-  resolveProviderRetryPolicy,
   type ProviderRetryPolicies,
   type RetryPolicy,
 } from "../lib/retryPolicy.js";
+import {
+  executeWithRetry,
+  resolveExtendedProviderRetryPolicy,
+  type ExtendedRetryPolicy,
+} from "./retryExecutor.js";
 import {
   executeSorobanOperation,
   createMetricsAdapter,
@@ -17,6 +20,7 @@ import {
   noopRetryObserver,
   type RetryObserver,
 } from "../observability/retryMetrics.js";
+import { recordDownstreamRpcLatency } from "../observability/rpcLatencyMetrics.js";
 import { resolveTimeout, createTimeoutConfig } from "../lib/timeouts.js";
 import { validateConfig } from "../config/index.js";
 import { getCircuitBreaker } from "./circuitBreaker.js";
@@ -38,9 +42,24 @@ export interface SorobanClientConfig {
   retry?: Partial<RetryOptions>;
   retryPolicies?: ProviderRetryPolicies;
   circuitBreaker?: {
-    failureThreshold?: number;
-    cooldownPeriodMs?: number;
-  };
+    failureThreshold?: number
+    /**
+     * Duration in milliseconds the breaker stays OPEN (fail-fast) after
+     * tripping. Default: 10 000 ms (10 s).
+     */
+    openWindowMs?: number
+    /**
+     * Duration in milliseconds after tripping before a probe is allowed.
+     * Default: 30 000 ms (30 s).
+     */
+    halfOpenAfterMs?: number
+    /**
+     * @deprecated Use `halfOpenAfterMs` instead.
+     * Accepted for backwards compatibility; maps to `halfOpenAfterMs` when
+     * the new field is absent.
+     */
+    cooldownPeriodMs?: number
+  }
   /**
    * TTL in milliseconds for the getIdentityState() read-through cache.
    * Set to 0 to disable caching. When omitted the value is read from
@@ -122,7 +141,7 @@ export class SorobanClientError extends Error {
   }
 }
 
-const DEFAULT_RETRY: RetryOptions = {
+const DEFAULT_RETRY: ExtendedRetryPolicy = {
   maxAttempts: 3,
   baseDelayMs: 200,
   maxDelayMs: 2_000,
@@ -135,7 +154,7 @@ export class SorobanClient {
   private readonly network: SorobanNetwork;
   private readonly contractId: string;
   private readonly timeoutMs: number;
-  private readonly retryOptions: RetryOptions;
+  private readonly retryOptions: ExtendedRetryPolicy;
   private readonly fetchFn: typeof fetch;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
@@ -145,7 +164,8 @@ export class SorobanClient {
   );
   private readonly circuitBreakerConfig: {
     failureThreshold: number;
-    cooldownPeriodMs: number;
+    openWindowMs: number;
+    halfOpenAfterMs: number;
   };
   private readonly stateCache: SorobanStateCache;
 
@@ -162,7 +182,7 @@ export class SorobanClient {
       "soroban",
       createTimeoutConfig("soroban", "SOROBAN_RPC_TIMEOUT", config.timeoutMs),
     );
-    this.retryOptions = resolveProviderRetryPolicy("soroban", DEFAULT_RETRY, {
+    this.retryOptions = resolveExtendedProviderRetryPolicy("soroban", DEFAULT_RETRY, {
       providerPolicies: config.retryPolicies,
       overrides: config.retry,
     });
@@ -174,13 +194,16 @@ export class SorobanClient {
     this.retryObserver = deps.retryObserver ?? noopRetryObserver;
 
     let defaultFailureThreshold = 5;
-    let defaultCooldownMs = 10000;
+    let defaultOpenWindowMs = 10_000;
+    let defaultHalfOpenAfterMs = 30_000;
     let defaultCacheTtlMs = 5000;
     try {
       const globalConfig = validateConfig(process.env);
       defaultFailureThreshold =
         globalConfig.sorobanCircuitBreaker.failureThreshold;
-      defaultCooldownMs = globalConfig.sorobanCircuitBreaker.cooldownPeriodMs;
+      defaultOpenWindowMs = globalConfig.sorobanCircuitBreaker.openWindowMs;
+      defaultHalfOpenAfterMs =
+        globalConfig.sorobanCircuitBreaker.halfOpenAfterMs;
       defaultCacheTtlMs = globalConfig.sorobanStateCache.ttlMs;
     } catch {
       if (process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
@@ -188,8 +211,18 @@ export class SorobanClient {
           process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         );
       }
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
-        defaultCooldownMs = Number(
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS) {
+        defaultOpenWindowMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+        );
+      }
+      // Prefer the new var; fall back to deprecated COOLDOWN_MS.
+      if (process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS) {
+        defaultHalfOpenAfterMs = Number(
+          process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
+        );
+      } else if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
+        defaultHalfOpenAfterMs = Number(
           process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
         );
       }
@@ -201,8 +234,12 @@ export class SorobanClient {
     this.circuitBreakerConfig = {
       failureThreshold:
         config.circuitBreaker?.failureThreshold ?? defaultFailureThreshold,
-      cooldownPeriodMs:
-        config.circuitBreaker?.cooldownPeriodMs ?? defaultCooldownMs,
+      openWindowMs:
+        config.circuitBreaker?.openWindowMs ?? defaultOpenWindowMs,
+      halfOpenAfterMs:
+        config.circuitBreaker?.halfOpenAfterMs ??
+        config.circuitBreaker?.cooldownPeriodMs ??
+        defaultHalfOpenAfterMs,
     };
 
     // Allow per-instance override via config.cacheTtlMs; fall back to env default.
@@ -311,68 +348,38 @@ export class SorobanClient {
 
     const breaker = getCircuitBreaker(host, this.circuitBreakerConfig);
 
+    // Measure the full downstream RPC latency (including retries and any time
+    // spent gated by the circuit breaker), labelled by provider and op.
+    const callStartMs = Date.now();
+    try {
+      return await this.executeWithRetries<T>(breaker, method, params);
+    } finally {
+      recordDownstreamRpcLatency("soroban", method, Date.now() - callStartMs);
+    }
+  }
+
+  private executeWithRetries<T>(
+    breaker: ReturnType<typeof getCircuitBreaker>,
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<T> {
     return breaker.execute(async () => {
-      let attempt = 0;
-      let lastError: SorobanClientError | null = null;
-      const startMs = Date.now();
-
-      while (attempt < this.retryOptions.maxAttempts) {
-        attempt += 1;
-        try {
-          const result = await this.executeRpc<T>(method, params, attempt);
-          this.retryObserver.onSuccess?.({
-            provider: "soroban",
-            attempt,
-            durationMs: Date.now() - startMs,
-          });
-          return result;
-        } catch (error) {
-          const normalized = this.normalizeError(error, attempt);
-          lastError = normalized;
-
-          const hasAttemptsRemaining = attempt < this.retryOptions.maxAttempts;
-          const shouldRetry =
-            hasAttemptsRemaining && this.isRetryable(normalized);
-
-          if (!shouldRetry) {
-            if (!hasAttemptsRemaining || !this.isRetryable(normalized)) {
-              this.retryObserver.onRetryExhausted?.({
-                provider: "soroban",
-                attempts: attempt,
-                errorCode: normalized.code,
-              });
-            }
-            throw normalized;
-          }
-
-          const delay = this.getDelayMs(attempt);
-          this.retryObserver.onRetryAttempt?.({
-            provider: "soroban",
-            attempt,
-            delayMs: delay,
-            errorCode: normalized.code,
-          });
-          logger.info(
-            `Retrying outbound request provider=soroban attempt=${attempt + 1}/${this.retryOptions.maxAttempts} delayMs=${delay} code=${normalized.code}`,
-          );
-          await this.sleepFn(delay);
+      let attemptCounter = 0;
+      return executeWithRetry<T>(
+        "soroban",
+        async () => {
+          attemptCounter += 1;
+          return this.executeRpc<T>(method, params, attemptCounter);
+        },
+        {
+          policy: this.retryOptions,
+          retryObserver: this.retryObserver,
+          sleepFn: this.sleepFn,
+          randomFn: this.randomFn,
         }
-      }
-
-      this.retryObserver.onRetryExhausted?.({
-        provider: "soroban",
-        attempts: attempt,
-        errorCode: lastError?.code ?? "NETWORK_ERROR",
+      ).catch((error) => {
+        throw this.normalizeError(error, attemptCounter);
       });
-
-      throw (
-        lastError ??
-        new SorobanClientError({
-          code: "NETWORK_ERROR",
-          message: `Unknown Soroban RPC failure after ${this.retryOptions.maxAttempts} attempts.`,
-          attempts: this.retryOptions.maxAttempts,
-        })
-      );
     });
   }
 
@@ -453,7 +460,7 @@ export class SorobanClient {
 
         return payload.result;
       },
-      { overrideMs: this.timeoutMs, metrics: this.metrics },
+      { overrideMs: this.retryOptions.timeoutMs ?? this.timeoutMs, metrics: this.metrics },
     );
   }
 

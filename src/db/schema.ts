@@ -24,6 +24,17 @@ const CREATE_TABLE_STATEMENTS = [
   )
   `,
   `
+  CREATE TABLE IF NOT EXISTS wallet_transactions (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    wallet_id UUID NOT NULL REFERENCES wallets(id) ON DELETE CASCADE,
+    type TEXT NOT NULL CHECK (type IN ('credit', 'debit')),
+    amount TEXT NOT NULL,
+    previous_balance TEXT NOT NULL,
+    new_balance TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )
+  `,
+  `
   CREATE TABLE IF NOT EXISTS bonds (
     id BIGSERIAL PRIMARY KEY,
     identity_address TEXT NOT NULL REFERENCES identities(address) ON DELETE CASCADE,
@@ -78,9 +89,44 @@ const CREATE_TABLE_STATEMENTS = [
     details_json JSONB NOT NULL DEFAULT '{}'::jsonb,
     status TEXT NOT NULL CHECK (status IN ('success', 'failure')),
     ip_address TEXT,
-    error_message TEXT
+    error_message TEXT,
+    tenant_id TEXT NOT NULL,
+    request_id TEXT,
+    seq BIGSERIAL,
+    prev_hash TEXT,
+    row_hash TEXT
   )
   `,
+  `
+  CREATE SEQUENCE IF NOT EXISTS audit_logs_seq START WITH 1 INCREMENT BY 1;
+  `,
+  `
+  CREATE TABLE IF NOT EXISTS org_members (
+    id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    org_id       UUID        NOT NULL,
+    user_id      UUID        NOT NULL,
+    email        TEXT        NOT NULL,
+    role         TEXT        NOT NULL DEFAULT 'member'
+                             CHECK (role IN ('owner', 'admin', 'member')),
+    deleted_at   TIMESTAMPTZ NULL,
+    deleted_by   UUID        NULL,
+    created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+  );
+  `,
+  `CREATE UNIQUE INDEX IF NOT EXISTS uq_org_members_active ON org_members (org_id, user_id) WHERE deleted_at IS NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_org_members_org_id ON org_members (org_id) WHERE deleted_at IS NULL;`,
+  `CREATE INDEX IF NOT EXISTS idx_org_members_user_id ON org_members (user_id) WHERE deleted_at IS NULL;`,
+  `
+  CREATE OR REPLACE FUNCTION set_updated_at()
+  RETURNS TRIGGER LANGUAGE plpgsql AS $$
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+  $$;
+  `,
+  `CREATE TRIGGER trg_org_members_updated_at BEFORE UPDATE ON org_members FOR EACH ROW EXECUTE FUNCTION set_updated_at();`,
   `
   CREATE TABLE IF NOT EXISTS report_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -93,6 +139,27 @@ const CREATE_TABLE_STATEMENTS = [
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )
   `,
+  `
+  CREATE TABLE IF NOT EXISTS pg_stat_activity_snapshots (
+    snapshot_at TIMESTAMPTZ NOT NULL,
+    pid INTEGER NOT NULL,
+    usename TEXT,
+    datname TEXT,
+    state TEXT,
+    query TEXT,
+    backend_type TEXT,
+    application_name TEXT,
+    client_addr TEXT,
+    wait_event_type TEXT,
+    wait_event TEXT,
+    backend_start TIMESTAMPTZ,
+    xact_start TIMESTAMPTZ,
+    query_start TIMESTAMPTZ,
+    state_change TIMESTAMPTZ,
+    PRIMARY KEY (snapshot_at, pid)
+  )
+  `,
+  `CREATE INDEX IF NOT EXISTS pg_stat_activity_snapshots_snapshot_at_idx ON pg_stat_activity_snapshots (snapshot_at DESC)`,
   `
   CREATE TABLE IF NOT EXISTS settlements (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -148,10 +215,13 @@ const CREATE_TABLE_STATEMENTS = [
     completed_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (job_key, expires_at)
+    -- One row per job_key. This is what makes the ON CONFLICT (job_key) claim in
+    -- jobs/notificationIdempotency.ts atomic; a composite unique key would both
+    -- fail ON CONFLICT inference and let two rows exist for the same job.
+    UNIQUE (job_key)
   )
   `,
-  `CREATE INDEX IF NOT EXISTS idempotent_job_attempts_job_key_idx ON idempotent_job_attempts (job_key, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idempotent_job_attempts_expires_at_idx ON idempotent_job_attempts (expires_at)`,
   `CREATE INDEX IF NOT EXISTS bonds_identity_address_idx ON bonds (identity_address)`,
   `CREATE INDEX IF NOT EXISTS attestations_subject_address_idx ON attestations (subject_address)`,
   `CREATE INDEX IF NOT EXISTS attestations_bond_id_idx ON attestations (bond_id)`,
@@ -160,6 +230,7 @@ const CREATE_TABLE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS audit_logs_actor_time_idx ON audit_logs (actor_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_resource_time_idx ON audit_logs (resource_id, occurred_at DESC)`,
   `CREATE INDEX IF NOT EXISTS audit_logs_time_idx ON audit_logs (occurred_at DESC)`,
+  `CREATE INDEX IF NOT EXISTS idx_audit_logs_occurred_at_tenant_id ON audit_logs (occurred_at DESC, tenant_id)`,
   `CREATE INDEX IF NOT EXISTS settlements_bond_id_idx ON settlements (bond_id)`,
   `CREATE INDEX IF NOT EXISTS settlements_status_idx ON settlements (status)`,
   `CREATE INDEX IF NOT EXISTS settlements_settled_at_idx ON settlements (settled_at DESC)`,
@@ -172,6 +243,7 @@ const DROP_TABLE_STATEMENTS = [
   "DROP TABLE IF EXISTS event_outbox",
   "DROP TABLE IF EXISTS settlements",
   "DROP TABLE IF EXISTS report_jobs",
+  "DROP TABLE IF EXISTS pg_stat_activity_snapshots",
   "DROP TABLE IF EXISTS score_history",
   "DROP TABLE IF EXISTS audit_logs",
   "DROP TABLE IF EXISTS slash_events",
@@ -189,7 +261,7 @@ export async function createSchema(db: Queryable): Promise<void> {
 
 export async function resetDatabase(db: Queryable): Promise<void> {
   await db.query(
-    "TRUNCATE TABLE settlements, report_jobs, audit_logs, score_history, slash_events, attestations, bonds, identities RESTART IDENTITY CASCADE",
+    "TRUNCATE TABLE settlements, report_jobs, pg_stat_activity_snapshots, audit_logs, score_history, slash_events, attestations, bonds, identities, org_members RESTART IDENTITY CASCADE",
   );
 }
 

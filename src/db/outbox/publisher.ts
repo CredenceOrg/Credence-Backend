@@ -12,7 +12,7 @@ import {
   bondCreationEventSchema,
   withdrawalEventSchema,
 } from '../../schemas/queue.js'
-import { logger } from '../../utils/logger.js'
+import { logger, runWithCorrelationIds } from '../../utils/logger.js'
 import {
   incrementOutboxDeadLetter,
   incrementOutboxPublished,
@@ -21,6 +21,10 @@ import {
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
 } from '../../observability/index.js'
+import {
+  recordJobDeadLetter,
+  recordJobTerminalOutcome,
+} from '../../jobs/retryMetrics.js'
 import { trace, context, SpanContext, TraceFlags, SpanStatusCode, createTraceState } from '@opentelemetry/api'
 
 /**
@@ -50,6 +54,10 @@ export interface OutboxPublisherConfig {
   metricsIntervalMs?: number
   /** Maximum serialized payload size accepted by the publisher. Default: 262144 (256 KiB) */
   maxPayloadBytes?: number
+  /** Number of shards for horizontal scaling */
+  shardCount?: number
+  /** Shard ID assigned to this publisher instance */
+  shardId?: number
 }
 
 const DEFAULT_CONFIG: OutboxPublisherConfig = {
@@ -72,6 +80,11 @@ const QUEUE_EVENT_SCHEMAS: Record<string, ZodType> = {
   'bond.create': bondCreationEventSchema,
   'withdrawal.event': withdrawalEventSchema,
   'bond.withdrawal': withdrawalEventSchema,
+}
+
+/** Build a deterministic idempotency key from the consumer and event IDs. */
+function buildPublishIdempotencyKey(consumerId: string, eventId: bigint): string {
+  return `outbox-pub:${consumerId}:${eventId}`
 }
 
 const KNOWN_OUTBOX_EVENT_TYPES = new Set([
@@ -107,6 +120,20 @@ export class OutboxPublisher {
   private heartbeatIntervalMs: number
 
   constructor(publisher: EventPublisher, config?: Partial<OutboxPublisherConfig>) {
+    if (config?.shardCount !== undefined || config?.shardId !== undefined) {
+      const count = config?.shardCount
+      const id = config?.shardId
+      if (count === undefined || id === undefined) {
+        throw new Error('Both shardCount and shardId must be provided if either is set')
+      }
+      if (!Number.isInteger(count) || count <= 0) {
+        throw new Error('shardCount must be a positive integer')
+      }
+      if (!Number.isInteger(id) || id < 0 || id >= count) {
+        throw new Error('shardId must be a non-negative integer less than shardCount')
+      }
+    }
+
     this.repository = new OutboxRepository()
     this.publisher = publisher
     this.consumerId = config?.consumerId ?? randomUUID()
@@ -234,7 +261,9 @@ export class OutboxPublisher {
       pool,
       this.consumerId,
       this.config.batchSize,
-      this.leaseSeconds
+      this.leaseSeconds,
+      this.config.shardCount,
+      this.config.shardId
     )
 
     if (events.length === 0) {
@@ -279,11 +308,33 @@ export class OutboxPublisher {
 
   /**
    * Process a single event with error handling and retry logic.
+   * Uses a publish idempotency key to prevent duplicate emissions if the
+   * worker crashes mid-batch after publish but before markPublished.
    */
   private async processEvent(event: OutboxEvent): Promise<void> {
     const poison = this.detectPoisonPill(event)
     if (poison) {
       await this.quarantineEvent(event, poison.reason, poison.message)
+      return
+    }
+
+    // Idempotency guard: if this event was already published by a previous
+    // (crashed) consumer, skip publish and go straight to markPublished.
+    if (event.publishIdempotencyKey) {
+      logger.info(`[OutboxPublisher] Event ${event.id} already has publish idempotency key — skipping publish`)
+      await this.repository.markPublished(pool, event.id)
+      incrementOutboxPublished(event.aggregateType)
+      return
+    }
+
+    // Atomically set the idempotency key BEFORE publishing.  If another
+    // consumer already set it (extremely rare race), treat as duplicate.
+    const key = buildPublishIdempotencyKey(this.consumerId, event.id)
+    const acquired = await this.repository.trySetPublishIdempotencyKey(pool, event.id, key)
+    if (!acquired) {
+      logger.info(`[OutboxPublisher] Event ${event.id} publish idempotency key already set — skipping publish`)
+      await this.repository.markPublished(pool, event.id)
+      incrementOutboxPublished(event.aggregateType)
       return
     }
 
@@ -306,14 +357,21 @@ export class OutboxPublisher {
     try {
       await tracer.startActiveSpan('outbox.publish', { links, attributes: { 'outbox.event.id': event.id.toString(), 'outbox.event.type': event.eventType, 'outbox.aggregate.type': event.aggregateType, 'outbox.aggregate.id': event.aggregateId } }, async (span) => {
         try {
+          // Restore the correlation id captured at emit time so any logger
+          // calls made while publishing (including inside the webhook
+          // delivery HTTP client) are tagged with the id of the request
+          // that originally triggered this event.
+          const publishWithContext = () =>
+            runWithCorrelationIds({ correlationId: event.correlationId ?? undefined }, () =>
+              this.publisher.publish(event)
+            )
+
           // If we have a span context, set it as active context for publishing
           if (parentSpanContext) {
             const ctx = trace.setSpanContext(context.active(), parentSpanContext)
-            await context.with(ctx, async () => {
-              await this.publisher.publish(event)
-            })
+            await context.with(ctx, publishWithContext)
           } else {
-            await this.publisher.publish(event)
+            await publishWithContext()
           }
           await this.repository.markPublished(pool, event.id)
           incrementOutboxPublished(event.aggregateType)
@@ -327,6 +385,7 @@ export class OutboxPublisher {
             error
           )
           try {
+            // markFailed also clears the idempotency key so the event can be retried
             const result = await this.repository.markFailed(pool, event.id, errorMessage)
             if (result?.status === 'dead_letter') {
               // Normalize a short error code for metrics
@@ -335,7 +394,18 @@ export class OutboxPublisher {
                 .replace(/[^A-Z0-9_]/g, '_')
                 .slice(0, 50)
               incrementOutboxDeadLetter(code)
-              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter`)
+              // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
+              // `result.retryCount` is the FINAL attempt count of the event
+              // just moved to dead-letter: `markFailed` incremented retry_count
+              // and transitioned the row when `retry_count + 1 >= max_retries`,
+              // so the value here is exactly the budget the event consumed.
+              // Threading the real count (instead of 1) prevents the
+              // `jobs_terminal_attempt_count{domain="outbox"}` histogram
+              // from skewing toward the `1` bucket and misleading SREs.
+              const finalAttempts = result?.retryCount ?? 1
+              recordJobDeadLetter('outbox', code)
+              recordJobTerminalOutcome('outbox', 'dead_letter', finalAttempts)
+              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter after ${finalAttempts} attempt(s)`)
             }
           } catch (err) {
             logger.error('[OutboxPublisher] Error marking event failed', err)

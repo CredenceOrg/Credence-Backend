@@ -115,6 +115,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The request contains a field with an invalid type',
     category: 'validation',
   },
+  UNSAFE_REDIRECT_TARGET: {
+    code: 'unsafe_redirect_target',
+    sdkClassName: 'UnsafeRedirectTargetCredenceError',
+    kind: 'api',
+    httpStatus: 400,
+    defaultMessage: 'The requested redirect target is not permitted',
+    category: 'validation',
+  },
   INVALID_STELLAR_ADDRESS: {
     code: 'invalid_stellar_address',
     sdkClassName: 'InvalidStellarAddressCredenceError',
@@ -139,6 +147,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The batch size exceeds the allowed maximum',
     category: 'validation',
   },
+  REQUEST_TOO_LARGE: {
+    code: 'request_too_large',
+    sdkClassName: 'RequestTooLargeCredenceError',
+    kind: 'api',
+    httpStatus: 413,
+    defaultMessage: 'The request body exceeds the maximum allowed size',
+    category: 'validation',
+  },
   UNAUTHORIZED: {
     code: 'unauthorized',
     sdkClassName: 'UnauthorizedCredenceError',
@@ -153,6 +169,22 @@ export const ERROR_CATALOG = freezeCatalog({
     kind: 'api',
     httpStatus: 403,
     defaultMessage: 'The authenticated caller is not allowed to perform this action',
+    category: 'authorization',
+  },
+  CRAWLER_BLOCKED: {
+    code: 'crawler_blocked',
+    sdkClassName: 'CrawlerBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 403,
+    defaultMessage: 'Automated crawling of admin surfaces is forbidden.',
+    category: 'authorization',
+  },
+  CORS_BLOCKED: {
+    code: 'cors_blocked',
+    sdkClassName: 'CorsBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 403,
+    defaultMessage: 'Cross-origin request blocked by per-route CORS policy',
     category: 'authorization',
   },
   NOT_FOUND: {
@@ -171,6 +203,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'The request conflicts with the current resource state',
     category: 'resource',
   },
+  OPTIMISTIC_LOCK_CONFLICT: {
+    code: 'optimistic_lock_conflict',
+    sdkClassName: 'OptimisticLockConflictCredenceError',
+    kind: 'api',
+    httpStatus: 409,
+    defaultMessage: 'The resource was modified by another request. Fetch the latest version and retry.',
+    category: 'resource',
+  },
   IDEMPOTENCY_KEY_MISMATCH: {
     code: 'idempotency_key_mismatch',
     sdkClassName: 'IdempotencyKeyMismatchCredenceError',
@@ -186,6 +226,14 @@ export const ERROR_CATALOG = freezeCatalog({
     httpStatus: 402,
     defaultMessage: 'Monthly credit budget exhausted',
     category: 'business',
+  },
+  SSRF_BLOCKED: {
+    code: 'ssrf_blocked',
+    sdkClassName: 'SsrfBlockedCredenceError',
+    kind: 'api',
+    httpStatus: 422,
+    defaultMessage: 'The target URL resolves to a restricted or internal network address',
+    category: 'validation',
   },
   INSUFFICIENT_FUNDS: {
     code: 'insufficient_funds',
@@ -225,6 +273,14 @@ export const ERROR_CATALOG = freezeCatalog({
     kind: 'api',
     httpStatus: 503,
     defaultMessage: 'Service temporarily unavailable',
+    category: 'system',
+  },
+  MISSING_SECURITY_HEADER: {
+    code: 'missing_security_header',
+    sdkClassName: 'MissingSecurityHeaderCredenceError',
+    kind: 'api',
+    httpStatus: 500,
+    defaultMessage: 'A required security response header is missing',
     category: 'system',
   },
   invalid_input: {

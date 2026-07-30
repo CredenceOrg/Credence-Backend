@@ -8,6 +8,7 @@ import {
 } from '../services/governance/slashingVotes.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 import {
+  buildPaginationLinks,
   buildPaginationMeta,
   parsePaginationParams,
 } from '../lib/pagination.js'
@@ -15,11 +16,12 @@ import { validate, type ValidatedRequest } from '../middleware/validate.js'
 import {
   createSlashRequestBodySchema,
   submitVoteBodySchema,
-  slashRequestIdParamsSchema,
+  slashRequestPathParamsSchema,
   type CreateSlashRequestBody,
   type SubmitVoteBody,
-  type SlashRequestIdParams,
+  type SlashRequestPathParams,
 } from '../schemas/governance.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
 
 const router = Router()
 
@@ -64,7 +66,7 @@ router.post(
         errorMessage: message,
       })
 
-      res.status(400).json({ error: 'BadRequest', message })
+      sendError(res, ErrorCode.VALIDATION_FAILED, message)
     }
   }
 )
@@ -72,11 +74,11 @@ router.post(
 router.post(
   '/slash-requests/:id/votes',
   requireUserAuth,
-  validate({ params: slashRequestIdParamsSchema, body: submitVoteBodySchema }),
+  validate({ params: slashRequestPathParamsSchema, body: submitVoteBodySchema }),
   async (req: Request, res: Response) => {
     const authReq = req as AuthenticatedRequest
     const actor = authReq.user!
-    const validatedReq = req as ValidatedRequest<SlashRequestIdParams, any, SubmitVoteBody>
+    const validatedReq = req as ValidatedRequest<SlashRequestPathParams, any, SubmitVoteBody>
     const requestId = validatedReq.validated.params.id
     const { voterId, choice } = validatedReq.validated.body
 
@@ -84,7 +86,7 @@ router.post(
       const result = submitVote(requestId, voterId, choice)
 
       if (!result) {
-        res.status(404).json({ error: 'NotFound', message: 'Slash request not found' })
+        sendError(res, ErrorCode.NOT_FOUND, 'Slash request not found')
         return
       }
 
@@ -123,7 +125,8 @@ router.post(
       })
 
       const errorType = isDuplicateVoteError ? 'Conflict' : 'BadRequest'
-      res.status(statusCode).json({ error: errorType, message })
+      const code = isDuplicateVoteError ? ErrorCode.CONFLICT : ErrorCode.VALIDATION_FAILED
+      sendError(res, code, message)
     }
   }
 )
@@ -131,12 +134,12 @@ router.post(
 router.get(
   '/slash-requests/:id',
   requireUserAuth,
-  validate({ params: slashRequestIdParamsSchema }),
+  validate({ params: slashRequestPathParamsSchema }),
   (req: Request, res: Response) => {
-    const validatedReq = req as ValidatedRequest<SlashRequestIdParams>
+    const validatedReq = req as ValidatedRequest<SlashRequestPathParams>
     const request = getSlashRequest(validatedReq.validated.params.id)
     if (!request) {
-      res.status(404).json({ error: 'NotFound', message: 'Slash request not found' })
+      sendError(res, ErrorCode.NOT_FOUND, 'Slash request not found')
       return
     }
     res.status(200).json(request)
@@ -149,7 +152,8 @@ router.get('/slash-requests', requireUserAuth, (req: Request, res: Response, nex
     const { page, limit, offset } = parsePaginationParams(req.query as Record<string, unknown>)
     const { requests, total } = listSlashRequests(status, limit, offset)
     const paginationMeta = buildPaginationMeta(total, page, limit)
-    res.status(200).json({ success: true, data: requests, ...paginationMeta })
+    const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+    res.status(200).json({ success: true, data: requests, ...paginationMeta, links: buildPaginationLinks(fullUrl, page, limit, total) })
   } catch (error) {
     next(error)
   }

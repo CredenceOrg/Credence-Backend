@@ -1,6 +1,8 @@
 import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { PoolClient } from 'pg'
 import {
+  buildPaginationLinks,
+  buildCursorPaginationLinks,
   buildPaginationMeta,
   parsePaginationParams,
   PaginationValidationError,
@@ -8,6 +10,7 @@ import {
 } from '../lib/pagination.js'
 import { ValidationError, ErrorCode, NotFoundError } from '../lib/errors.js'
 import { validate } from '../middleware/validate.js'
+import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import {
   attestationsPathParamsSchema,
   createAttestationBodySchema,
@@ -19,6 +22,7 @@ import {
 } from '../db/repositories/attestationsRepository.js'
 import { pool, withReplica } from '../db/pool.js'
 import { TransactionManager } from '../db/transaction.js'
+import { loadConfig } from '../config/index.js'
 import { outboxEmitter, type OutboxEventEmitter } from '../db/outbox/index.js'
 import { AttestationCacheService } from '../services/attestationCacheService.js'
 import type { Queryable } from '../db/repositories/queryable.js'
@@ -107,10 +111,13 @@ function createLegacyAttestationRouter(repo: LegacyAttestationRepository): Route
         ? (result as { total: number }).total
         : repo.countBySubject(req.params.identity, req.query.includeRevoked === 'true')
 
+      const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
       res.json({
         identity: req.params.identity,
         attestations: result.attestations,
         ...buildPaginationMeta(total, page, limit),
+        links: buildPaginationLinks(fullUrl, page, limit, total),
       })
     } catch (error) {
       next(error)
@@ -152,11 +159,12 @@ export function createAttestationRouter(
   const db = deps.db ?? pool
   const repository = deps.repository ?? new AttestationsRepository(db, { skipTenantCheck: deps.skipTenantCheck })
   const cacheService = deps.cacheService ?? new AttestationCacheService(repository)
-  const transactionManager = deps.transactionManager ?? new TransactionManager(pool)
+  const transactionManager = deps.transactionManager ?? new TransactionManager(pool, loadConfig().db.lockTimeouts)
   const emitter = deps.outbox ?? outboxEmitter
 
   router.get(
     '/:address',
+    requireApiKey(ApiScope.ATTESTATIONS_READ),
     validate({ params: attestationsPathParamsSchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
@@ -189,6 +197,8 @@ export function createAttestationRouter(
           nextCursor = encodeCursor(lastAttestation.createdAt.toISOString(), String(lastAttestation.id))
         }
 
+        const fullUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`
+
         res.json({
           address: normalizedAddress,
           data: result.attestations.map(serializeAttestation),
@@ -197,6 +207,7 @@ export function createAttestationRouter(
             hasMore: result.hasMore,
             limit,
           },
+          links: buildCursorPaginationLinks(fullUrl, limit, nextCursor),
         })
         
         // Restore original tenant context if changed
@@ -215,6 +226,7 @@ export function createAttestationRouter(
 
   router.post(
     '/',
+    requireApiKey(ApiScope.ATTESTATIONS_WRITE),
     validate({ body: createAttestationBodySchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       // Set tenant context from request header if available

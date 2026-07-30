@@ -2,7 +2,7 @@
 
 ## Status: ✅ COMPLETE
 
-**Alert Routing Matrix: Severity-Aware Paging Tiers in AlertManager Config**
+**Alert Routing Matrix: Severity-Aware Paging Tiers in AlertManager Cogonfig**
 
 ---
 

@@ -33,10 +33,7 @@ export async function emitWebhookForAttestationChange(
   eventType: 'attestation.added' | 'attestation.revoked',
   payload: { address: string; attestationId?: string; verifier?: string; weight?: number; claim?: string }
 ): Promise<void> {
-  await webhookService.emit(eventType, {
-    address: payload.address,
-    ...payload
-  })
+  await webhookService.emit(eventType, payload as any)
 }
 
 export async function emitWebhookForScoreChange(
@@ -48,7 +45,11 @@ export async function emitWebhookForScoreChange(
   if (oldScore !== newScore) {
     await webhookService.emit('score.updated', {
       address,
-      score: newScore
+      score: newScore,
+      bondedAmount: '0',
+      bondStart: null,
+      bondDuration: null,
+      active: false,
     })
   }
 }

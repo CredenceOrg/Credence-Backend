@@ -2,12 +2,13 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { SettlementReconciler } from './settlementReconciler.js'
 import * as metrics from '../middleware/metrics.js'
 
-// Mock recordSettlementDrift helper
+// Mock recordSettlementDrift and setSettlementUnmatchedCount helpers
 vi.mock('../middleware/metrics.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../middleware/metrics.js')>()
   return {
     ...actual,
     recordSettlementDrift: vi.fn(),
+    setSettlementUnmatchedCount: vi.fn(),
   }
 })
 
@@ -56,13 +57,16 @@ describe('SettlementReconciler', () => {
     // Horizon returns transaction was successful
     mockTransactionCall.mockResolvedValueOnce({ successful: true })
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-1' }] })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
-    expect(result).toEqual({ checked: 1, discrepancies: 0, errors: 0 })
+    expect(result).toEqual({ runId: 'run-1', checked: 1, discrepancies: 0, errors: 0 })
     expect(mockTransactionCall).toHaveBeenCalledOnce()
-    // No findings should be written to DB
-    expect(mockDb.query).toHaveBeenCalledTimes(1) // only the initial select
+    // select + persistRunSummary (no linkFindings because 0 discrepancies)
+    expect(mockDb.query).toHaveBeenCalledTimes(2)
     expect(metrics.recordSettlementDrift).not.toHaveBeenCalled()
   })
 
@@ -80,14 +84,19 @@ describe('SettlementReconciler', () => {
     // Horizon returns transaction failed on-chain
     mockTransactionCall.mockResolvedValueOnce({ successful: false })
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-2' }] })
+    // linkFindingsToRun UPDATE
+    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
-    expect(result).toEqual({ checked: 1, discrepancies: 1, errors: 0 })
+    expect(result).toEqual({ runId: 'run-2', checked: 1, discrepancies: 1, errors: 0 })
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
     
-    // Finding should be persisted in DB
-    expect(mockDb.query).toHaveBeenCalledTimes(2) // select + insert
+    // select + finding insert + persistRunSummary + linkFindings
+    expect(mockDb.query).toHaveBeenCalledTimes(4)
     expect(mockDb.query.mock.calls[1][0]).toContain('INSERT INTO settlement_reconciliation_findings')
     expect(mockDb.query.mock.calls[1][1]).toEqual([
       'settlement-2',
@@ -115,14 +124,19 @@ describe('SettlementReconciler', () => {
     err.response = { status: 404 }
     mockTransactionCall.mockRejectedValueOnce(err)
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-3' }] })
+    // linkFindingsToRun UPDATE
+    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
-    expect(result).toEqual({ checked: 1, discrepancies: 1, errors: 0 })
+    expect(result).toEqual({ runId: 'run-3', checked: 1, discrepancies: 1, errors: 0 })
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('missing_on_chain')
 
-    // Finding should be persisted in DB
-    expect(mockDb.query).toHaveBeenCalledTimes(2)
+    // select + finding insert + persistRunSummary + linkFindings
+    expect(mockDb.query).toHaveBeenCalledTimes(4)
     expect(mockDb.query.mock.calls[1][1][1]).toBe('missing_on_chain')
   })
 
@@ -136,11 +150,14 @@ describe('SettlementReconciler', () => {
     }
     mockDb.query.mockResolvedValueOnce({ rows: [recentSettlement] })
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-skip' }] })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
     // Should skip check
-    expect(result).toEqual({ checked: 0, discrepancies: 0, errors: 0 })
+    expect(result).toEqual({ runId: 'run-skip', checked: 0, discrepancies: 0, errors: 0 })
     expect(mockTransactionCall).not.toHaveBeenCalled()
   })
 
@@ -157,10 +174,15 @@ describe('SettlementReconciler', () => {
     // Horizon returns transaction is successful on chain (meaning it settled on chain but still pending in DB)
     mockTransactionCall.mockResolvedValueOnce({ successful: true })
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-old' }] })
+    // linkFindingsToRun UPDATE
+    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
-    expect(result).toEqual({ checked: 1, discrepancies: 1, errors: 0 })
+    expect(result).toEqual({ runId: 'run-old', checked: 1, discrepancies: 1, errors: 0 })
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
   })
 
@@ -179,12 +201,16 @@ describe('SettlementReconciler', () => {
     err.response = { status: 500 }
     mockTransactionCall.mockRejectedValueOnce(err)
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-err' }] })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
     // Errors count should increment, discrepancies should not, and should not crash
-    expect(result).toEqual({ checked: 1, discrepancies: 0, errors: 1 })
-    expect(mockDb.query).toHaveBeenCalledTimes(1) // only initial select
+    expect(result).toEqual({ runId: 'run-err', checked: 1, discrepancies: 0, errors: 1 })
+    // select + persistRunSummary (no linkFindings because 0 discrepancies)
+    expect(mockDb.query).toHaveBeenCalledTimes(2)
   })
 
   it('reconciles multiple settlements with partial visibility', async () => {
@@ -217,13 +243,19 @@ describe('SettlementReconciler', () => {
       .mockResolvedValueOnce({ successful: false }) // s2 mismatch
       .mockRejectedValueOnce({ response: { status: 404 } }) // s3 missing
 
+    // persistRunSummary INSERT
+    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-multi' }] })
+    // linkFindingsToRun UPDATE
+    mockDb.query.mockResolvedValueOnce({ rowCount: 2 })
+
     const reconciler = new SettlementReconciler(mockDb)
     const result = await reconciler.run()
 
-    expect(result).toEqual({ checked: 3, discrepancies: 2, errors: 0 })
+    expect(result).toEqual({ runId: 'run-multi', checked: 3, discrepancies: 2, errors: 0 })
     expect(metrics.recordSettlementDrift).toHaveBeenCalledTimes(2)
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('missing_on_chain')
-    expect(mockDb.query).toHaveBeenCalledTimes(3) // select + s2 insert + s3 insert
+    // select + s2 finding insert + s3 finding insert + persistRunSummary + linkFindings
+    expect(mockDb.query).toHaveBeenCalledTimes(5)
   })
 })

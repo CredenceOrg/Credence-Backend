@@ -1,13 +1,16 @@
 import { Horizon } from '@stellar/stellar-sdk'
-import type { Pool } from 'pg'
+import type { Pool, PoolClient } from 'pg'
 import { Gauge, register } from 'prom-client'
 import { pool as defaultPool } from '../db/pool.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
+import { upsertCursor } from '../services/identityService.js'
 import {
   recordHorizonListenerHeartbeat,
   setHorizonListenerConfigured,
   setHorizonListenerRunning,
 } from '../services/health/runtimeState.js'
+import { withdrawalEventSchema } from '../schemas/queue.js'
+import { validateMessage } from './messageValidator.js'
 
 /**
  * Interface for bond withdrawal event data
@@ -200,14 +203,31 @@ export class HorizonWithdrawalListener {
         console.log(`[${STREAM_NAME}] Processing ${events.length} withdrawal events`)
         
         for (const event of events) {
-          await this.processWithdrawalEvent(event)
-          
-          // Persist cursor after each successfully processed event
-          await this.cursorRepo.upsert({
-            streamName: STREAM_NAME,
-            pagingToken: event.pagingToken
-          })
-          
+          const validation = validateMessage(withdrawalEventSchema, event)
+          if (!validation.valid) {
+            await this.replayService.captureFailure(
+              STREAM_NAME,
+              event,
+              `[${validation.reasonCode}] ${validation.detail}`,
+            )
+          } else {
+            await this.processWithdrawalEvent(event)
+          }
+
+          // Persist cursor in a transaction to ensure atomicity
+          // If cursor write fails, the event will be re-processed on restart.
+          const client: PoolClient = await this.pool.connect()
+          try {
+            await client.query('BEGIN')
+            await upsertCursor({ streamName: STREAM_NAME, pagingToken: event.pagingToken }, client)
+            await client.query('COMMIT')
+          } catch (txErr) {
+            await client.query('ROLLBACK')
+            throw txErr
+          } finally {
+            client.release()
+          }
+
           // Update local cursor only after successful persistence
           this.lastCursor = event.pagingToken
         }

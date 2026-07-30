@@ -45,6 +45,36 @@ export const dbTxnSavepoints = new client.Histogram({
 });
 
 /**
+ * Counter for queries whose duration exceeded SLOW_QUERY_THRESHOLD_MS.
+ */
+export const dbSlowQueriesTotal = new client.Counter({
+  name: 'db_slow_queries_total',
+  help: 'Total number of database queries exceeding SLOW_QUERY_THRESHOLD_MS',
+  labelNames: ['pool'],
+  registers: [client.register],
+});
+
+/**
+ * Duration histogram for queries whose duration exceeded SLOW_QUERY_THRESHOLD_MS.
+ */
+export const dbSlowQueryDurationSeconds = new client.Histogram({
+  name: 'db_slow_query_duration_seconds',
+  help: 'Duration of database queries that exceeded SLOW_QUERY_THRESHOLD_MS, in seconds',
+  labelNames: ['pool'],
+  buckets: [0.1, 0.25, 0.5, 1, 2, 5, 10, 30],
+  registers: [client.register],
+});
+
+/**
+ * Counter for WebSocket slow consumers that were evicted.
+ */
+export const wsEvictedSlowConsumersTotal = new client.Counter({
+  name: 'ws_evicted_slow_consumers_total',
+  help: 'Total number of WebSocket connections evicted due to slow consumption (exceeding backpressure high-water mark)',
+  registers: [client.register],
+});
+
+/**
  * Register the custom metrics with an external registry if needed.
  * The caller can pass its own Registry; otherwise the default global one is used.
  */
@@ -55,5 +85,7 @@ export function registerSyntheticMetrics(registry?: client.Registry): void {
   reg.registerMetric(webhookPayloadBytes);
   reg.registerMetric(dbTxnDurationSeconds);
   reg.registerMetric(dbTxnSavepoints);
+  reg.registerMetric(wsEvictedSlowConsumersTotal);
+  reg.registerMetric(dbSlowQueriesTotal);
+  reg.registerMetric(dbSlowQueryDurationSeconds);
 }
-

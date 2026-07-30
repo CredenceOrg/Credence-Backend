@@ -1,8 +1,17 @@
-- [ ] Explore existing decimalMath tests and patterns
-- [ ] Add fast-check property tests for roundToScale invariants for all rounding modes
-- [ ] Add sign correctness and no -0 output properties
-- [ ] Add multiplyDecimals exactness property and focused regression cases
-- [ ] Ensure TypeScript/lint compatibility and repository test conventions
-- [ ] Run build/lint/tests (decimalMath) and update until green
-- [ ] Create git branch, commit, push, and open PR (if repository flow requires)
+# TODO: Add docs/CORS_POLICY.md documenting per-route policy
 
+## Steps
+
+- [x] 1. Analyze codebase — read all route files, middleware, config, and existing security docs
+- [x] 2. Create comprehensive plan and get user approval
+- [x] 3. Create `docs/CORS_POLICY.md` with:
+  - [x] Threat model section
+  - [x] Route classification table (all route groups)
+  - [x] Default policy section
+  - [x] Per-route exceptions
+  - [x] Implementation guidance
+  - [x] Negative test section
+  - [x] Deployment guidance
+  - [x] References to related docs
+- [x] 4. Run `npx tsc --noEmit` to verify no TypeScript errors
+- [ ] 5. Run `npm test` to ensure existing tests pass

@@ -5,6 +5,7 @@ import {
   requireAdminRole,
 } from '../../middleware/auth.js'
 import { auditLogService, AuditAction } from '../../services/audit/index.js'
+import { sendError, ErrorCode } from '../../lib/errors.js'
 
 const router = Router()
 
@@ -25,7 +26,7 @@ router.get(
       const evidenceId = req.params.id
 
       if (!evidenceId || evidenceId.trim().length === 0) {
-        res.status(400).json({ error: 'BadRequest', message: 'evidence id is required' })
+        sendError(res, ErrorCode.FIELD_REQUIRED, 'evidence id is required')
         return
       }
 
@@ -41,10 +42,7 @@ router.get(
       )
 
       if (logs.length === 0) {
-        res.status(404).json({
-          error: 'NotFound',
-          message: `No erasure proof found for evidence ${evidenceId}`,
-        })
+        sendError(res, ErrorCode.NOT_FOUND, `No erasure proof found for evidence ${evidenceId}`)
         return
       }
 
@@ -61,8 +59,7 @@ router.get(
         },
       })
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown error'
-      res.status(500).json({ error: 'InternalError', message })
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, error instanceof Error ? error.message : 'Unknown error')
     }
   },
 )

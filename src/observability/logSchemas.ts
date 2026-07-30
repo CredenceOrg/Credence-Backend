@@ -49,6 +49,15 @@ export enum LogEventType {
   AUTH_LOGIN = "auth:login",
   AUTH_FAILURE = "auth:failure",
 
+  // ── Audit Chain Verifier Events ──
+  AUDIT_CHAIN_VERIFICATION = "audit-chain:verification",
+
+  // ── Audit Log Events ──
+  AUDIT_LOG_RECORDED = "audit:log-recorded",
+
+  // ── Database Events ──
+  DB_SLOW_QUERY = "db:slow-query",
+
   // ── Generic Fallback Events ──
   GENERIC_INFO = "generic:info",
   GENERIC_ERROR = "generic:error",
@@ -197,19 +206,35 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     message: { type: "string" },
     method: { type: "string" },
     path: { type: "string" },
+    /** Normalized route template, e.g. /api/trust/:address (never the raw URL). */
+    route: { type: "string" },
     statusCode: { type: "number" },
     durationMs: { type: "number" },
     requestId: { type: "string" },
+    /** Tenant identifier extracted from x-tenant-id header or JWT claim. */
+    tenant: { type: "string" },
+    /** Actor identifier extracted from x-actor-id header or authenticated user/API-key ID. */
+    actor: { type: "string" },
+    /** Distributed trace correlation ID propagated via X-Correlation-ID header. */
+    correlationId: { type: "string" },
   },
 
   [LogEventType.HTTP_ERROR]: {
     message: { type: "string" },
     method: { type: "string" },
     path: { type: "string" },
+    /** Normalized route template, e.g. /api/trust/:address. */
+    route: { type: "string" },
     statusCode: { type: "number" },
     error: { type: "string" },
     stack: { type: "string" },
     requestId: { type: "string" },
+    /** Tenant identifier. */
+    tenant: { type: "string" },
+    /** Actor identifier. */
+    actor: { type: "string" },
+    /** Distributed trace correlation ID. */
+    correlationId: { type: "string" },
   },
 
   // ── Auth Events ──
@@ -224,6 +249,40 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     message: { type: "string" },
     method: { type: "string" },
     reason: { type: "string" },
+  },
+
+  [LogEventType.AUDIT_CHAIN_VERIFICATION]: {
+    valid: { type: "boolean" },
+    rowsChecked: { type: "number" },
+    violationCount: { type: "number" },
+    lastCheckedSeq: { type: "number" },
+    firstViolationSeq: { type: "number" },
+    checkedAt: { type: "string" },
+  },
+
+  [LogEventType.AUDIT_LOG_RECORDED]: {
+    tenantId: { type: "string" },
+    action: { type: "string" },
+    resourceType: { type: "string" },
+    status: { type: "string" },
+    requestId: { type: "string" },
+  },
+
+  // ── Database ──
+
+  [LogEventType.DB_SLOW_QUERY]: {
+    message: { type: "string" },
+    // Parameterized query text (e.g. "... WHERE id = $1") — bind values are
+    // never included, so this cannot leak PII/secrets passed as query params.
+    query: { type: "string" },
+    durationMs: { type: "number" },
+    thresholdMs: { type: "number" },
+    pool: { type: "string" },
+    // JSON-stringified EXPLAIN (FORMAT JSON) output. Kept as a string
+    // (rather than a nested object/array) because the plan's shape varies
+    // per query and per node type, which the allowlist schema can't
+    // usefully describe field-by-field.
+    plan: { type: "string" },
   },
 
   // ── Generic Fallback ──

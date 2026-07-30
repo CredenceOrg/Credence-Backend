@@ -2,6 +2,8 @@ import { FailedInboundEventsRepository, FailedInboundEvent } from '../db/reposit
 import { auditLogService, AuditAction } from './audit/index.js'
 import { cache } from '../cache/redis.js'
 import { invalidateCache } from '../cache/invalidation.js'
+import { Horizon } from '@stellar/stellar-sdk'
+import { bondOperationSchema, bondWithdrawalOperationSchema, validateMessage } from '../listeners/messageValidator.js'
 
 const FAILED_EVENT_CACHE_TTL = 300 // 5 minutes
 
@@ -146,5 +148,126 @@ export class ReplayService {
    */
   async listFailedEvents(filters: { status?: any; type?: string }, limit = 50, offset = 0) {
     return this.repository.list(filters, limit, offset)
+  }
+
+  /**
+   * Replay raw Horizon events between ledger sequence numbers (inclusive).
+   * This performs a best-effort mapping of operations to registered handlers
+   * (e.g. `bond_creation`, `withdrawal`, `attestation`) and invokes handlers
+   * with parsed event payloads where possible. Errors for individual events
+   * are captured via `captureFailure` and logged.
+   */
+  async replayLedgerRange(
+    fromLedger: number,
+    toLedger: number,
+    adminId: string,
+    adminEmail: string,
+    tenantId: string,
+    ipAddress?: string
+  ): Promise<{ success: boolean; processed: number; errors: number }> {
+    const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org'
+    const server = new Horizon.Server(HORIZON_URL)
+
+    if (fromLedger > toLedger) {
+      throw new Error('fromLedger must be <= toLedger')
+    }
+
+    let processed = 0
+    let errors = 0
+
+    for (let seq = fromLedger; seq <= toLedger; seq++) {
+      try {
+        const res = await server.operations().forLedger(seq).limit(200).call()
+        for (const op of res.records) {
+          const anyOp: any = op
+          try {
+            // Map operation types to registered handler keys
+            if (anyOp.type === 'create_bond' && this.handlers.has('bond_creation')) {
+              const validation = validateMessage(bondOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('bond_creation', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
+              const parsed = {
+                identity: { id: validation.data.source_account },
+                bond: { id: validation.data.id, address: validation.data.source_account, amount: validation.data.amount, duration: validation.data.duration ?? null },
+              }
+              await this.handlers.get('bond_creation')!.handle(parsed)
+              processed++
+              continue
+            }
+
+            if (anyOp.type === 'payment' && this.handlers.has('withdrawal')) {
+              const payment = anyOp
+              const validation = validateMessage(bondWithdrawalOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('withdrawal', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
+              const parsed = {
+                id: validation.data.id,
+                pagingToken: anyOp.paging_token,
+                type: anyOp.type,
+                createdAt: new Date(anyOp.created_at),
+                bondId: `${payment.from || payment.source_account}-${anyOp.transaction_hash}`,
+                account: payment.from || payment.source_account,
+                amount: validation.data.amount,
+                assetType: payment.asset_type,
+                assetCode: payment.asset_code,
+                assetIssuer: payment.asset_issuer,
+                transactionHash: anyOp.transaction_hash || '',
+                operationIndex: Number.parseInt(anyOp.id.split('-').pop() ?? '0', 10) || 0,
+              }
+              await this.handlers.get('withdrawal')!.handle(parsed)
+              processed++
+              continue
+            }
+
+            // Best-effort attestation mapping
+            if ((anyOp.type && anyOp.type.toString().toLowerCase().includes('attest')) && this.handlers.has('attestation')) {
+              await this.handlers.get('attestation')!.handle(anyOp)
+              processed++
+              continue
+            }
+
+            // Unknown/unsupported op - skip
+          } catch (err: any) {
+            errors++
+            await this.captureFailure('replay_range_op_failure', { ledger: seq, op }, err?.message || 'handler failure')
+          }
+        }
+      } catch (err: any) {
+        errors++
+        await auditLogService.logAction(
+          tenantId,
+          adminId,
+          adminEmail,
+          'REPLAY_LEDGER_RANGE' as any,
+          `${fromLedger}-${toLedger}`,
+          'system',
+          { ledger: seq, error: err?.message },
+          'failure',
+          err?.message,
+          ipAddress
+        )
+      }
+    }
+
+    await auditLogService.logAction(
+      tenantId,
+      adminId,
+      adminEmail,
+      'REPLAY_LEDGER_RANGE' as any,
+      `${fromLedger}-${toLedger}`,
+      'system',
+      { fromLedger, toLedger, processed, errors },
+      errors === 0 ? 'success' : 'failure',
+      undefined,
+      ipAddress
+    )
+
+    return { success: errors === 0, processed, errors }
   }
 }

@@ -1,3 +1,5 @@
+import { getRemainingTimeoutMs } from '../utils/timeoutContext.js'
+
 /**
  * Centralized timeout budget management for service dependencies.
  * 
@@ -5,7 +7,7 @@
  * per-call overrides and observability through reason codes.
  */
 
-export type ServiceType = 'database' | 'cache' | 'queue' | 'http' | 'soroban' | 'webhook'
+export type ServiceType = 'database' | 'cache' | 'queue' | 'http' | 'soroban' | 'webhook' | 'grpc'
 
 export type TimeoutReasonCode = 
   | 'DB_QUERY_TIMEOUT'
@@ -17,6 +19,7 @@ export type TimeoutReasonCode =
   | 'HTTP_REQUEST_TIMEOUT'
   | 'SOROBAN_RPC_TIMEOUT'
   | 'WEBHOOK_DELIVERY_TIMEOUT'
+  | 'GRPC_TIMEOUT'
   | 'CUSTOM_TIMEOUT'
 
 export interface TimeoutBudget {
@@ -90,6 +93,14 @@ export const DEFAULT_TIMEOUT_BUDGETS: Record<ServiceType, TimeoutBudget> = {
     maxMs: 30000,         // 30s maximum
     targetMs: 8000,       // 8s SLO target
   },
+
+  // Internal gRPC calls between Credence services
+  grpc: {
+    defaultMs: 10000,     // 10s default
+    minMs: 100,           // 100ms minimum
+    maxMs: 30000,         // 30s maximum for large payloads
+    targetMs: 5000,       // 5s SLO target
+  },
 }
 
 /**
@@ -102,7 +113,8 @@ export const TIMEOUT_HARD_CAPS = {
   queue: { maxMs: 15000 },       // 15s absolute max
   http: { maxMs: 60000 },        // 60s absolute max
   soroban: { maxMs: 45000 },     // 45s absolute max
-  webhook: { maxMs: 60000 },     // 60s absolute max
+  webhook: { maxMs: 60000 },        // 60s absolute max
+  grpc: { maxMs: 60000 },           // 60s absolute max
 } as const
 
 /**
@@ -147,7 +159,18 @@ export function resolveTimeout(
   const requestedTimeout = config.overrideMs ?? budget.defaultMs
   
   // Validate and clamp the timeout
-  return clampTimeout(requestedTimeout, budget, serviceType)
+  const clampedTimeout = clampTimeout(requestedTimeout, budget, serviceType)
+
+  const remainingGlobal = getRemainingTimeoutMs()
+  if (remainingGlobal !== undefined) {
+    if (remainingGlobal <= 0) {
+      // Return 1ms to trigger an immediate abort in the executor if budget is already exhausted
+      return 1
+    }
+    return Math.min(clampedTimeout, remainingGlobal)
+  }
+
+  return clampedTimeout
 }
 
 /**
@@ -191,6 +214,7 @@ export function isValidTimeoutReasonCode(code: string): code is TimeoutReasonCod
     'HTTP_REQUEST_TIMEOUT',
     'SOROBAN_RPC_TIMEOUT',
     'WEBHOOK_DELIVERY_TIMEOUT',
+    'GRPC_TIMEOUT',
     'CUSTOM_TIMEOUT',
   ]
   return validCodes.includes(code as TimeoutReasonCode)

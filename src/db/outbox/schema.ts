@@ -23,7 +23,11 @@ export const OUTBOX_TABLE_SCHEMA = `
     error_message TEXT,
     trace_id TEXT,
     span_id TEXT,
-    tracestate TEXT
+    tracestate TEXT,
+    shard_count INTEGER,
+    shard_id INTEGER,
+    correlation_id TEXT,
+    publish_idempotency_key TEXT
   )
 ` as const
 
@@ -69,6 +73,22 @@ export async function createOutboxSchema(db: Queryable): Promise<void> {
       IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
                      WHERE table_name = 'event_outbox' AND column_name = 'tracestate') THEN
         ALTER TABLE event_outbox ADD COLUMN tracestate TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'shard_count') THEN
+        ALTER TABLE event_outbox ADD COLUMN shard_count INTEGER;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'shard_id') THEN
+        ALTER TABLE event_outbox ADD COLUMN shard_id INTEGER;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'publish_idempotency_key') THEN
+        ALTER TABLE event_outbox ADD COLUMN publish_idempotency_key TEXT;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name = 'event_outbox' AND column_name = 'correlation_id') THEN
+        ALTER TABLE event_outbox ADD COLUMN correlation_id TEXT;
       END IF;
 
       -- Ensure the status CHECK constraint allows the new 'dead_letter' value.

@@ -1,4 +1,7 @@
 import type { EmailNotification, EmailProvider } from './types.js'
+import { checkHostBlocked } from '../../lib/ssrfProtection.js'
+import { AppError } from '../../lib/errors.js'
+import { ErrorCode } from '../../lib/errorCatalog.js'
 
 /**
  * Base HTTP email provider with configurable endpoint and auth.
@@ -19,6 +22,15 @@ export class HttpEmailProvider implements EmailProvider {
     notification: EmailNotification,
     options?: { timeout?: number; idempotencyKey?: string }
   ): Promise<{ id: string; statusCode: number }> {
+    // --- SSRF protection: block private/internal network targets ---
+    const hostCheck = checkHostBlocked(this.endpoint)
+    if (hostCheck.blocked) {
+      throw new AppError(
+        `Email provider target '${hostCheck.host}' is restricted: ${hostCheck.reason}`,
+        ErrorCode.SSRF_BLOCKED,
+      )
+    }
+
     const timeout = options?.timeout ?? 5000
 
     const controller = new AbortController()

@@ -12,6 +12,7 @@ import {
 import { EvidenceStorageService, type Role } from '../services/evidence/storage.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 import { register } from '../middleware/metrics.js'
+import { sendError, ErrorCode } from '../lib/errors.js'
 
 const router = Router()
 let storageService: EvidenceStorageService | null = null
@@ -342,7 +343,7 @@ router.post(
         status: 'failure',
         errorMessage: message,
       })
-      res.status(400).json({ error: 'BadRequest', message })
+      sendError(res, ErrorCode.VALIDATION_FAILED, message)
     }
   }
 )
@@ -382,16 +383,16 @@ router.get('/:evidenceId', requireUserAuth, async (req: Request, res: Response) 
     })
 
     if (message.includes('Unauthorized')) {
-      res.status(403).json({ error: 'Forbidden', message })
+      sendError(res, ErrorCode.FORBIDDEN, message)
       return
     }
 
     if (message.includes('not found')) {
-      res.status(404).json({ error: 'NotFound', message })
+      sendError(res, ErrorCode.NOT_FOUND, message)
       return
     }
 
-    res.status(400).json({ error: 'BadRequest', message })
+    sendError(res, ErrorCode.VALIDATION_FAILED, message)
   }
 })
 

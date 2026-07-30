@@ -6,8 +6,7 @@
 import { BondsRepository, Bond, BondStatus } from '../db/repositories/bondsRepository.js'
 import { cache } from '../cache/redis.js'
 import { invalidateCache, createCacheKey } from '../cache/invalidation.js'
-
-const BOND_CACHE_TTL = 300 // 5 minutes
+import { loadConfig } from '../config/index.js'
 
 export class BondCacheService {
   constructor(private readonly repository: BondsRepository) {}
@@ -30,7 +29,7 @@ export class BondCacheService {
     
     const bond = await this.repository.findById(id)
     if (bond) {
-      await cache.set('bond', cacheKey, bond, BOND_CACHE_TTL)
+      await cache.set('bond', cacheKey, bond, loadConfig().bondCache.ttl)
     }
     
     return bond
@@ -54,7 +53,7 @@ export class BondCacheService {
     
     const bonds = await this.repository.listByIdentity(identityAddress)
     if (bonds.length > 0) {
-      await cache.set('bond', cacheKey, bonds, BOND_CACHE_TTL)
+      await cache.set('bond', cacheKey, bonds, loadConfig().bondCache.ttl)
     }
     
     return bonds

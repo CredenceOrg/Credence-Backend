@@ -25,7 +25,9 @@
 import { createGrpcTransport } from '@connectrpc/connect-node'
 import { createClient } from '@connectrpc/connect'
 
-import { createSharedSecretInterceptor, createRequestIdInterceptor } from './interceptors.js'
+import { createSharedSecretInterceptor, createRequestIdInterceptor, createDeadlineInterceptor } from './interceptors.js'
+import { createDefaultMetricsCollector } from '../../observability/timeoutMetrics.js'
+import type { TimeoutMetricsCollector } from '../../observability/timeoutMetrics.js'
 
 // Generated service descriptors — populated by `buf generate`.
 // If these imports fail, run `buf generate` first.
@@ -53,9 +55,35 @@ export interface CredenceGrpcConfig {
   sharedSecret: string
 
   /**
+   * Per-method timeout budgets keyed by fully-qualified method name.
+   *
+   * Key format: `"<service.typeName>/<method.name>"`.
+   * Use `"*"` as the key to set a default for all methods not explicitly listed.
+   *
+   * Deadline composition (monotonic from edge inward):
+   *   effective = min(configuredBudget, callerRemaining)
+   *
+   * @example
+   *   timeoutsMs: {
+   *     "*": 10_000,
+   *     "credence.v1.TrustService/GetTrustScore": 5_000,
+   *     "credence.v1.VerificationService/GetVerificationProof": 8_000,
+   *   }
+   */
+  timeoutsMs?: Record<string, number>
+
+  /**
    * Optional request timeout in milliseconds.  Defaults to 10 000 ms.
+   *
+   * @deprecated Use `timeoutsMs` with key `"*"` instead.
    */
   timeoutMs?: number
+
+  /**
+   * Optional metrics collector for timeout observability.
+   * Defaults to {@link createDefaultMetricsCollector} when not provided.
+   */
+  timeoutMetricsCollector?: TimeoutMetricsCollector
 }
 
 // ---------------------------------------------------------------------------
@@ -93,22 +121,29 @@ export interface CredenceGrpcClient {
  * @throws {Error} when baseUrl or sharedSecret is empty.
  */
 export function createCredenceGrpcClient(config: CredenceGrpcConfig): CredenceGrpcClient {
-  const { baseUrl, sharedSecret, timeoutMs = 10_000 } = config
+  const { baseUrl, sharedSecret, timeoutsMs, timeoutMs = 10_000, timeoutMetricsCollector } = config
 
   if (!baseUrl) {
     throw new Error('createCredenceGrpcClient: baseUrl is required')
   }
 
+  // Build the per-method timeouts map — merge the legacy timeoutMs as the
+  // wildcard default when `timeoutsMs` does not already provide one.
+  const perMethodTimeouts: Record<string, number> = { ...timeoutsMs }
+  if (!('*' in perMethodTimeouts)) {
+    perMethodTimeouts['*'] = timeoutMs
+  }
+
+  const metricsCollector = timeoutMetricsCollector ?? createDefaultMetricsCollector()
+
   const transport = createGrpcTransport({
     baseUrl: baseUrl.replace(/\/+$/, ''),
     httpVersion: '2',
     interceptors: [
+      createDeadlineInterceptor(perMethodTimeouts, metricsCollector),
       createSharedSecretInterceptor(sharedSecret),
       createRequestIdInterceptor(),
     ],
-    // Apply a default deadline to every call.  Individual callers can
-    // override this by passing a signal or deadline to the RPC method.
-    defaultTimeoutMs: timeoutMs,
   })
 
   return {

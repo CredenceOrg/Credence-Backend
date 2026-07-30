@@ -39,6 +39,9 @@ describe('ReplayService', () => {
       auditLogService: {
         logAction: vi.fn(),
       },
+      AuditAction: {
+        REPLAY_EVENT: 'REPLAY_EVENT',
+      },
     }))
 
     replayService = new ReplayService(mockRepo as any)

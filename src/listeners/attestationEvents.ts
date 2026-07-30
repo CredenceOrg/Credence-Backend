@@ -17,6 +17,8 @@
 
 import type { Attestation, CreateAttestationParams } from '../types/attestation.js'
 import type { IdempotencyGuard } from '../lib/idempotencyGuard.js'
+import { attestationEventSchema } from '../schemas/queue.js'
+import { validateMessage } from './messageValidator.js'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public types
@@ -179,6 +181,17 @@ export class AttestationEventListener {
 
       for (const event of events) {
         try {
+          const validation = validateMessage(attestationEventSchema, event)
+          if (!validation.valid) {
+            this.errors += 1
+            await this.replayService.captureFailure(
+              'attestation',
+              event,
+              `[${validation.reasonCode}] ${validation.detail}`,
+            )
+            continue
+          }
+
           const affected = await this.processEvent(event)
           if (affected) affectedAddresses.add(affected)
           this.lastCursor = event.pagingToken
