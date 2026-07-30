@@ -215,10 +215,13 @@ const CREATE_TABLE_STATEMENTS = [
     completed_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    UNIQUE (job_key, expires_at)
+    -- One row per job_key. This is what makes the ON CONFLICT (job_key) claim in
+    -- jobs/notificationIdempotency.ts atomic; a composite unique key would both
+    -- fail ON CONFLICT inference and let two rows exist for the same job.
+    UNIQUE (job_key)
   )
   `,
-  `CREATE INDEX IF NOT EXISTS idempotent_job_attempts_job_key_idx ON idempotent_job_attempts (job_key, expires_at)`,
+  `CREATE INDEX IF NOT EXISTS idempotent_job_attempts_expires_at_idx ON idempotent_job_attempts (expires_at)`,
   `CREATE INDEX IF NOT EXISTS bonds_identity_address_idx ON bonds (identity_address)`,
   `CREATE INDEX IF NOT EXISTS attestations_subject_address_idx ON attestations (subject_address)`,
   `CREATE INDEX IF NOT EXISTS attestations_bond_id_idx ON attestations (bond_id)`,
