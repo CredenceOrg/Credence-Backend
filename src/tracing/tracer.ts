@@ -38,6 +38,13 @@ export const ReputationSpans = {
 } as const;
 
 /**
+ * Canonical span names for database operations.
+ */
+export const DbSpans = {
+  TX: 'db.tx',
+} as const
+
+/**
  * Initialize OpenTelemetry tracing for the application
  */
 export function initTracing(
