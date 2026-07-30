@@ -3,16 +3,29 @@
  */
 
 import type { BondData } from './types.js'
+import type { ReputationModuleConfig } from './types.js'
 
-const BOND_MULTIPLIER = 0.01
-const MAX_BOND_SCORE = 1000
+const DEFAULT_CONFIG: ReputationModuleConfig = {
+  bondMultiplier: 0.01,
+  maxBondScore: 1000,
+  attestationMultiplier: 0.1,
+  maxAttestationWeight: 100,
+  maxDurationMs: 365 * 24 * 60 * 60 * 1000,
+  decayRate: 0.5,
+}
 
 /**
  * Calculate bond score from bond data
  * @param bond - Bond data
+ * @param config - Optional scoring configuration (defaults to module defaults)
  * @returns Bond score (0 if slashed)
  */
-export function calculateBondScore(bond: BondData): number {
+export function calculateBondScore(
+  bond: BondData,
+  config?: ReputationModuleConfig
+): number {
+  const { bondMultiplier, maxBondScore } = config ?? DEFAULT_CONFIG
+
   // Slashed bonds have zero score
   if (bond.isSlashed) {
     return 0
@@ -24,7 +37,7 @@ export function calculateBondScore(bond: BondData): number {
   }
 
   // Calculate score with multiplier and cap at max
-  const score = Math.min(bond.bondedAmount * BOND_MULTIPLIER, MAX_BOND_SCORE)
+  const score = Math.min(bond.bondedAmount * bondMultiplier, maxBondScore)
 
   return score
 }
@@ -33,12 +46,12 @@ export function calculateBondScore(bond: BondData): number {
  * Get the bond multiplier constant
  */
 export function getBondMultiplier(): number {
-  return BOND_MULTIPLIER
+  return DEFAULT_CONFIG.bondMultiplier
 }
 
 /**
  * Get the maximum bond score constant
  */
 export function getMaxBondScore(): number {
-  return MAX_BOND_SCORE
+  return DEFAULT_CONFIG.maxBondScore
 }

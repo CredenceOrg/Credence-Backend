@@ -5,6 +5,7 @@
 
 import { describe, it, expect } from 'vitest'
 import { calculateTimeWeight, getDecayRate, getMaxDuration } from './timeWeight.js'
+import type { ReputationModuleConfig } from './types.js'
 
 describe('timeWeight', () => {
   describe('calculateTimeWeight', () => {
@@ -179,6 +180,42 @@ describe('timeWeight', () => {
       const duration = getMaxDuration()
       expect(duration).toBeGreaterThan(0)
       expect(duration).toBe(365 * 24 * 60 * 60 * 1000)
+    })
+  })
+
+  describe('config-driven scoring', () => {
+    it('should use custom decayRate from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.01,
+        maxBondScore: 1000,
+        attestationMultiplier: 0.1,
+        maxAttestationWeight: 100,
+        maxDurationMs: 31536000000,
+        decayRate: 1.0,
+      }
+      const result = calculateTimeWeight(1, 1000, undefined, config)
+      expect(result).toBeGreaterThan(0)
+      expect(result).toBeLessThanOrEqual(1)
+    })
+
+    it('should use custom maxDurationMs from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.01,
+        maxBondScore: 1000,
+        attestationMultiplier: 0.1,
+        maxAttestationWeight: 100,
+        maxDurationMs: 5000,
+        decayRate: 0.5,
+      }
+      // At 5001ms (duration >= maxDurationMs=5000), should reach full weight (1)
+      const result = calculateTimeWeight(1, 5001, undefined, config)
+      expect(result).toBe(1)
+    })
+
+    it('should default to module defaults when no config provided', () => {
+      const result = calculateTimeWeight(1, 1000)
+      expect(result).toBeGreaterThan(0)
+      expect(result).toBeLessThanOrEqual(1)
     })
   })
 })

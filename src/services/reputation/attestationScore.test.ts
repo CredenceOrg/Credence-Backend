@@ -10,6 +10,7 @@ import {
   getAttestationMultiplier,
 } from './attestationScore.js'
 import type { Attestation } from './types.js'
+import type { ReputationModuleConfig } from './types.js'
 
 describe('attestationScore', () => {
   describe('calculateAttestationScore', () => {
@@ -253,6 +254,48 @@ describe('attestationScore', () => {
     it('should return correct multiplier', () => {
       const multiplier = getAttestationMultiplier()
       expect(multiplier).toBe(0.1)
+    })
+  })
+
+  describe('config-driven scoring', () => {
+    it('should use custom multiplier from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.01,
+        maxBondScore: 1000,
+        attestationMultiplier: 0.2,
+        maxAttestationWeight: 100,
+        maxDurationMs: 31536000000,
+        decayRate: 0.5,
+      }
+      const attestations: Attestation[] = [
+        { weight: 100, timestamp: 1000, isValid: true },
+      ]
+      const result = calculateAttestationScore(attestations, config)
+      expect(result).toBe(20) // 100 * 0.2
+    })
+
+    it('should use custom max weight from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.01,
+        maxBondScore: 1000,
+        attestationMultiplier: 0.1,
+        maxAttestationWeight: 50,
+        maxDurationMs: 31536000000,
+        decayRate: 0.5,
+      }
+      const attestations: Attestation[] = [
+        { weight: 1000, timestamp: 1000, isValid: true },
+      ]
+      const result = calculateAttestationScore(attestations, config)
+      expect(result).toBe(50) // Capped at custom max
+    })
+
+    it('should default to module defaults when no config provided', () => {
+      const attestations: Attestation[] = [
+        { weight: 100, timestamp: 1000, isValid: true },
+      ]
+      const result = calculateAttestationScore(attestations)
+      expect(result).toBe(10) // 100 * 0.1
     })
   })
 })
