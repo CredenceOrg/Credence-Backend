@@ -3,13 +3,75 @@ import { AuditLogEntry, AuditAction } from './types.js'
 /**
  * Audit log service for tracking admin actions
  * In production, this would write to a database or centralized logging system
+ *
+ * Supports request-scoped batching: callers can buffer multiple log entries
+ * and flush them in a single write, reducing per-request I/O when the
+ * underlying storage is a remote database rather than an in-memory array.
  */
 export class AuditLogService {
   private logs: AuditLogEntry[] = []
   private logId = 0
+  /** Entries buffered by the current request that have not been flushed yet. */
+  private buffer: AuditLogEntry[] = []
+  /** True when the service is in buffered (request-scoped) mode. */
+  private buffered = false
+
+  /**
+   * Enable request-scoped buffering. While buffered, every call to
+   * {@link logAction} appends to an internal buffer instead of writing
+   * immediately. Call {@link flush} at the end of the request to commit
+   * all buffered entries at once.
+   *
+   * Use this in middleware or request interceptors to coalesce audit-log
+   * writes per request, reducing the number of I/O operations when the
+   * underlying store is a remote database.
+   *
+   * If a buffer is already active (e.g., nested middleware registration),
+   * this call is a safe no-op rather than silently discarding the existing
+   * buffer.
+   */
+  startBuffer(): void {
+    if (this.buffered) {
+      return // already buffering — don't discard existing entries
+    }
+    this.buffered = true
+    this.buffer = []
+  }
+
+  /**
+   * Immediately flush all buffered entries to the audit log (the internal
+   * `logs` array). After flushing, buffered mode is disabled.
+   *
+   * Call this at the end of each request (e.g. in response middleware or
+   * a `finally` block) to commit the coalesced entries.
+   *
+   * @returns The number of entries that were flushed.
+   */
+  flush(): number {
+    const count = this.buffer.length
+    if (count > 0) {
+      this.logs.push(...this.buffer)
+      this.buffer = []
+    }
+    this.buffered = false
+    return count
+  }
+
+  /**
+   * Discard any buffered entries without writing them.
+   * Useful on request error paths where the audit trail should not be saved.
+   */
+  discardBuffer(): void {
+    this.buffer = []
+    this.buffered = false
+  }
 
   /**
    * Log an admin action
+   * 
+   * When buffered mode is active (via {@link startBuffer}), the entry is
+   * added to the request buffer and will be written on the next {@link flush}.
+   * Otherwise, the entry is written immediately to the log.
    * 
    * @param adminId - ID of the admin performing the action
    * @param adminEmail - Email of the admin
@@ -47,7 +109,11 @@ export class AuditLogService {
       errorMessage,
     }
 
-    this.logs.push(entry)
+    if (this.buffered) {
+      this.buffer.push(entry)
+    } else {
+      this.logs.push(entry)
+    }
     return entry
   }
 
