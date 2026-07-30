@@ -8,6 +8,7 @@ import type {
 } from './types.js'
 import { trustScoreInvalidationHook } from '../cache/invalidationHooks.js'
 import { logger } from '../utils/logger.js'
+import { loadConfig } from '../config/index.js'
 
 /**
  * Options for score snapshot job.
@@ -54,7 +55,7 @@ export class ScoreSnapshotJob {
     this.batchSize = options.batchSize ?? 100
     this.continueOnError = options.continueOnError ?? true
     this.logger = options.logger ?? (() => {})
-    this.scoringModelVersion = options.scoringModelVersion ?? '1.0.0'
+    this.scoringModelVersion = options.scoringModelVersion ?? loadConfig().reputation.scoringModelVersion
   }
 
   /**

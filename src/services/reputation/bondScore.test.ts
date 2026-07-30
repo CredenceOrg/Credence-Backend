@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest'
 import { calculateBondScore, getBondMultiplier, getMaxBondScore } from './bondScore.js'
 import type { BondData } from './types.js'
+import type { ReputationModuleConfig } from './types.js'
 
 describe('bondScore', () => {
   describe('calculateBondScore', () => {
@@ -251,6 +252,57 @@ describe('bondScore', () => {
     it('should return correct max score', () => {
       const maxScore = getMaxBondScore()
       expect(maxScore).toBe(1000)
+    })
+  })
+
+  describe('config-driven scoring', () => {
+    it('should use custom multiplier from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.05,
+        maxBondScore: 1000,
+        attestationMultiplier: 0.1,
+        maxAttestationWeight: 100,
+        maxDurationMs: 31536000000,
+        decayRate: 0.5,
+      }
+      const bond: BondData = {
+        bondedAmount: 1000,
+        bondStart: 1000000,
+        bondDuration: 100000,
+        isSlashed: false,
+      }
+      const result = calculateBondScore(bond, config)
+      expect(result).toBe(50) // 1000 * 0.05
+    })
+
+    it('should use custom maxBondScore from config', () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.01,
+        maxBondScore: 500,
+        attestationMultiplier: 0.1,
+        maxAttestationWeight: 100,
+        maxDurationMs: 31536000000,
+        decayRate: 0.5,
+      }
+      const bond: BondData = {
+        bondedAmount: 100000,
+        bondStart: 1000000,
+        bondDuration: 100000,
+        isSlashed: false,
+      }
+      const result = calculateBondScore(bond, config)
+      expect(result).toBe(500) // Capped at custom max
+    })
+
+    it('should default to module defaults when no config provided', () => {
+      const bond: BondData = {
+        bondedAmount: 1000,
+        bondStart: 1000000,
+        bondDuration: 100000,
+        isSlashed: false,
+      }
+      const result = calculateBondScore(bond)
+      expect(result).toBe(10) // 1000 * 0.01
     })
   })
 })

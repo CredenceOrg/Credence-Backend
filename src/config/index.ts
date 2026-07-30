@@ -480,6 +480,38 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
+
+  // Reputation module (snapshot/persisted) scoring weights
+  REPUTATION_BOND_MULTIPLIER: z
+    .string()
+    .default('0.01')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_BOND_SCORE: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_ATTESTATION_MULTIPLIER: z
+    .string()
+    .default('0.1')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_ATTESTATION_WEIGHT: z
+    .string()
+    .default('100')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_DURATION_MS: z
+    .string()
+    .default('31536000000')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  REPUTATION_TIME_DECAY_RATE: z
+    .string()
+    .default('0.5')
+    .transform(Number)
+    .pipe(z.number().min(0).max(10)),
   SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: z
     .string()
     .default('5')
@@ -773,6 +805,12 @@ export interface Config {
     oneEthWei: bigint
     maxDurationDays: number
     maxAttestationCount: number
+    bondMultiplier: number
+    maxBondScore: number
+    attestationMultiplier: number
+    maxAttestationWeight: number
+    maxDurationMs: number
+    decayRate: number
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
@@ -1036,6 +1074,12 @@ function mapEnvToConfig(env: Env): Config {
       oneEthWei: BigInt(env.REPUTATION_ONE_ETH_WEI),
       maxDurationDays: env.REPUTATION_MAX_DURATION_DAYS,
       maxAttestationCount: env.REPUTATION_MAX_ATTESTATION_COUNT,
+      bondMultiplier: env.REPUTATION_BOND_MULTIPLIER,
+      maxBondScore: env.REPUTATION_MAX_BOND_SCORE,
+      attestationMultiplier: env.REPUTATION_ATTESTATION_MULTIPLIER,
+      maxAttestationWeight: env.REPUTATION_MAX_ATTESTATION_WEIGHT,
+      maxDurationMs: env.REPUTATION_MAX_DURATION_MS,
+      decayRate: env.REPUTATION_TIME_DECAY_RATE,
     },
     trustScoreCache: {
       ttl: env.TRUST_SCORE_CACHE_TTL,

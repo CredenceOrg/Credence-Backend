@@ -10,7 +10,7 @@ import {
   calculateReputationScoreWithCustomDuration,
   recordScoreHistorySnapshot,
 } from "./score.js";
-import type { ReputationInput, BondData, Attestation } from "./types.js";
+import type { ReputationInput, BondData, Attestation, ReputationModuleConfig } from "./types.js";
 
 describe("score", () => {
   const ONE_DAY = 24 * 60 * 60 * 1000;
@@ -532,6 +532,50 @@ describe("score", () => {
 
       expect(result.timeWeight).toBe(1);
       expect(result.totalScore).toBe(70);
+    });
+  });
+
+  describe("config-driven scoring through calculateReputationScore", () => {
+    it("should use custom config passed to top-level function", () => {
+      const config: ReputationModuleConfig = {
+        bondMultiplier: 0.02,
+        maxBondScore: 2000,
+        attestationMultiplier: 0.2,
+        maxAttestationWeight: 200,
+        maxDurationMs: ONE_YEAR,
+        decayRate: 0.5,
+      };
+      const input: ReputationInput = {
+        bond: {
+          bondedAmount: 1000,
+          bondStart: 1000000,
+          bondDuration: ONE_DAY,
+          isSlashed: false,
+        },
+        attestations: [{ weight: 100, timestamp: 1000000, isValid: true }],
+        currentTime: 1000000 + ONE_DAY * 100,
+      };
+      const result = calculateReputationScore(input, undefined, config);
+      // bond: 1000 * 0.02 = 20, attestation: 100 * 0.2 = 20, timeWeight: ~0.12
+      expect(result.bondScore).toBe(20);
+      expect(result.attestationScore).toBe(20);
+      expect(result.totalScore).toBeCloseTo((20 + 20) * result.timeWeight, 2);
+    });
+
+    it("should maintain backward compatibility when no config given", () => {
+      const input: ReputationInput = {
+        bond: {
+          bondedAmount: 1000,
+          bondStart: 1000000,
+          bondDuration: ONE_DAY * 30,
+          isSlashed: false,
+        },
+        attestations: [{ weight: 100, timestamp: 1000000, isValid: true }],
+        currentTime: 1000000 + ONE_DAY * 60,
+      };
+      const result = calculateReputationScore(input);
+      expect(result.bondScore).toBe(10);
+      expect(result.attestationScore).toBe(10);
     });
   });
 });
