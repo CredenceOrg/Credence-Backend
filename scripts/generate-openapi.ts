@@ -893,6 +893,103 @@ registry.registerPath({
   },
 });
 
+// Reports paths
+registry.registerPath({
+  method: 'post',
+  path: '/api/reports',
+  summary: 'Start a report generation job',
+  description: 'Queues an asynchronous report generation job for the given report type. Returns job metadata immediately.',
+  tags: ['Reports'],
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.createReportBodySchema } },
+    },
+  },
+  responses: {
+    202: {
+      description: 'Report job queued',
+      content: {
+        'application/json': {
+          schema: z.object({ jobId: z.string(), status: z.string(), type: z.string(), createdAt: z.string() }),
+        },
+      },
+    },
+    400: {
+      description: 'Validation error (invalid or missing report type)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), details: z.array(z.any()) }) } },
+    },
+    429: {
+      description: 'Rate limit exceeded (maximum concurrent jobs per org)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/top-talkers',
+  summary: 'Top talkers report',
+  description: 'Returns the top N tenants by request count in the aggregate window.',
+  tags: ['Reports'],
+  request: { query: schemas.topTalkersQuerySchema },
+  responses: {
+    200: {
+      description: 'Top talkers data',
+      content: { 'application/json': { schema: schemas.topTalkersResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/{jobId}',
+  summary: 'Get report job status',
+  description: 'Returns the status and artifact URL of a report generation job.',
+  tags: ['Reports'],
+  request: { params: schemas.reportJobParamsSchema },
+  responses: {
+    200: {
+      description: 'Report job status',
+      content: {
+        'application/json': {
+          schema: z.object({ jobId: z.string(), status: z.string(), type: z.string(), artifactUrl: z.string().optional(), failureReason: z.string().optional(), createdAt: z.string(), updatedAt: z.string() }),
+        },
+      },
+    },
+    404: {
+      description: 'Report job not found',
+      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/download/{key}',
+  summary: 'Download a report artifact',
+  description: 'Serves the report artifact using a signed URL with expires and signature query parameters.',
+  tags: ['Reports'],
+  request: {
+    params: z.object({ key: z.string().min(1) }),
+    query: z.object({ expires: z.string().min(1), signature: z.string().min(1) }),
+  },
+  responses: {
+    200: {
+      description: 'Report artifact (PDF)',
+      content: { 'application/pdf': { schema: z.any() } },
+    },
+    400: {
+      description: 'Missing required query parameters (expires or signature)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
+    },
+    401: {
+      description: 'Invalid or expired signed URL',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
+    },
+  },
+});
+
 const generator = new OpenApiGeneratorV3(registry.definitions);
 
 const document = generator.generateDocument({
