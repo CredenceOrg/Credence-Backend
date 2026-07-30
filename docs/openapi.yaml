@@ -9752,3 +9752,259 @@ paths:
                 required:
                   - error
                   - message
+  /api/reports:
+    post:
+      summary: Start a report generation job
+      description: Queues an asynchronous report generation job for the given report
+        type. Returns job metadata immediately.
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - trust_score_summary
+                    - bond_audit
+                    - attestation_export
+                    - top_talkers
+              required:
+                - type
+              additionalProperties: false
+      responses:
+        "202":
+          description: Report job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  type:
+                    type: string
+                  createdAt:
+                    type: string
+                required:
+                  - jobId
+                  - status
+                  - type
+                  - createdAt
+        "400":
+          description: Validation error (invalid or missing report type)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "429":
+          description: Rate limit exceeded (maximum concurrent jobs per org)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code
+  /api/reports/top-talkers:
+    get:
+      summary: Top talkers report
+      description: Returns the top N tenants by request count in the aggregate window.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1440
+          required: false
+          name: windowMinutes
+          in: query
+      responses:
+        "200":
+          description: Top talkers data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      windowStart:
+                        type: string
+                      windowEnd:
+                        type: string
+                      windowMinutes:
+                        type: number
+                      totalRequests:
+                        type: number
+                      topTalkers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            tenantId:
+                              type: string
+                            requestCount:
+                              type: number
+                            percentage:
+                              type: number
+                            lastRequestAt:
+                              type: string
+                          required:
+                            - tenantId
+                            - requestCount
+                            - percentage
+                    required:
+                      - windowStart
+                      - windowEnd
+                      - windowMinutes
+                      - totalRequests
+                      - topTalkers
+                required:
+                  - success
+                  - data
+  /api/reports/{jobId}:
+    get:
+      summary: Get report job status
+      description: Returns the status and artifact URL of a report generation job.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: jobId
+          in: path
+      responses:
+        "200":
+          description: Report job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  type:
+                    type: string
+                  artifactUrl:
+                    type: string
+                  failureReason:
+                    type: string
+                  createdAt:
+                    type: string
+                  updatedAt:
+                    type: string
+                required:
+                  - jobId
+                  - status
+                  - type
+                  - createdAt
+                  - updatedAt
+        "404":
+          description: Report job not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
+  /api/reports/download/{key}:
+    get:
+      summary: Download a report artifact
+      description: Serves the report artifact using a signed URL with expires and
+        signature query parameters.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: key
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: expires
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: signature
+          in: query
+      responses:
+        "200":
+          description: Report artifact (PDF)
+          content:
+            application/pdf:
+              schema:
+                nullable: true
+        "400":
+          description: Missing required query parameters (expires or signature)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code
+        "401":
+          description: Invalid or expired signed URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code
