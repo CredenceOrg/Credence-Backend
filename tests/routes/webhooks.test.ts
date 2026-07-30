@@ -203,6 +203,10 @@ describe('Webhook Routes', () => {
       expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
       expect(mockAuditLogs[0].status).toBe('success')
       expect(mockAuditLogs[0].resourceId).toBe(SEED_WEBHOOK.id)
+      // Regression check: the audit entry must carry the authenticated
+      // actor's real tenant, not a hardcoded placeholder.
+      expect(mockAuditLogs[0].tenantId).toBe('tenant-admin-1')
+      expect(mockAuditLogs[0].tenantId).not.toBe('tenant-unknown')
     })
 
     it('two consecutive rotations produce different secrets', async () => {
@@ -248,6 +252,8 @@ describe('Webhook Routes', () => {
       expect(mockAuditLogs[0].action).toBe('ROTATE_WEBHOOK_SECRET')
       expect(mockAuditLogs[0].status).toBe('failure')
       expect(mockAuditLogs[0].resourceId).toBe('nonexistent-webhook')
+      expect(mockAuditLogs[0].tenantId).toBe('tenant-admin-1')
+      expect(mockAuditLogs[0].tenantId).not.toBe('tenant-unknown')
     })
 
     it('returns 401 when no Authorization header is provided', async () => {

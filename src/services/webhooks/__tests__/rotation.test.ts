@@ -11,15 +11,16 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
   const db = newDb();
   db.public.none(`
     CREATE TABLE webhook_configs (
-      id                 UUID          PRIMARY KEY,
-      url                TEXT          NOT NULL,
-      secret             TEXT          NOT NULL,
-      previous_secret    TEXT,
-      secret_updated_at  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      active             BOOLEAN       NOT NULL DEFAULT TRUE,
-      events             TEXT[]        NOT NULL,
-      created_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-      updated_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+      id                          UUID          PRIMARY KEY,
+      url                         TEXT          NOT NULL,
+      secret                      TEXT          NOT NULL,
+      previous_secret             TEXT,
+      previous_secret_expires_at  TIMESTAMPTZ,
+      secret_updated_at           TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      active                      BOOLEAN       NOT NULL DEFAULT TRUE,
+      events                      TEXT[]        NOT NULL,
+      created_at                  TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+      updated_at                  TIMESTAMPTZ   NOT NULL DEFAULT NOW()
     );
   `);
   const adapter = db.adapters.createPg();

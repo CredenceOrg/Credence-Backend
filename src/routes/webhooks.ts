@@ -78,6 +78,7 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
           webhookId,
           actor.id,
           actor.email,
+          actor.tenantId,
           ipAddress,
         )
 
@@ -87,11 +88,28 @@ export function createWebhookRouter(store: WebhookStore, audit: AuditLogService)
         })
       } catch (err) {
         if (err instanceof WebhookNotFoundError) {
-          sendError(res, ErrorCode.NOT_FOUND, err.message)
+          res.status(404).json({
+            error: 'NotFound',
+            code: 'WebhookNotFound',
+            message: err.message,
+          })
           return
         }
 
-        sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, err instanceof Error ? err.message : 'Unknown error')
+        const message = err instanceof Error ? err.message : 'Unknown error'
+        void audit.logAction({
+          tenantId: (req as AuthenticatedRequest).user?.tenantId ?? tenantId,
+          actorId: (req as AuthenticatedRequest).user?.id ?? 'unknown',
+          actorEmail: (req as AuthenticatedRequest).user?.email ?? 'unknown',
+          action: AuditAction.ROTATE_WEBHOOK_SECRET,
+          resourceType: 'webhook',
+          resourceId: req.params.webhookId,
+          details: { webhookId: req.params.webhookId, reason: 'unexpected_error' },
+          status: 'failure',
+          errorMessage: message,
+          ipAddress: req.ip ?? req.socket.remoteAddress,
+        })
+        sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, message)
       } finally {
         // Restore original tenant context
         if (!originalTenant) {

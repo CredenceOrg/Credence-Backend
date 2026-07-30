@@ -290,6 +290,56 @@ describe('WebhookService', () => {
     expect(duration).toBeLessThan(200)
   })
 
+  describe('rotateSecret', () => {
+    it('rotates via the atomic store.rotateSecret(), not read-modify-write via store.set()', async () => {
+      const service = new WebhookService(mockStore)
+
+      const updated = await service.rotateSecret('wh_1')
+
+      // The whole point of this method: a concurrent rotation of the same
+      // webhook elsewhere can't be silently clobbered by a stale
+      // read-then-set(), because there is no read-then-set at all.
+      expect(mockStore.rotateSecret).toHaveBeenCalledTimes(1)
+      expect(mockStore.set).not.toHaveBeenCalled()
+      expect(updated.secret).not.toBe('secret1')
+      expect(updated.previousSecret).toBe('secret1')
+      expect(updated.previousSecretExpiresAt).toBeTruthy()
+    })
+
+    it('computes previousSecretExpiresAt roughly 24h in the future', async () => {
+      const service = new WebhookService(mockStore)
+      const before = Date.now()
+
+      const updated = await service.rotateSecret('wh_2')
+
+      const expiresMs = new Date(updated.previousSecretExpiresAt!).getTime()
+      expect(expiresMs).toBeGreaterThan(before + 23 * 60 * 60 * 1000)
+      expect(expiresMs).toBeLessThan(before + 25 * 60 * 60 * 1000)
+    })
+
+    it('throws when the webhook does not exist', async () => {
+      const service = new WebhookService(mockStore)
+      await expect(service.rotateSecret('wh_nonexistent')).rejects.toThrow('Webhook not found')
+    })
+
+    it('audit-logs success with the actor tenant and the computed previousSecretExpiresAt', async () => {
+      const mockAudit = { logAction: vi.fn().mockResolvedValue(undefined) }
+      const actor = { id: 'admin_1', email: 'admin@example.com', tenantId: 'tenant_1' }
+      const service = new WebhookService(mockStore, undefined, undefined, mockAudit as any)
+
+      await service.rotateSecret('wh_1', actor, 'req-123')
+
+      expect(mockAudit.logAction).toHaveBeenCalledTimes(1)
+      const [tenantId, actorId, actorEmail, action, resourceId, , details] = mockAudit.logAction.mock.calls[0]
+      expect(tenantId).toBe('tenant_1')
+      expect(actorId).toBe('admin_1')
+      expect(actorEmail).toBe('admin@example.com')
+      expect(action).toBe('ROTATE_WEBHOOK_SECRET')
+      expect(resourceId).toBe('wh_1')
+      expect(details).toMatchObject({ previousSecretExpiresAt: expect.any(String) })
+    })
+  })
+
   describe('replayWebhook', () => {
     it('throws if DLQ is not configured', async () => {
       const service = new WebhookService(mockStore)
