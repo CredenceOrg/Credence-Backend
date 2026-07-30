@@ -86,4 +86,27 @@ describe('Reports Router - Top Talkers', () => {
       expect(res.body.jobId).toBe('job-123')
     })
   })
+
+  describe('DELETE /api/reports/:jobId', () => {
+    it('cancels a report job', async () => {
+      const { ReportService } = await import('../services/reportService.js')
+      const mockCancel = vi.fn().mockResolvedValue({
+        id: 'job-123',
+        status: 'cancelled',
+        type: 'top_talkers',
+        failureReason: 'Cancelled by user',
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      ReportService.prototype.cancelReportJob = mockCancel
+
+      const res = await request(setupApp()).delete('/api/reports/job-123')
+
+      expect(res.status).toBe(200)
+      expect(res.body.jobId).toBe('job-123')
+      expect(res.body.status).toBe('cancelled')
+      expect(res.body.failureReason).toBe('Cancelled by user')
+      expect(mockCancel).toHaveBeenCalledWith('job-123')
+    })
+  })
 })
