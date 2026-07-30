@@ -1,58 +1,92 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { DlqRouter, type DlqSink } from '../listeners/messageValidator.js'
 
-const mocks = vi.hoisted(() => ({
-  mockStream: undefined as ((op: any) => Promise<void>) | undefined,
-  upsertIdentity: vi.fn().mockResolvedValue(undefined),
-  upsertBond: vi.fn().mockResolvedValue(undefined),
+const streamState = vi.hoisted(() => ({
+  onmessage: undefined as undefined | ((op: any) => Promise<void>),
 }))
 
-vi.mock('stellar-sdk', () => {
-  function MockServer() {
-    return {
-      operations: vi.fn(() => ({
-        forAsset: vi.fn(() => ({
-          cursor: vi.fn(() => ({
-            stream: vi.fn(({ onmessage }: { onmessage: (op: any) => Promise<void> }) => {
-              mocks.mockStream = onmessage
-            }),
-          })),
-        })),
-      })),
+const mocks = vi.hoisted(() => {
+  const mockClientQuery = vi.fn()
+  const mockClientRelease = vi.fn()
+  const mockClient = { query: mockClientQuery, release: mockClientRelease }
+  const mockPoolConnect = vi.fn().mockResolvedValue(mockClient)
+  const mockPoolQuery = vi.fn().mockResolvedValue({ rows: [] })
+  return { mockClientQuery, mockClientRelease, mockClient, mockPoolConnect, mockPoolQuery }
+})
+
+vi.mock('@stellar/stellar-sdk', () => {
+  class ServerMock {
+    operations() {
+      return {
+        forAsset: () => ({
+          cursor: () => ({
+            stream: ({ onmessage }: { onmessage: (op: any) => Promise<void> }) => {
+              streamState.onmessage = onmessage
+            },
+          }),
+        }),
+      }
     }
   }
 
-  return { Server: MockServer }
+  return {
+    Horizon: { Server: ServerMock },
+    StrKey: {
+      isValidEd25519PublicKey: (account: string) => typeof account === 'string' && account.startsWith('G'),
+      isValidMuxedAccount: () => false,
+    },
+  }
 })
 
-vi.mock('../services/identityService.js', () => ({
-  upsertIdentity: mocks.upsertIdentity,
-  upsertBond: mocks.upsertBond,
+vi.mock('../db/pool', () => ({
+  pool: { connect: mocks.mockPoolConnect, query: mocks.mockPoolQuery },
+}))
+
+vi.mock('../services/identityService', () => ({
+  upsertIdentity: vi.fn().mockResolvedValue(undefined),
+  upsertBond: vi.fn().mockResolvedValue(undefined),
+  upsertCursor: vi.fn().mockResolvedValue(undefined),
 }))
 
 import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
+import { upsertBond, upsertIdentity, upsertCursor } from '../services/identityService.js'
+
+async function flushMicrotasks(): Promise<void> {
+  await new Promise(resolve => resolve(undefined))
+}
+
+function makeRouter(): DlqRouter {
+  const sink: DlqSink = { async captureFailure() {} }
+  return new DlqRouter(sink)
+}
 
 describe('Horizon Bond Creation Listener', () => {
   beforeEach(() => {
-    mocks.mockStream = undefined
-    mocks.upsertIdentity.mockClear()
-    mocks.upsertBond.mockClear()
+    vi.clearAllMocks()
+    streamState.onmessage = undefined
+    mocks.mockClientQuery.mockReset()
+    mocks.mockClientRelease.mockReset()
+    mocks.mockPoolConnect.mockReset()
+    mocks.mockPoolQuery.mockReset()
+    mocks.mockPoolConnect.mockResolvedValue(mocks.mockClient)
+    mocks.mockPoolQuery.mockResolvedValue({ rows: [] })
   })
 
   it('subscribes without throwing', () => {
-    expect(() => subscribeBondCreationEvents(vi.fn())).not.toThrow()
-    expect(mocks.mockStream).toBeTypeOf('function')
+    expect(() => subscribeBondCreationEvents(makeRouter())).not.toThrow()
+    expect(streamState.onmessage).toBeTypeOf('function')
   })
 
   it('accepts an undefined callback', () => {
-    expect(() => subscribeBondCreationEvents(undefined)).not.toThrow()
-    expect(mocks.mockStream).toBeTypeOf('function')
+    expect(() => subscribeBondCreationEvents(makeRouter(), undefined)).not.toThrow()
+    expect(streamState.onmessage).toBeTypeOf('function')
   })
 
   it('parses and upserts create_bond events', async () => {
     const onEvent = vi.fn()
-    subscribeBondCreationEvents(onEvent)
+    subscribeBondCreationEvents(makeRouter(), onEvent)
 
-    await mocks.mockStream?.({
+    await streamState.onmessage!({
       type: 'create_bond',
       source_account: 'GABC...',
       id: 'bond123',
@@ -61,31 +95,36 @@ describe('Horizon Bond Creation Listener', () => {
       paging_token: 'token1',
     })
 
-    expect(mocks.upsertIdentity).toHaveBeenCalledWith({ id: 'GABC...' })
-    expect(mocks.upsertBond).toHaveBeenCalledWith({ id: 'bond123', amount: '1000', duration: '365' })
+    expect(upsertIdentity).toHaveBeenCalledWith({ id: 'GABC...' }, mocks.mockClient)
+    expect(upsertBond).toHaveBeenCalledWith({ id: 'bond123', address: 'GABC...', amount: '1000', duration: '365' }, mocks.mockClient)
+    expect(upsertCursor).toHaveBeenCalledWith({ streamName: 'bond_creation', pagingToken: 'token1' }, mocks.mockClient)
+    expect(mocks.mockClientQuery).toHaveBeenCalledWith('BEGIN')
+    expect(mocks.mockClientQuery).toHaveBeenCalledWith('COMMIT')
+    expect(mocks.mockClientRelease).toHaveBeenCalledOnce()
     expect(onEvent).toHaveBeenCalledWith({
       identity: { id: 'GABC...' },
-      bond: { id: 'bond123', amount: '1000', duration: '365' },
+      bond: { id: 'bond123', address: 'GABC...', amount: '1000', duration: '365' },
     })
   })
 
   it('ignores non-bond events', async () => {
     const onEvent = vi.fn()
-    subscribeBondCreationEvents(onEvent)
+    subscribeBondCreationEvents(makeRouter(), onEvent)
 
-    await mocks.mockStream?.({
+    await streamState.onmessage!({
       type: 'payment',
       id: 'other',
       paging_token: 'token2',
     })
 
-    expect(mocks.upsertIdentity).not.toHaveBeenCalled()
-    expect(mocks.upsertBond).not.toHaveBeenCalled()
+    expect(upsertIdentity).not.toHaveBeenCalled()
+    expect(upsertBond).not.toHaveBeenCalled()
+    expect(upsertCursor).not.toHaveBeenCalled()
     expect(onEvent).not.toHaveBeenCalled()
   })
 
   it('handles duplicate create_bond events consistently', async () => {
-    subscribeBondCreationEvents(vi.fn())
+    subscribeBondCreationEvents(makeRouter(), vi.fn())
 
     const event = {
       type: 'create_bond',
@@ -96,10 +135,34 @@ describe('Horizon Bond Creation Listener', () => {
       paging_token: 'token1',
     }
 
-    await mocks.mockStream?.(event)
-    await mocks.mockStream?.(event)
+    await streamState.onmessage!(event)
+    await streamState.onmessage!(event)
 
-    expect(mocks.upsertIdentity).toHaveBeenCalledTimes(2)
-    expect(mocks.upsertBond).toHaveBeenCalledTimes(2)
+    expect(upsertIdentity).toHaveBeenCalledTimes(2)
+    expect(upsertBond).toHaveBeenCalledTimes(2)
+    expect(upsertCursor).toHaveBeenCalledTimes(2)
+  })
+
+  it('rolls back transaction on failure and does not advance cursor', async () => {
+    const error = new Error('DB error')
+    upsertIdentity.mockRejectedValueOnce(error)
+
+    const onEvent = vi.fn()
+    subscribeBondCreationEvents({ captureFailure: vi.fn() }, onEvent)
+    await flushMicrotasks()
+
+    await expect(streamState.onmessage!({
+      type: 'create_bond',
+      source_account: 'GABC...',
+      id: 'bond123',
+      amount: '1000',
+      duration: '365',
+      paging_token: 'token1',
+    })).rejects.toThrow('DB error')
+
+    expect(mocks.mockClientQuery).toHaveBeenCalledWith('ROLLBACK')
+    expect(mocks.mockClientRelease).toHaveBeenCalledOnce()
+    expect(upsertCursor).not.toHaveBeenCalled()
+    expect(onEvent).not.toHaveBeenCalled()
   })
 })

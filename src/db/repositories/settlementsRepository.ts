@@ -3,8 +3,8 @@ import type { Queryable } from './queryable.js'
 export type SettlementStatus = 'pending' | 'settled' | 'failed'
 
 export interface Settlement {
-  id: number
-  bondId: number
+  id: string
+  bondId: string
   amount: string
   transactionHash: string
   settledAt: Date
@@ -14,7 +14,7 @@ export interface Settlement {
 }
 
 export interface CreateSettlementInput {
-  bondId: number
+  bondId: string | number
   amount: string
   transactionHash: string
   settledAt?: Date
@@ -42,8 +42,8 @@ const toDate = (value: Date | string): Date =>
   value instanceof Date ? value : new Date(value)
 
 const mapSettlement = (row: SettlementRow): Settlement => ({
-  id: Number(row.id),
-  bondId: Number(row.bond_id),
+  id: String(row.id),
+  bondId: String(row.bond_id),
   amount: row.amount,
   transactionHash: row.transaction_hash,
   settledAt: toDate(row.settled_at),
@@ -56,34 +56,70 @@ export class SettlementsRepository {
   constructor(private readonly db: Queryable) {}
 
   async upsert(input: CreateSettlementInput): Promise<UpsertSettlementResult> {
-    const settledAt = input.settledAt ?? new Date()
-    const status = input.status ?? 'pending'
+    return this._upsert(this.db, input)
+  }
 
-    const result = await this.db.query<SettlementRow>(
-      `
-      INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
-      VALUES ($1, $2, $3, $4, $5)
-      ON CONFLICT (bond_id, transaction_hash)
-      DO UPDATE SET
-        amount     = EXCLUDED.amount,
-        status     = EXCLUDED.status,
-        settled_at = EXCLUDED.settled_at,
-        updated_at = NOW()
-      RETURNING id, bond_id, amount, transaction_hash, settled_at, status,
-                created_at, updated_at,
-                (xmax <> 0) AS is_duplicate
-      `,
-      [input.bondId, input.amount, input.transactionHash, settledAt, status]
-    )
+  async upsertBatch(inputs: CreateSettlementInput[]): Promise<UpsertSettlementResult[]> {
+    const client = typeof (this.db as any).connect === 'function'
+      ? await (this.db as any).connect()
+      : null
 
-    const row = result.rows[0]
-    return {
-      settlement: mapSettlement(row),
-      isDuplicate: row.is_duplicate === true,
+    const targetDb = client ?? this.db
+    const useTx = client !== null
+
+    if (useTx) {
+      await targetDb.query('BEGIN')
+    }
+
+    try {
+      const results: UpsertSettlementResult[] = []
+      for (const input of inputs) {
+        const res = await this._upsert(targetDb, input)
+        results.push(res)
+      }
+      if (useTx) {
+        await targetDb.query('COMMIT')
+      }
+      return results
+    } catch (err) {
+      if (useTx) {
+        await targetDb.query('ROLLBACK').catch(() => {})
+      }
+      throw err
+    } finally {
+      if (client) {
+        client.release()
+      }
     }
   }
 
-  async findById(id: number): Promise<Settlement | null> {
+  private async _upsert(db: Queryable, input: CreateSettlementInput): Promise<UpsertSettlementResult> {
+    const settledAt = input.settledAt ?? new Date()
+    const status = input.status ?? 'pending'
+
+    const existing = await db.query<{ id: string }>(
+      `SELECT id FROM settlements WHERE transaction_hash = $1`,
+      [input.transactionHash],
+    )
+    const isDuplicate = existing.rows.length > 0
+
+    const result = await db.query<SettlementRow>(
+      `INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (transaction_hash)
+       DO UPDATE SET
+         amount     = EXCLUDED.amount,
+         status     = EXCLUDED.status,
+         settled_at = EXCLUDED.settled_at,
+         updated_at = NOW()
+       RETURNING id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at`,
+      [input.bondId, input.amount, input.transactionHash, settledAt, status],
+    )
+
+    return { settlement: mapSettlement(result.rows[0]), isDuplicate }
+  }
+
+  async findById(id: string | number): Promise<Settlement | null> {
     const result = await this.db.query<SettlementRow>(
       `
       SELECT id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at
@@ -96,7 +132,7 @@ export class SettlementsRepository {
     return result.rows[0] ? mapSettlement(result.rows[0]) : null
   }
 
-  async findByBondId(bondId: number): Promise<Settlement[]> {
+  async findByBondId(bondId: string | number): Promise<Settlement[]> {
     const result = await this.db.query<SettlementRow>(
       `
       SELECT id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at
@@ -123,7 +159,7 @@ export class SettlementsRepository {
     return result.rows[0] ? mapSettlement(result.rows[0]) : null
   }
 
-  async countByBondId(bondId: number): Promise<number> {
+  async countByBondId(bondId: string | number): Promise<number> {
     const result = await this.db.query<{ count: string }>(
       `
       SELECT COUNT(*)::TEXT AS count
@@ -136,7 +172,7 @@ export class SettlementsRepository {
     return parseInt(result.rows[0]?.count ?? '0', 10)
   }
 
-  async delete(id: number): Promise<boolean> {
+  async delete(id: string | number): Promise<boolean> {
     const result = await this.db.query(
       `
       DELETE FROM settlements
@@ -146,5 +182,38 @@ export class SettlementsRepository {
     )
 
     return (result.rowCount ?? 0) > 0
+  }
+
+  async findManyPaginated(params: {
+    limit: number
+    cursor?: { t: string; i: string }
+    bondId?: string
+  }): Promise<Settlement[]> {
+    const { limit, cursor, bondId } = params
+    const values: any[] = [limit]
+    let whereClause = ''
+    let paramIndex = 2
+
+    if (bondId) {
+      whereClause = `WHERE bond_id = $${paramIndex++}`
+      values.push(bondId)
+    }
+
+    if (cursor) {
+      const prefix = whereClause ? 'AND' : 'WHERE'
+      whereClause += ` ${prefix} (settled_at, id) < ($${paramIndex}, $${paramIndex + 1})`
+      values.push(cursor.t, cursor.i)
+    }
+
+    const query = `
+      SELECT id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at
+      FROM settlements
+      ${whereClause}
+      ORDER BY settled_at DESC, id DESC
+      LIMIT $1
+    `
+
+    const result = await this.db.query<SettlementRow>(query, values)
+    return result.rows.map(mapSettlement)
   }
 }

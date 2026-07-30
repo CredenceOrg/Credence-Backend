@@ -124,54 +124,16 @@ export class AnalyticsService {
     }
   }
 
-  async refreshConcurrently(now = new Date()): Promise<void> {
-    const startedAt = Date.now()
-
-    await this.db.query(
-      `
-      UPDATE ${REFRESH_STATE_TABLE}
-      SET
-        last_attempt_at = $2,
-        updated_at = $2
-      WHERE view_name = $1
-      `,
-      [ANALYTICS_VIEW, now.toISOString()],
+  /**
+   * @deprecated Use the {@link AnalyticsRefreshStrategy} class
+   * (`src/services/analytics/refreshStrategy.ts`) directly. This wrapper
+   * remains so the legacy single-view code path keeps compiling and any
+   * future caller can opt in via the strategy interface.
+   */
+  async refreshConcurrently(_now = new Date()): Promise<void> {
+    throw new Error(
+      'AnalyticsService.refreshConcurrently is deprecated; use AnalyticsRefreshStrategy.refreshAll()',
     )
-
-    try {
-      await this.db.query(`REFRESH MATERIALIZED VIEW CONCURRENTLY ${ANALYTICS_VIEW}`)
-
-      const durationMs = Date.now() - startedAt
-      await this.db.query(
-        `
-        UPDATE ${REFRESH_STATE_TABLE}
-        SET
-          last_success_at = $2,
-          last_error = NULL,
-          duration_ms = $3,
-          updated_at = $2
-        WHERE view_name = $1
-        `,
-        [ANALYTICS_VIEW, new Date().toISOString(), durationMs],
-      )
-    } catch (error) {
-      const durationMs = Date.now() - startedAt
-      const errorMessage = error instanceof Error ? error.message : 'Unknown refresh error'
-
-      await this.db.query(
-        `
-        UPDATE ${REFRESH_STATE_TABLE}
-        SET
-          last_error = $2,
-          duration_ms = $3,
-          updated_at = $4
-        WHERE view_name = $1
-        `,
-        [ANALYTICS_VIEW, errorMessage, durationMs, new Date().toISOString()],
-      )
-
-      throw error
-    }
   }
 }
 

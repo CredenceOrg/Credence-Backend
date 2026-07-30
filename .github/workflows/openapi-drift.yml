@@ -1,0 +1,19 @@
+name: OpenAPI Drift Check
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  check-drift:
+    runs-on: ubuntu-latest
+    env:
+      DB_URL: postgresql://user:pass@localhost:5432/credence_test
+      REDIS_URL: redis://localhost:6379
+      JWT_SECRET: test-jwt-secret-32-characters-long!
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm ci
+      - run: npm run generate:openapi
+      - run: git diff --exit-code docs/openapi.yaml || (echo "OpenAPI spec is out of sync. Run 'npm run generate:openapi' locally and commit." && exit 1)

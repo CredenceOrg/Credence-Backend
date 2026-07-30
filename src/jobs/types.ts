@@ -12,6 +12,8 @@ export interface ScoreSnapshot {
   attestationCount: number
   /** Timestamp when snapshot was taken (ISO string). */
   timestamp: string
+  /** Scoring model version used to compute this score. */
+  scoringModelVersion?: string
 }
 
 /**
@@ -46,6 +48,11 @@ export interface IdentityDataSource {
   getActiveAddresses(): Promise<string[]>
   /** Get identity data for score computation. */
   getIdentityData(address: string): Promise<IdentityData | null>
+  /**
+   * Get identity data for a batch of addresses in a single query path.
+   * Results may be returned in any order; callers should restore the input order.
+   */
+  getIdentityDataBatch?(addresses: string[]): Promise<IdentityData[]>
 }
 
 /**
@@ -65,6 +72,8 @@ export interface SnapshotJobResult {
   errors: number
   /** Duration in milliseconds. */
   duration: number
+  /** Time spent loading and aggregating identity data in milliseconds. */
+  aggregationDuration: number
   /** Timestamp when job started. */
   startTime: string
 }
@@ -93,8 +102,18 @@ export interface ReportJob {
   failureReason?: string
   /** URL or path to the generated artifact (if completed). */
   artifactUrl?: string
+  /** Storage key for the generated artifact (if completed). */
+  storageKey?: string
   /** ISO timestamp when job was created. */
   createdAt: string
   /** ISO timestamp when job was last updated. */
   updatedAt: string
+}
+
+/**
+ * Report worker configuration.
+ */
+export interface ReportWorkerConfig {
+  /** Tenant ID for the report. */
+  tenantId?: string
 }

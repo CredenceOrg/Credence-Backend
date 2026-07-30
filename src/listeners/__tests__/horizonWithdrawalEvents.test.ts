@@ -24,12 +24,18 @@ vi.mock('@stellar/stellar-sdk', () => {
 
 // Import after mocking
 import { HorizonWithdrawalListener, createHorizonWithdrawalListener } from '../horizonWithdrawalEvents.js'
+import { CursorRepository } from '../../db/repositories/cursorRepository.js'
 
 describe('HorizonWithdrawalListener', () => {
   let listener: HorizonWithdrawalListener
 
   beforeEach(() => {
     vi.clearAllMocks()
+    
+    // Spy on prototype methods to prevent real database queries
+    vi.spyOn(CursorRepository.prototype, 'findByStreamName').mockResolvedValue(null)
+    vi.spyOn(CursorRepository.prototype, 'upsert').mockResolvedValue({} as any)
+    vi.spyOn(CursorRepository.prototype, 'getCursorLag').mockResolvedValue(0)
     
     // Create listener with test configuration
     listener = createHorizonWithdrawalListener({
@@ -226,6 +232,48 @@ describe('HorizonWithdrawalListener', () => {
         lastCursor: 'now',
         pollingInterval: 100
       })
+    })
+  })
+
+  describe('poison message routing', () => {
+    it('routes a schema-invalid withdrawal event to the DLQ and does not process it', async () => {
+      const invalidEvent = {
+        id: 'op-1',
+        pagingToken: 'pt-1',
+        type: 'payment',
+        createdAt: new Date(),
+        bondId: 'bond-1-tx-1',
+        account: 'GABC',
+        amount: 'not-a-number', // fails decimalAmountSchema regex
+        assetType: 'native',
+        transactionHash: 'tx-1',
+        operationIndex: 0,
+      }
+
+      const captureFailure = vi.fn().mockResolvedValue(undefined)
+      const fetchSpy = vi
+        .spyOn(HorizonWithdrawalListener.prototype as any, 'fetchWithdrawalEvents')
+        .mockResolvedValue([invalidEvent])
+      const processSpy = vi.spyOn(HorizonWithdrawalListener.prototype as any, 'processWithdrawalEvent')
+
+      const invalidEventListener = createHorizonWithdrawalListener(
+        { pollingInterval: 100 },
+        undefined,
+        { captureFailure },
+      )
+
+      await invalidEventListener.start()
+      await invalidEventListener.stop()
+
+      fetchSpy.mockRestore()
+
+      expect(processSpy).not.toHaveBeenCalled()
+      expect(captureFailure).toHaveBeenCalledTimes(1)
+      const [messageType, , reason] = captureFailure.mock.calls[0]
+      expect(messageType).toBe('bond_withdrawal')
+      expect(reason).toContain('SCHEMA_VALIDATION_FAILED')
+
+      processSpy.mockRestore()
     })
   })
 })

@@ -76,7 +76,8 @@ spec:
             failureThreshold: 3
 
           # ── Readiness probe ──
-          # Checks that dependencies (DB, Redis) are reachable.
+          # Checks dependencies (Postgres/Redis) and worker liveness
+          # (Horizon listener heartbeat + outbox publisher lease heartbeat).
           # Pod is removed from Service endpoints when not ready.
           readinessProbe:
             httpGet:

@@ -4,6 +4,8 @@ import type {
   ExportWorkerOptions,
   ExportWorkerResult,
 } from './exportTypes.js'
+import { pumpExportBatches } from './exportPipeline.js'
+export type { ExportWorkerOptions, ExportWorkerResult } from './exportTypes.js'
 
 export class ExportWorker {
   private readonly batchSize: number
@@ -34,22 +36,25 @@ export class ExportWorker {
     try {
       const cursor = this.dataSource.openCursor(this.batchSize)
 
-      for await (const batch of cursor) {
+      let batchIndex = 0
+      let runningTotal = 0
+      const pumped = await pumpExportBatches(cursor, async (batch) => {
+        batchIndex++
         try {
           await this.writer.writeBatch(batch)
-          totalRows += batch.length
-          batchesProcessed++
-
+          runningTotal += batch.length
           this.logger(
-            `Batch ${batchesProcessed} written (${batch.length} rows, ${totalRows}/${totalCount} total)`,
+            `Batch ${batchIndex} written (${batch.length} rows, ${runningTotal}/${totalCount} total)`,
           )
         } catch (error) {
           errors++
           const message = error instanceof Error ? error.message : 'Unknown write error'
-          this.logger(`Batch ${batchesProcessed + 1} failed: ${message}`)
+          this.logger(`Batch ${batchIndex} failed: ${message}`)
           throw error
         }
-      }
+      })
+      totalRows = pumped.totalRows
+      batchesProcessed = pumped.batchesProcessed
 
       await this.writer.close()
       this.logger(`Export completed: ${totalRows} rows in ${batchesProcessed} batches`)

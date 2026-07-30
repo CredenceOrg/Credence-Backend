@@ -1,0 +1,29 @@
+npm warn Unknown global config "python". This will stop working in the next major version of npm.
+
+> credence-backend@0.1.0 test
+> NODE_ENV=test NODE_OPTIONS=--experimental-vm-modules jest --coverage --forceExit
+
+(node:74807) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node-22 --trace-warnings ...` to show where the warning was created)
+PASS src/lib/pagination.test.ts (6.691 s)
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+ts-jest[config] (WARN) [94mmessage[0m[90m TS151002: [0mUsing hybrid module kind (Node16/18/Next) is only supported in "isolatedModules: true". Please set "isolatedModules: true" in your tsconfig.json. To disable this message, you can set "diagnostics.ignoreCodes" to include 151002 in your ts-jest config. See more at https://kulshekhar.github.io/ts-jest/docs/getting-started/options/diagnostics
+(node:74806) ExperimentalWarning: VM Modules is an experimental feature and might change at any time
+(Use `node-22 --trace-warnings ...` to show where the warning was created)
+PASS src/index.test.ts (11.002 s)
+----------------|---------|----------|---------|---------|-------------------
+File            | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s 
+----------------|---------|----------|---------|---------|-------------------
+All files       |     100 |      100 |     100 |     100 |                   
+ src            |     100 |      100 |     100 |     100 |                   
+  index.ts      |     100 |      100 |     100 |     100 |                   
+ src/lib        |     100 |      100 |     100 |     100 |                   
+  pagination.ts |     100 |      100 |     100 |     100 |                   
+----------------|---------|----------|---------|---------|-------------------
+
+Test Suites: 2 passed, 2 total
+Tests:       21 passed, 21 total
+Snapshots:   0 total
+Time:        13.432 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?

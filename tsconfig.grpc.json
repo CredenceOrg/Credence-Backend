@@ -1,0 +1,21 @@
+{
+  // Separate tsconfig for the gRPC generated stubs and SDK wrappers.
+  // Used by the buf-generate CI step and local `tsc -p tsconfig.grpc.json`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "src/sdk/grpc",
+    "outDir": "dist/sdk/grpc",
+    "noEmit": true,
+    // Generated files use standard ES module imports with .js extensions.
+    "allowImportingTsExtensions": true,
+    "moduleResolution": "NodeNext",
+    "module": "NodeNext"
+  },
+  "include": [
+    "src/sdk/grpc/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "dist"
+  ]
+}

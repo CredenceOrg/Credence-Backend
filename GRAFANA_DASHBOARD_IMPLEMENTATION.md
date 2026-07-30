@@ -1,7 +1,7 @@
 # Grafana Dashboard Implementation Summary
 
 ## Overview
-
+<!--  -->
 This implementation adds comprehensive monitoring and observability to the Credence Backend using Prometheus for metrics collection and Grafana for visualization.
 
 ## What Was Implemented

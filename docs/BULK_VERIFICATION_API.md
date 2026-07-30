@@ -367,3 +367,21 @@ Currently, rate limiting is not implemented. In production, consider implementin
 - Caching layer for frequently queried addresses
 - Rate limiting implementation
 - Webhook notifications for status changes
+
+## Scheduling and Fair-Share Policy
+
+The bulk verification pipeline uses a weighted fair queueing (WFQ) scheduler
+to avoid single large uploads from blocking smaller organizations. The
+scheduler derives per-organization weights from recent consumption (stored in
+`org_usage_daily`) and orders pending jobs so organizations with lower recent
+consumption receive proportionally more processing capacity.
+
+Operators can inspect the exact SQL used by the worker poll logic in the
+source code; the poll selects the pending job with the lowest WFQ score.
+
+## Monitoring
+
+A new Prometheus histogram `bulk_queue_wait_seconds` (label: `org_id`) exposes
+the time jobs spend waiting in the bulk verification queue, enabling
+per-organization wait time tracking and alerting.
+

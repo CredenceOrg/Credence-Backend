@@ -1,3 +1,5 @@
+import { isValidStellarAddress } from '../lib/stellarAddress.js'
+
 /**
  * Identity verification result for a single address
  */
@@ -36,7 +38,7 @@ export class IdentityService {
    */
   async verifyIdentity(address: string): Promise<IdentityVerification> {
     // Validate address format (basic Stellar address validation)
-    if (!this.isValidStellarAddress(address)) {
+    if (!isValidStellarAddress(address)) {
       throw new Error('Invalid Stellar address format')
     }
 
@@ -98,19 +100,6 @@ export class IdentityService {
   }
 
   /**
-   * Validate Stellar address format
-   * Basic validation - in production, use stellar-sdk
-   * 
-   * @param address - Address to validate
-   * @returns True if valid format
-   */
-  private isValidStellarAddress(address: string): boolean {
-    // Stellar addresses are 56 characters, start with G, and are base32
-    const stellarAddressRegex = /^G[A-Z2-7]{55}$/
-    return stellarAddressRegex.test(address)
-  }
-
-  /**
    * Simulate async delay for testing
    * 
    * @param ms - Milliseconds to delay
@@ -118,4 +107,97 @@ export class IdentityService {
   private simulateDelay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms))
   }
+}
+
+import type { PoolClient } from 'pg'
+import { pool } from '../db/pool.js'
+import { invalidateTrustScoreCache } from './reputationService.js'
+
+export interface IdentityUpsertInput {
+  id: string
+}
+
+export interface BondUpsertInput {
+  id: string
+  address: string
+  amount: string
+  duration: string | null
+}
+
+/**
+ * Upsert an identity by Stellar address.
+ * Accepts an optional client for transactional use.
+ * Maps 'id' field from Horizon event (source_account) to 'address' in DB.
+ */
+export async function upsertIdentity(
+  identity: IdentityUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
+  const db = client ?? pool
+  await db.query(
+    `INSERT INTO identities (address)
+     VALUES ($1)
+     ON CONFLICT (address) DO NOTHING`,
+    [identity.id]
+  )
+}
+
+/**
+ * Upsert a bond for an identity.
+ * Accepts an optional client for transactional use.
+ * Updates the identities table with bond information.
+ */
+export async function upsertBond(
+  bond: BondUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
+  const durationSeconds = bond.duration ? parseInt(bond.duration, 10) : null
+  const db = client ?? pool
+  
+  await db.query(
+    `UPDATE identities
+     SET bonded_amount = $2,
+         bond_start = COALESCE(bond_start, NOW()),
+         bond_duration = $3,
+         active = true,
+         updated_at = NOW()
+     WHERE address = $1`,
+    [bond.address, bond.amount, durationSeconds]
+  )
+
+  // Invalidate trust score cache for this address
+  await invalidateTrustScoreCache(bond.address)
+}
+
+export interface CursorUpsertInput {
+  streamName: string
+  pagingToken: string
+}
+
+/**
+ * Persist a cursor checkpoint for a Horizon event stream.
+ * Accepts an optional client for transactional use.
+ */
+export async function upsertCursor(
+  input: CursorUpsertInput,
+  client?: PoolClient,
+): Promise<void> {
+  if (!/^\d+$/.test(input.pagingToken) && input.pagingToken !== 'now') {
+    throw new Error(
+      `Invalid paging_token format: ${input.pagingToken}. ` +
+      `Expected numeric string or 'now'.`
+    )
+  }
+
+  const db = client ?? pool
+  await db.query(
+    `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
+     VALUES ($1, $2, NOW(), NOW())
+     ON CONFLICT (stream_name)
+     DO UPDATE SET 
+       paging_token = EXCLUDED.paging_token,
+       last_checkpoint = NOW(),
+       updated_at = NOW()`,
+    [input.streamName, input.pagingToken]
+  )
 }

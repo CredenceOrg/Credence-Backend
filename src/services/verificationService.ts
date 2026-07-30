@@ -1,16 +1,18 @@
 import * as crypto from 'crypto'
+import type { IdentityVerification, VerificationError } from './identityService.js'
 
 import type {
   AttestationSummary,
   BondSnapshot,
   SignedVerificationProof,
   VerificationProof,
-} from '../types/verification'
+} from '../types/verification.js'
 
 /**
  * Service for building and signing verification proof packages
  */
 export class VerificationService {
+
   /**
    * Build a canonical JSON string for hashing
    */
@@ -115,11 +117,80 @@ export class VerificationService {
   }
 
   /**
+   * Verify a signed proof with expiry enforcement.
+   * Returns structured result indicating whether the proof is valid and why if not.
+   * Prevents replay attacks by refusing expired proofs even with valid signatures.
+   */
+  verifySignedProofStrict(
+    proof: SignedVerificationProof,
+    publicKey: string
+  ): { valid: boolean; reason?: 'expired' | 'bad_signature' | 'hash_mismatch' } {
+    // Check expiry first (even if signature fails, expiry takes precedence)
+    if (this.isExpired(proof)) {
+      return { valid: false, reason: 'expired' }
+    }
+
+    // Check hash consistency
+    if (!this.verifyProofHash(proof)) {
+      return { valid: false, reason: 'hash_mismatch' }
+    }
+
+    // Verify signature
+    if (!this.verifySignedProof(proof, publicKey)) {
+      return { valid: false, reason: 'bad_signature' }
+    }
+
+    return { valid: true }
+  }
+
+  /**
    * Check if proof is expired
    */
   isExpired(proof: VerificationProof): boolean {
     if (!proof.expiresAt) return false
     return Date.now() > proof.expiresAt
+  }
+
+  /**
+   * Enqueue a bulk verification job.
+   * This method centralizes server-side metadata (orgId, size) so clients
+   * cannot influence the scheduler via crafted payload fields.
+   */
+  async enqueueBulkVerification(addresses: string[], opts?: { orgId?: string; size?: number }): Promise<string> {
+    const size = opts?.size ?? addresses.length
+    const orgId = opts?.orgId ?? 'unknown'
+
+    // Lazy-import to avoid circular deps in tests
+    const { BulkJobRepository } = await import('../db/repositories/bulkJobRepository.js')
+    const { workerPool } = await import('../db/pool.js')
+    const repo = new BulkJobRepository(workerPool)
+
+    const job = await repo.create(orgId, size, { addresses })
+    return job.id
+  }
+
+  /**
+   * Verify addresses in chunks by delegating to IdentityService.verifyBulk.
+   * Default chunkSize of 50 is chosen to balance throughput and avoid rate limiting.
+   */
+  async verifyBulkChunked(
+    addresses: string[],
+    chunkSize = 50,
+  ): Promise<{ results: IdentityVerification[]; errors: VerificationError[] }> {
+    const { IdentityService } = await import('./identityService.js')
+    const identitySvc = new IdentityService()
+    const results: IdentityVerification[] = []
+    const errors: VerificationError[] = []
+
+    for (let i = 0; i < addresses.length; i += chunkSize) {
+      const chunk = addresses.slice(i, i + chunkSize)
+      // delegate to IdentityService which returns { results, errors }
+      const res = await identitySvc.verifyBulk(chunk)
+      results.push(...res.results)
+      errors.push(...res.errors)
+    }
+
+    return { results, errors }
   }
 }
 

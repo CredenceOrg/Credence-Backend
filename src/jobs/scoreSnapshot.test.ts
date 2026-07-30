@@ -19,6 +19,14 @@ describe('ScoreSnapshotJob', () => {
         active: true,
         attestationCount: 10,
       })),
+      getIdentityDataBatch: vi.fn().mockImplementation(async (addresses: string[]) =>
+        addresses.map((address) => ({
+          address,
+          bondedAmount: '1000',
+          active: true,
+          attestationCount: 10,
+        })),
+      ),
     }
 
     mockStore = {
@@ -39,7 +47,8 @@ describe('ScoreSnapshotJob', () => {
     expect(result.saved).toBe(3)
     expect(result.errors).toBe(0)
     expect(mockDataSource.getActiveAddresses).toHaveBeenCalledTimes(1)
-    expect(mockDataSource.getIdentityData).toHaveBeenCalledTimes(3)
+    expect(mockDataSource.getIdentityDataBatch).toHaveBeenCalledTimes(1)
+    expect(mockDataSource.getIdentityData).not.toHaveBeenCalled()
   })
 
   it('computes scores for each identity', async () => {
@@ -53,6 +62,15 @@ describe('ScoreSnapshotJob', () => {
       active: true,
       attestationCount: 10,
     })
+  })
+
+  it('falls back to per-identity reads when batch loading is unavailable', async () => {
+    delete mockDataSource.getIdentityDataBatch
+
+    const job = new ScoreSnapshotJob(mockDataSource, mockStore, mockScoreComputer)
+    await job.run()
+
+    expect(mockDataSource.getIdentityData).toHaveBeenCalledTimes(3)
   })
 
   it('saves snapshots in batch', async () => {
@@ -81,10 +99,12 @@ describe('ScoreSnapshotJob', () => {
     const result = await job.run()
 
     expect(result.processed).toBe(5)
+    expect(mockDataSource.getIdentityDataBatch).toHaveBeenCalledTimes(3)
     expect(mockStore.saveBatch).toHaveBeenCalledTimes(3) // 2 + 2 + 1
   })
 
   it('handles missing identity data', async () => {
+    delete mockDataSource.getIdentityDataBatch
     mockDataSource.getIdentityData = vi.fn()
       .mockResolvedValueOnce({ address: '0xabc', bondedAmount: '1000', active: true, attestationCount: 10 })
       .mockResolvedValueOnce(null)
@@ -99,6 +119,7 @@ describe('ScoreSnapshotJob', () => {
   })
 
   it('continues on error when continueOnError is true', async () => {
+    delete mockDataSource.getIdentityDataBatch
     mockDataSource.getIdentityData = vi.fn()
       .mockResolvedValueOnce({ address: '0xabc', bondedAmount: '1000', active: true, attestationCount: 10 })
       .mockRejectedValueOnce(new Error('Network error'))
@@ -115,6 +136,7 @@ describe('ScoreSnapshotJob', () => {
   })
 
   it('stops on error when continueOnError is false', async () => {
+    delete mockDataSource.getIdentityDataBatch
     mockDataSource.getIdentityData = vi.fn()
       .mockResolvedValueOnce({ address: '0xabc', bondedAmount: '1000', active: true, attestationCount: 10 })
       .mockRejectedValueOnce(new Error('Network error'))
@@ -163,8 +185,74 @@ describe('ScoreSnapshotJob', () => {
       errors: 0,
     })
     expect(result.duration).toBeGreaterThanOrEqual(0)
+    expect(result.aggregationDuration).toBeGreaterThanOrEqual(0)
     expect(result.startTime).toBeDefined()
     expect(new Date(result.startTime).getTime()).toBeGreaterThan(0)
+  })
+
+  it('preserves deterministic output ordering when batch results are unsorted', async () => {
+    mockDataSource.getActiveAddresses = vi.fn().mockResolvedValue(['0xa', '0xb', '0xc'])
+    mockDataSource.getIdentityDataBatch = vi.fn().mockResolvedValue([
+      { address: '0xc', bondedAmount: '1000', active: true, attestationCount: 10 },
+      { address: '0xa', bondedAmount: '1000', active: true, attestationCount: 10 },
+      { address: '0xb', bondedAmount: '1000', active: true, attestationCount: 10 },
+    ])
+
+    const job = new ScoreSnapshotJob(mockDataSource, mockStore, mockScoreComputer)
+    await job.run()
+
+    expect(savedSnapshots.map((snapshot) => snapshot.address)).toEqual(['0xa', '0xb', '0xc'])
+  })
+
+  it('reduces batch read calls versus per-item loading', async () => {
+    mockDataSource.getActiveAddresses = vi.fn().mockResolvedValue(['0xa1', '0xa2', '0xa3', '0xa4', '0xa5'])
+
+    const job = new ScoreSnapshotJob(mockDataSource, mockStore, mockScoreComputer, {
+      batchSize: 2,
+    })
+    await job.run()
+
+    expect(mockDataSource.getIdentityDataBatch).toHaveBeenCalledTimes(3)
+    expect(mockDataSource.getIdentityData).not.toHaveBeenCalled()
+  })
+
+  it('has a faster aggregation path with batch loading than legacy per-item loading', async () => {
+    const addresses = ['0xa1', '0xa2', '0xa3', '0xa4']
+    const batchData = addresses.map((address) => ({
+      address,
+      bondedAmount: '1000',
+      active: true,
+      attestationCount: 10,
+    }))
+
+    const sequentialSource: IdentityDataSource = {
+      getActiveAddresses: vi.fn().mockResolvedValue(addresses),
+      getIdentityData: vi.fn().mockImplementation(async (address: string) => {
+        await new Promise((resolve) => setTimeout(resolve, 15))
+        return batchData.find((row) => row.address === address) ?? null
+      }),
+    }
+
+    const batchedSource: IdentityDataSource = {
+      getActiveAddresses: vi.fn().mockResolvedValue(addresses),
+      getIdentityData: vi.fn(),
+      getIdentityDataBatch: vi.fn().mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 15))
+        return batchData
+      }),
+    }
+
+    const sequentialJob = new ScoreSnapshotJob(sequentialSource, mockStore, mockScoreComputer, {
+      batchSize: 4,
+    })
+    const batchedJob = new ScoreSnapshotJob(batchedSource, mockStore, mockScoreComputer, {
+      batchSize: 4,
+    })
+
+    const sequentialResult = await sequentialJob.run()
+    const batchedResult = await batchedJob.run()
+
+    expect(sequentialResult.aggregationDuration).toBeGreaterThan(batchedResult.aggregationDuration)
   })
 
   it('handles empty identity list', async () => {

@@ -1,0 +1,46 @@
+import type { EventPublisher } from './publisher.js'
+import type { OutboxEvent } from './types.js'
+import type { WebhookService } from '../../services/webhooks/service.js'
+import type { WebhookEventType } from '../../services/webhooks/types.js'
+import { logger } from '../../utils/logger.js'
+
+/**
+ * Event publisher that integrates with the webhook service.
+ * Publishes domain events from the outbox to registered webhooks.
+ */
+export class WebhookEventPublisher implements EventPublisher {
+  constructor(private webhookService: WebhookService) {}
+
+  async publish(event: OutboxEvent): Promise<void> {
+    // Map outbox event types to webhook event types
+    const webhookEventType = this.mapEventType(event.eventType)
+    
+    if (!webhookEventType) {
+      logger.warn(`[WebhookEventPublisher] Unknown event type: ${event.eventType}`)
+      return
+    }
+
+    // Emit to webhook service, carrying the correlation id forward so the
+    // outbound delivery can tag its request and logs with it.
+    await this.webhookService.emit(webhookEventType, event.payload as any, {
+      correlationId: event.correlationId ?? undefined,
+    })
+  }
+
+  /**
+   * Map domain event types to webhook event types.
+   * Extend this as new event types are added.
+   */
+  private mapEventType(eventType: string): WebhookEventType | null {
+    const mapping: Record<string, WebhookEventType> = {
+      'bond.created': 'bond.created',
+      'bond.slashed': 'bond.slashed',
+      'bond.withdrawn': 'bond.withdrawn',
+      'attestation.created': 'attestation.added',
+      'attestation.revoked': 'attestation.revoked',
+      'credits.low': 'credits.low',
+    }
+
+    return mapping[eventType] ?? null
+  }
+}

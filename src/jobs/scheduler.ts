@@ -1,5 +1,19 @@
-import type { ScoreSnapshotJob } from './scoreSnapshot.js'
+import { randomUUID } from 'crypto'
 import type { DistributedLock } from './distributedLock.js'
+import { runWithCorrelationIds } from '../utils/logger.js'
+
+export interface SchedulableJob {
+  run(): Promise<unknown>
+}
+
+/**
+ * Minimal Redis interface for idempotency checks — only needs get/set.
+ */
+export interface IdempotencyRedisClient {
+  get(key: string): Promise<string | null>
+  set(key: string, value: string, opts?: { PX: number }): Promise<string | null>
+}
+
 
 /**
  * Scheduler options.
@@ -27,6 +41,19 @@ export interface SchedulerOptions {
    * @default 5 × intervalMs (capped at 10 minutes)
    */
   lockTtlMs?: number
+  /**
+   * Redis client for idempotency checks. When provided together with
+   * enableIdempotency, the scheduler sets a "lastRun" marker after each
+   * successful job completion and skips execution if the marker exists
+   * (i.e. the job was already run within the interval window).
+   */
+  redisClient?: IdempotencyRedisClient
+  /**
+   * Enable idempotency guard using Redis lastRun markers.
+   * Requires redisClient to be set.
+   * @default false
+   */
+  enableIdempotency?: boolean
 }
 
 /**
@@ -55,9 +82,12 @@ export class JobScheduler {
   private readonly distributedLock?: DistributedLock
   private readonly lockKey: string
   private readonly lockTtlMs: number
+  private readonly redisClient?: IdempotencyRedisClient
+  private readonly enableIdempotency: boolean
+  private readonly idempotencyKeyBase: string
 
   constructor(
-    private readonly job: ScoreSnapshotJob,
+    private readonly job: SchedulableJob,
     options: {
       intervalMs: number
       runOnStart?: boolean
@@ -65,6 +95,8 @@ export class JobScheduler {
       distributedLock?: DistributedLock
       lockKey?: string
       lockTtlMs?: number
+      redisClient?: IdempotencyRedisClient
+      enableIdempotency?: boolean
     }
   ) {
     this.intervalMs = options.intervalMs
@@ -73,6 +105,9 @@ export class JobScheduler {
     this.distributedLock = options.distributedLock
     this.lockKey = options.lockKey ?? 'cron:score-snapshot'
     this.lockTtlMs = options.lockTtlMs ?? Math.min(options.intervalMs * 5, 600_000)
+    this.redisClient = options.redisClient
+    this.enableIdempotency = options.enableIdempotency ?? false
+    this.idempotencyKeyBase = `${this.lockKey}:lastRun`
   }
 
   /**
@@ -114,6 +149,14 @@ export class JobScheduler {
   }
 
   /**
+   * Check if a job invocation is currently executing.
+   * Used by the shutdown coordinator to wait for in-flight work to drain.
+   */
+  isJobRunning(): boolean {
+    return this.isRunning
+  }
+
+  /**
    * Run the job (internal).
    *
    * When a `distributedLock` is configured the job only runs if this worker
@@ -126,14 +169,37 @@ export class JobScheduler {
       return
     }
 
+    // Scheduled jobs have no originating HTTP request, so there is no
+    // correlation id to inherit. Generate one per run so that any outbox
+    // events or webhook deliveries triggered by this job's business logic
+    // (via the shared tracing context) can still be traced back to the
+    // specific run that caused them.
+    const jobRunCorrelationId = randomUUID()
+    // Idempotency guard: check if job was recently completed
+    if (this.enableIdempotency && this.redisClient) {
+      const lastRun = await this.redisClient.get(this.idempotencyKeyBase)
+      if (lastRun) {
+        this.logger(
+          `[Idempotency] Skipping job "${this.lockKey}" — last run at ${lastRun} (within interval)`
+        )
+        return
+      }
+    }
+
     if (this.distributedLock) {
-      const { executed } = await this.distributedLock.withLock(
+      const { executed, result } = await this.distributedLock.withLock(
         this.lockKey,
         async () => {
           this.isRunning = true
           try {
-            const result = await this.job.run()
+            const result = await runWithCorrelationIds(
+              { correlationId: jobRunCorrelationId },
+              () => this.job.run()
+            )
             this.logger(`Job completed: ${JSON.stringify(result)}`)
+            const jobResult = await this.job.run()
+            this.logger(`Job completed: ${JSON.stringify(jobResult)}`)
+            return jobResult
           } finally {
             this.isRunning = false
           }
@@ -146,13 +212,26 @@ export class JobScheduler {
         this.logger(
           `Job skipped (lock held by another worker) — contentions: ${metrics.contentions}`
         )
+        return
+      }
+
+      // Set idempotency marker after successful execution
+      if (this.enableIdempotency && this.redisClient) {
+        await this.redisClient.set(
+          this.idempotencyKeyBase,
+          new Date().toISOString(),
+          { PX: this.intervalMs }
+        )
       }
       return
     }
 
     this.isRunning = true
     try {
-      const result = await this.job.run()
+      const result = await runWithCorrelationIds(
+        { correlationId: jobRunCorrelationId },
+        () => this.job.run()
+      )
       this.logger(`Job completed: ${JSON.stringify(result)}`)
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : 'Unknown error'
@@ -210,7 +289,7 @@ export function parseCronToInterval(cronExpression: string): number {
  * @returns JobScheduler instance
  */
 export function createScheduler(
-  job: ScoreSnapshotJob,
+  job: SchedulableJob,
   options: SchedulerOptions = {}
 ): JobScheduler {
   const cronExpression = options.cronExpression ?? '0 * * * *'
@@ -224,4 +303,34 @@ export function createScheduler(
     lockKey: options.lockKey,
     lockTtlMs: options.lockTtlMs,
   })
+}
+
+/**
+ * Helper that returns a SQL string to select the next bulk job according to
+ * a weighted-fair-queueing ordering which uses `org_usage_daily` to derive
+ * per-org weights. This function is a convenience for bulk worker poll logic
+ * and keeps the SQL localized so it can be reviewed and tested.
+ *
+ * NOTE: Integrators should validate table/column names to avoid SQL injection
+ * when interpolating dynamic identifiers.
+ */
+export function getBulkWorkerPollQuery(jobsTable = 'bulk_jobs', orgUsageTable = 'org_usage_daily') {
+  return `WITH org_w AS (
+    SELECT org_id, 1.0 / (1 + COALESCE(usage, 0)) AS weight
+    FROM ${orgUsageTable}
+    WHERE day = CURRENT_DATE
+  ), queued AS (
+    SELECT j.*, COALESCE(w.weight, 1.0) AS weight
+    FROM ${jobsTable} j
+    LEFT JOIN org_w w ON j.org_id = w.org_id
+    WHERE j.status = 'pending'
+  ), scored AS (
+    SELECT q.*,
+      -- virtual score approximation: size divided by weight
+      (q.size::float / q.weight) AS wfq_score
+    FROM queued q
+  )
+  SELECT * FROM scored
+  ORDER BY wfq_score ASC, created_at ASC
+  LIMIT 1;`
 }

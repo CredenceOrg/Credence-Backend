@@ -1,58 +1,51 @@
-/**
- * GET /api/trust/:address
- *
- * Returns the trust score for a given Ethereum address.
- *
- * Path params:
- *   address  – Ethereum address (0x-prefixed, 40 hex chars, case-insensitive)
- *
- * Request headers (all optional):
- *   X-API-Key  – API key; unlocks the 'premium' rate tier
- *
- * Responses:
- *   200  { address, score, bondedAmount, bondStart, attestationCount, agreedFields? }
- *   400  { error }  – address format invalid
- *   404  { error }  – no identity record for this address
- *
- * @example
- * GET /api/trust/0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266
- * →
- * {
- *   "address": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
- *   "score": 100,
- *   "bondedAmount": "1000000000000000000",
- *   "bondStart": "2024-01-15T00:00:00.000Z",
- *   "attestationCount": 5,
- *   "agreedFields": { "name": "Alice", "role": "validator" }
- * }
- */
-
-import { Router, type Request, type Response } from 'express'
+import { Router, type Request, type Response, type NextFunction } from 'express'
 import { getTrustScore } from '../services/reputationService.js'
+import { PgTrustIdentityRepository } from '../db/repositories/trustIdentityRepository.js'
+import { pool, withReplica } from '../db/pool.js'
 import { apiKeyMiddleware } from '../middleware/apiKey.js'
-import { validate } from '../middleware/validate.js'
-import { trustPathParamsSchema } from '../schemas/index.js'
+import { validate, type ValidatedRequest } from '../middleware/validate.js'
+import { trustPathParamsSchema, type TrustPathParams } from '../schemas/index.js'
+import { NotFoundError } from '../lib/errors.js'
+import { createHash } from 'crypto'
 
 const router = Router()
+
+function generateEtag(data: any): string {
+  return createHash('sha256').update(JSON.stringify(data)).digest('hex')
+}
 
 router.get(
   '/:address',
   validate({ params: trustPathParamsSchema }),
   apiKeyMiddleware,
-  (req: Request, res: Response) => {
-    const { address } = req.validated!.params! as { address: string }
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const validatedReq = req as ValidatedRequest<TrustPathParams>
+      const { address } = validatedReq.validated.params
 
-    const trustScore = getTrustScore(address)
-
-    if (!trustScore) {
-      res.status(404).json({
-        error: `No identity record found for address ${address}.`,
+      const trustScore = await withReplica(async (client) => {
+        const trustRepo = new PgTrustIdentityRepository(client)
+        return await getTrustScore(address, trustRepo)
       })
-      return
-    }
 
-    res.json(trustScore)
-  },
+      if (!trustScore) {
+        throw new NotFoundError('Identity record', address)
+      }
+
+      const etag = generateEtag(trustScore)
+      res.set('ETag', etag)
+      res.set('Cache-Control', 'public, max-age=60')
+
+      if (req.headers['if-none-match'] === etag) {
+        res.status(304).send()
+        return
+      }
+
+      res.json(trustScore)
+    } catch (error) {
+      next(error)
+    }
+  }
 )
 
 export default router

@@ -1,0 +1,273 @@
+import { FailedInboundEventsRepository, FailedInboundEvent } from '../db/repositories/failedInboundEventsRepository.js'
+import { auditLogService, AuditAction } from './audit/index.js'
+import { cache } from '../cache/redis.js'
+import { invalidateCache } from '../cache/invalidation.js'
+import { Horizon } from '@stellar/stellar-sdk'
+import { bondOperationSchema, bondWithdrawalOperationSchema, validateMessage } from '../listeners/messageValidator.js'
+
+const FAILED_EVENT_CACHE_TTL = 300 // 5 minutes
+
+export interface ReplayHandler {
+  handle(eventData: any): Promise<void>
+}
+
+/**
+ * Service for capturing and replaying failed inbound events.
+ */
+export class ReplayService {
+  private handlers = new Map<string, ReplayHandler>()
+
+  constructor(
+    private readonly repository: FailedInboundEventsRepository
+  ) {}
+
+  /**
+   * Register a handler for a specific event type.
+   */
+  registerHandler(eventType: string, handler: ReplayHandler): void {
+    this.handlers.set(eventType, handler)
+  }
+
+  /**
+   * Capture a failed event for later replay.
+   */
+  async captureFailure(
+    eventType: string,
+    eventData: any,
+    reason?: string,
+    replayToken?: string
+  ): Promise<FailedInboundEvent> {
+    return this.repository.create({
+      eventType,
+      eventData,
+      failureReason: reason,
+      replayToken
+    })
+  }
+
+  /**
+   * Get failed event by ID with caching.
+   */
+  async getFailedEvent(id: string): Promise<FailedInboundEvent | null> {
+    const cached = await cache.get<FailedInboundEvent>('failed_event', id)
+
+    if (cached) {
+      return cached
+    }
+
+    const event = await this.repository.findById(id)
+    if (event) {
+      await cache.set('failed_event', id, event, FAILED_EVENT_CACHE_TTL)
+    }
+
+    return event
+  }
+
+  /**
+   * Replay a failed event by ID.
+   * Ensures idempotency by checking status and using AuditLogService.
+   * Increments retry_count on each attempt.
+   */
+  async replayEvent(
+    id: string,
+    adminId: string,
+    adminEmail: string,
+    tenantId: string,
+    ipAddress?: string,
+    requestId?: string
+  ): Promise<{ success: boolean; message: string }> {
+    const event = await this.getFailedEvent(id)
+    if (!event) {
+      throw new Error(`Event ${id} not found`)
+    }
+
+    if (event.status === 'replayed') {
+      return { success: false, message: 'Event already replayed' }
+    }
+
+    const handler = this.handlers.get(event.eventType)
+    if (!handler) {
+      throw new Error(`No handler registered for event type: ${event.eventType}`)
+    }
+
+    try {
+      await handler.handle(event.eventData)
+
+      await this.repository.updateStatus(id, 'replayed')
+      await this.repository.incrementRetryCount(id)
+
+      // Invalidate cache after status update
+      const updatedEvent = await this.repository.findById(id)
+      if (updatedEvent) {
+        await invalidateCache('failed_event', id, updatedEvent, {
+          verify: true,
+          verifyFn: (cached, fresh) => cached.status !== fresh.status
+        })
+      }
+
+      auditLogService.logAction(
+        tenantId,
+        adminId,
+        adminEmail,
+        AuditAction.REPLAY_EVENT,
+        id,
+        'system',
+        { eventType: event.eventType, status: 'success' },
+        'success',
+        undefined,
+        ipAddress,
+        requestId
+      )
+
+      return { success: true, message: 'Event successfully replayed' }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+
+      await this.repository.incrementRetryCount(id)
+
+      auditLogService.logAction(
+        tenantId,
+        adminId,
+        adminEmail,
+        AuditAction.REPLAY_EVENT,
+        id,
+        'system',
+        { eventType: event.eventType, status: 'failure' },
+        'failure',
+        errorMessage,
+        ipAddress,
+        requestId
+      )
+
+      throw new Error(`Replay failed: ${errorMessage}`)
+    }
+  }
+
+  /**
+   * List failed events for admin review.
+   */
+  async listFailedEvents(filters: { status?: any; type?: string }, limit = 50, offset = 0) {
+    return this.repository.list(filters, limit, offset)
+  }
+
+  /**
+   * Replay raw Horizon events between ledger sequence numbers (inclusive).
+   * This performs a best-effort mapping of operations to registered handlers
+   * (e.g. `bond_creation`, `withdrawal`, `attestation`) and invokes handlers
+   * with parsed event payloads where possible. Errors for individual events
+   * are captured via `captureFailure` and logged.
+   */
+  async replayLedgerRange(
+    fromLedger: number,
+    toLedger: number,
+    adminId: string,
+    adminEmail: string,
+    tenantId: string,
+    ipAddress?: string
+  ): Promise<{ success: boolean; processed: number; errors: number }> {
+    const HORIZON_URL = process.env.HORIZON_URL || 'https://horizon-testnet.stellar.org'
+    const server = new Horizon.Server(HORIZON_URL)
+
+    if (fromLedger > toLedger) {
+      throw new Error('fromLedger must be <= toLedger')
+    }
+
+    let processed = 0
+    let errors = 0
+
+    for (let seq = fromLedger; seq <= toLedger; seq++) {
+      try {
+        const res = await server.operations().forLedger(seq).limit(200).call()
+        for (const op of res.records) {
+          const anyOp: any = op
+          try {
+            // Map operation types to registered handler keys
+            if (anyOp.type === 'create_bond' && this.handlers.has('bond_creation')) {
+              const validation = validateMessage(bondOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('bond_creation', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
+              const parsed = {
+                identity: { id: validation.data.source_account },
+                bond: { id: validation.data.id, address: validation.data.source_account, amount: validation.data.amount, duration: validation.data.duration ?? null },
+              }
+              await this.handlers.get('bond_creation')!.handle(parsed)
+              processed++
+              continue
+            }
+
+            if (anyOp.type === 'payment' && this.handlers.has('withdrawal')) {
+              const payment = anyOp
+              const validation = validateMessage(bondWithdrawalOperationSchema, anyOp)
+              if (!validation.valid) {
+                errors++
+                await this.captureFailure('withdrawal', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                continue
+              }
+              const parsed = {
+                id: validation.data.id,
+                pagingToken: anyOp.paging_token,
+                type: anyOp.type,
+                createdAt: new Date(anyOp.created_at),
+                bondId: `${payment.from || payment.source_account}-${anyOp.transaction_hash}`,
+                account: payment.from || payment.source_account,
+                amount: validation.data.amount,
+                assetType: payment.asset_type,
+                assetCode: payment.asset_code,
+                assetIssuer: payment.asset_issuer,
+                transactionHash: anyOp.transaction_hash || '',
+                operationIndex: Number.parseInt(anyOp.id.split('-').pop() ?? '0', 10) || 0,
+              }
+              await this.handlers.get('withdrawal')!.handle(parsed)
+              processed++
+              continue
+            }
+
+            // Best-effort attestation mapping
+            if ((anyOp.type && anyOp.type.toString().toLowerCase().includes('attest')) && this.handlers.has('attestation')) {
+              await this.handlers.get('attestation')!.handle(anyOp)
+              processed++
+              continue
+            }
+
+            // Unknown/unsupported op - skip
+          } catch (err: any) {
+            errors++
+            await this.captureFailure('replay_range_op_failure', { ledger: seq, op }, err?.message || 'handler failure')
+          }
+        }
+      } catch (err: any) {
+        errors++
+        await auditLogService.logAction(
+          tenantId,
+          adminId,
+          adminEmail,
+          'REPLAY_LEDGER_RANGE' as any,
+          `${fromLedger}-${toLedger}`,
+          'system',
+          { ledger: seq, error: err?.message },
+          'failure',
+          err?.message,
+          ipAddress
+        )
+      }
+    }
+
+    await auditLogService.logAction(
+      tenantId,
+      adminId,
+      adminEmail,
+      'REPLAY_LEDGER_RANGE' as any,
+      `${fromLedger}-${toLedger}`,
+      'system',
+      { fromLedger, toLedger, processed, errors },
+      errors === 0 ? 'success' : 'failure',
+      undefined,
+      ipAddress
+    )
+
+    return { success: errors === 0, processed, errors }
+  }
+}

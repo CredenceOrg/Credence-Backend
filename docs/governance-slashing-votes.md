@@ -120,6 +120,28 @@ GET /api/governance/slash-requests?status=rejected
 Each `voterId` may vote **at most once** per slash request.
 A second vote from the same voter returns `409 Conflict`.
 
+## Audit Logging
+
+Sensitive governance actions are written to the immutable audit log:
+
+- `SLASH_REQUEST_CREATED` when a new slash request is created
+- `SLASH_VOTE_CAST` when a signer vote is submitted
+
+Audit entries include:
+
+- `actorId` and `actorEmail` (who initiated the HTTP request)
+- `action` (what happened)
+- `timestamp` (when it happened)
+- `resourceType=slash_request` and `resourceId=<slashRequestId>`
+
+Query examples (admin only):
+
+```http
+GET /api/admin/audit-logs?action=SLASH_VOTE_CAST
+GET /api/admin/audit-logs?resourceType=slash_request&resourceId=<id>
+GET /api/admin/audit-logs?actorId=<userId>&from=2026-01-01T00:00:00.000Z
+```
+
 ## Example Flow (3-of-5)
 
 ```

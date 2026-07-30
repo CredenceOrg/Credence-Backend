@@ -5,6 +5,8 @@
  * It loads settings from environment variables and provides sensible defaults.
  */
 
+import { existsSync } from 'node:fs'
+
 export interface MigrationConfig {
   /** PostgreSQL connection string */
   databaseUrl: string
@@ -38,12 +40,29 @@ export function loadMigrationConfig(): MigrationConfig {
 
   return {
     databaseUrl,
-    migrationsDir: process.env.MIGRATIONS_DIR ?? 'src/migrations',
+    migrationsDir: resolveMigrationsDir(),
     migrationsTable: process.env.MIGRATIONS_TABLE ?? 'pgmigrations',
     migrationsSchema: process.env.MIGRATIONS_SCHEMA ?? 'public',
     transactional: process.env.MIGRATIONS_TRANSACTIONAL !== 'false',
     createSchema: process.env.MIGRATIONS_CREATE_SCHEMA !== 'false',
   }
+}
+
+/**
+ * Resolve the migrations directory for the current runtime.
+ * Prefers MIGRATIONS_DIR, then compiled dist/migrations, then src/migrations.
+ */
+export function resolveMigrationsDir(): string {
+  if (process.env.MIGRATIONS_DIR) {
+    return process.env.MIGRATIONS_DIR
+  }
+
+  const distDir = 'dist/migrations'
+  if (existsSync(distDir)) {
+    return distDir
+  }
+
+  return 'src/migrations'
 }
 
 /**
@@ -57,8 +76,10 @@ export function validateConfig(config: MigrationConfig): boolean {
   }
 
   // Basic URL validation for PostgreSQL
-  if (!config.databaseUrl.startsWith('postgres://') && !config.databaseUrl.startsWith('postgresql://')) {
-    throw new Error('DATABASE_URL must be a valid PostgreSQL connection string starting with postgres:// or postgresql://')
+  if (!config.databaseUrl.startsWith('postgres://') && 
+      !config.databaseUrl.startsWith('postgresql://') &&
+      !config.databaseUrl.startsWith('pg-mem://')) {
+    throw new Error('DATABASE_URL must be a valid PostgreSQL connection string starting with postgres://, postgresql:// or pg-mem://')
   }
 
   if (!config.migrationsDir) {

@@ -1,10 +1,13 @@
 import type {
   IdentityDataSource,
+  IdentityData,
   ScoreSnapshotStore,
   ScoreComputer,
   SnapshotJobResult,
   ScoreSnapshot,
 } from './types.js'
+import { trustScoreInvalidationHook } from '../cache/invalidationHooks.js'
+import { logger } from '../utils/logger.js'
 
 /**
  * Options for score snapshot job.
@@ -16,6 +19,8 @@ export interface SnapshotJobOptions {
   continueOnError?: boolean
   /** Logger function for progress/errors. */
   logger?: (message: string) => void
+  /** Scoring model version to record in snapshots (optional). */
+  scoringModelVersion?: string
 }
 
 /**
@@ -38,6 +43,7 @@ export class ScoreSnapshotJob {
   private readonly batchSize: number
   private readonly continueOnError: boolean
   private readonly logger: (message: string) => void
+  private readonly scoringModelVersion: string
 
   constructor(
     private readonly dataSource: IdentityDataSource,
@@ -48,6 +54,7 @@ export class ScoreSnapshotJob {
     this.batchSize = options.batchSize ?? 100
     this.continueOnError = options.continueOnError ?? true
     this.logger = options.logger ?? (() => {})
+    this.scoringModelVersion = options.scoringModelVersion ?? '1.0.0'
   }
 
   /**
@@ -64,6 +71,7 @@ export class ScoreSnapshotJob {
     let processed = 0
     let saved = 0
     let errors = 0
+    let aggregationDuration = 0
 
     try {
       const addresses = await this.dataSource.getActiveAddresses()
@@ -78,35 +86,76 @@ export class ScoreSnapshotJob {
         this.logger(`Processing batch ${batchNum}/${totalBatches} (${batch.length} identities)`)
 
         const snapshots: ScoreSnapshot[] = []
+        if (typeof this.dataSource.getIdentityDataBatch === 'function') {
+          const aggregationStartedAt = Date.now()
+          const batchData = await this.loadBatchData(batch)
+          aggregationDuration += Date.now() - aggregationStartedAt
 
-        for (const address of batch) {
-          try {
-            const data = await this.dataSource.getIdentityData(address)
-            
-            if (!data) {
-              this.logger(`No data found for ${address}`)
+          for (const address of batch) {
+            try {
+              const data = batchData.get(address) ?? null
+
+              if (!data) {
+                this.logger(`No data found for ${address}`)
+                processed++
+                continue
+              }
+
+              const score = this.scoreComputer(data)
+              const snapshot: ScoreSnapshot = {
+                address,
+                score,
+                bondedAmount: data.bondedAmount,
+                attestationCount: data.attestationCount,
+                timestamp: new Date().toISOString(),
+                scoringModelVersion: this.scoringModelVersion,
+              }
+
+              snapshots.push(snapshot)
               processed++
-              continue
+            } catch (error) {
+              errors++
+              const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+              this.logger(`Error processing ${address}: ${errorMsg}`)
+
+              if (!this.continueOnError) {
+                throw error
+              }
             }
+          }
+        } else {
+          for (const address of batch) {
+            try {
+              const aggregationStartedAt = Date.now()
+              const data = await this.dataSource.getIdentityData(address)
+              aggregationDuration += Date.now() - aggregationStartedAt
 
-            const score = this.scoreComputer(data)
-            const snapshot: ScoreSnapshot = {
-              address,
-              score,
-              bondedAmount: data.bondedAmount,
-              attestationCount: data.attestationCount,
-              timestamp: new Date().toISOString(),
-            }
+              if (!data) {
+                this.logger(`No data found for ${address}`)
+                processed++
+                continue
+              }
 
-            snapshots.push(snapshot)
-            processed++
-          } catch (error) {
-            errors++
-            const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-            this.logger(`Error processing ${address}: ${errorMsg}`)
+              const score = this.scoreComputer(data)
+              const snapshot: ScoreSnapshot = {
+                address,
+                score,
+                bondedAmount: data.bondedAmount,
+                attestationCount: data.attestationCount,
+                timestamp: new Date().toISOString(),
+                scoringModelVersion: this.scoringModelVersion,
+              }
 
-            if (!this.continueOnError) {
-              throw error
+              snapshots.push(snapshot)
+              processed++
+            } catch (error) {
+              errors++
+              const errorMsg = error instanceof Error ? error.message : 'Unknown error'
+              this.logger(`Error processing ${address}: ${errorMsg}`)
+
+              if (!this.continueOnError) {
+                throw error
+              }
             }
           }
         }
@@ -117,6 +166,16 @@ export class ScoreSnapshotJob {
             await this.store.saveBatch(snapshots)
             saved += snapshots.length
             this.logger(`Saved ${snapshots.length} snapshots`)
+
+            // Post-commit hook: invalidate trust-score cache for all
+            // addresses in this batch so the next read fetches fresh scores.
+            const addresses = snapshots.map((s) => s.address)
+            trustScoreInvalidationHook.execute(...addresses).catch((err) =>
+              logger.error(
+                { err, batchSize: addresses.length },
+                '[ScoreSnapshotJob] Failed to invalidate trust-score cache after batch save',
+              ),
+            )
           } catch (error) {
             errors += snapshots.length
             const errorMsg = error instanceof Error ? error.message : 'Unknown error'
@@ -142,8 +201,14 @@ export class ScoreSnapshotJob {
       saved,
       errors,
       duration,
+      aggregationDuration,
       startTime,
     }
+  }
+
+  private async loadBatchData(batch: string[]): Promise<Map<string, IdentityData>> {
+    const rows = await this.dataSource.getIdentityDataBatch!(batch)
+    return new Map(rows.map((row) => [row.address, row]))
   }
 }
 

@@ -1,78 +1,50 @@
-import { AuditLogEntry, AuditAction } from './types.js'
+import { pool } from '../../db/pool.js'
+import {
+  InMemoryAuditLogsRepository,
+  PostgresAuditLogsRepository,
+  type AuditLogPurgeResult,
+  type AuditLogRepository,
+} from '../../db/repositories/auditLogsRepository.js'
+import {
+  InMemoryAuditChainVerificationRepository,
+  PostgresAuditChainVerificationRepository,
+  type AuditChainVerificationRepository,
+} from '../../db/repositories/auditChainVerificationRepository.js'
+import { toChainVerificationState } from './chainStatus.js'
+import { logger } from '../../utils/logger.js'
+import { redact } from '../../observability/redaction.js'
+import { LogEventType } from '../../observability/logSchemas.js'
+import type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogFilters,
+  AuditLogInput,
+  AuditStatus,
+  ChainVerificationResult,
+} from './types.js'
+import { AuditAction } from './types.js'
 
 /**
- * Audit log service for tracking admin actions
- * In production, this would write to a database or centralized logging system
+ * Audit log service for tracking admin actions.
  *
- * Supports request-scoped batching: callers can buffer multiple log entries
- * and flush them in a single write, reducing per-request I/O when the
- * underlying storage is a remote database rather than an in-memory array.
+ * All entries are hash-chained: each row stores the SHA-256 of the preceding row
+ * so that any tampering (mutation or deletion) is detectable by walking the chain.
+ *
+ * In production, this would write to a database or centralized logging system.
  */
 export class AuditLogService {
-  private logs: AuditLogEntry[] = []
-  private logId = 0
-  /** Entries buffered by the current request that have not been flushed yet. */
-  private buffer: AuditLogEntry[] = []
-  /** True when the service is in buffered (request-scoped) mode. */
-  private buffered = false
+  constructor(
+    private readonly repository: AuditLogRepository = new InMemoryAuditLogsRepository(),
+    private readonly chainStatusRepository: AuditChainVerificationRepository = new InMemoryAuditChainVerificationRepository(),
+  ) {}
 
   /**
-   * Enable request-scoped buffering. While buffered, every call to
-   * {@link logAction} appends to an internal buffer instead of writing
-   * immediately. Call {@link flush} at the end of the request to commit
-   * all buffered entries at once.
+   * Log an admin action.
    *
-   * Use this in middleware or request interceptors to coalesce audit-log
-   * writes per request, reducing the number of I/O operations when the
-   * underlying store is a remote database.
-   *
-   * If a buffer is already active (e.g., nested middleware registration),
-   * this call is a safe no-op rather than silently discarding the existing
-   * buffer.
-   */
-  startBuffer(): void {
-    if (this.buffered) {
-      return // already buffering — don't discard existing entries
-    }
-    this.buffered = true
-    this.buffer = []
-  }
-
-  /**
-   * Immediately flush all buffered entries to the audit log (the internal
-   * `logs` array). After flushing, buffered mode is disabled.
-   *
-   * Call this at the end of each request (e.g. in response middleware or
-   * a `finally` block) to commit the coalesced entries.
-   *
-   * @returns The number of entries that were flushed.
-   */
-  flush(): number {
-    const count = this.buffer.length
-    if (count > 0) {
-      this.logs.push(...this.buffer)
-      this.buffer = []
-    }
-    this.buffered = false
-    return count
-  }
-
-  /**
-   * Discard any buffered entries without writing them.
-   * Useful on request error paths where the audit trail should not be saved.
-   */
-  discardBuffer(): void {
-    this.buffer = []
-    this.buffered = false
-  }
-
-  /**
-   * Log an admin action
+   * The underlying repository computes the hash chain (prev_hash + row_hash)
+   * inside the same transaction as the INSERT, so the chain is always consistent.
    * 
-   * When buffered mode is active (via {@link startBuffer}), the entry is
-   * added to the request buffer and will be written on the next {@link flush}.
-   * Otherwise, the entry is written immediately to the log.
-   * 
+   * @param tenantId - Tenant ID for multi-tenant isolation (required)
    * @param adminId - ID of the admin performing the action
    * @param adminEmail - Email of the admin
    * @param action - Type of action being performed
@@ -82,125 +54,226 @@ export class AuditLogService {
    * @param status - Whether the action succeeded or failed
    * @param errorMessage - Error message if action failed
    * @param ipAddress - IP address of the requester
-   * @returns The created audit log entry
+   * @returns The created audit log entry (including prevHash and rowHash)
    */
-  logAction(
-    adminId: string,
-    adminEmail: string,
-    action: AuditAction,
-    targetUserId: string,
-    targetUserEmail: string,
-    details: Record<string, unknown> = {},
-    status: 'success' | 'failure' = 'success',
+  async logAction(
+    inputOrTenantId: AuditLogInput | string,
+    actorId?: string,
+    actorEmail?: string,
+    action?: AuditAction | string,
+    targetUserId?: string,
+    targetUserEmail?: string,
+    details?: Record<string, unknown>,
+    status?: AuditStatus,
     errorMessage?: string,
-    ipAddress?: string
-  ): AuditLogEntry {
-    const entry: AuditLogEntry = {
-      id: `audit-${this.logId++}`,
-      timestamp: new Date().toISOString(),
-      adminId,
-      adminEmail,
-      action,
-      targetUserId,
-      targetUserEmail,
-      details,
-      ipAddress,
-      status,
-      errorMessage,
+    ipAddress?: string,
+    requestId?: string,
+  ): Promise<AuditLogEntry> {
+    if (typeof inputOrTenantId !== 'string') {
+      const entry = await this.repository.append(inputOrTenantId)
+      this.logAuditEvent(entry)
+      return entry
     }
 
-    if (this.buffered) {
-      this.buffer.push(entry)
-    } else {
-      this.logs.push(entry)
+    const tenantId = inputOrTenantId
+    const effectiveAction = action ?? 'UNKNOWN_ACTION'
+    const resourceType =
+      effectiveAction === AuditAction.LIST_USERS || effectiveAction === AuditAction.EXPORT_AUDIT_LOGS
+        ? 'admin_user'
+        : effectiveAction === AuditAction.ROTATE_SIGNING_KEY
+          ? 'system'
+          : 'user'
+
+    const mappedDetails: Record<string, unknown> = {
+      ...(details ?? {}),
+      ...(targetUserEmail ? { targetUserEmail } : {}),
     }
+
+    const entry = await this.repository.append({
+      tenantId,
+      actorId: actorId ?? 'unknown',
+      actorEmail: actorEmail ?? 'unknown@unknown',
+      action: effectiveAction,
+      resourceType,
+      resourceId: targetUserId ?? actorId ?? 'unknown',
+      details: mappedDetails,
+      status,
+      errorMessage,
+      ipAddress,
+      requestId,
+    })
+    this.logAuditEvent(entry)
     return entry
+  }
+
+  /**
+   * Emit a schema-validated structured log line for a recorded audit entry.
+   *
+   * Every audit log line must carry tenantId so log aggregation can be
+   * scoped per tenant; the allowlist schema for AUDIT_LOG_RECORDED drops
+   * anything else (e.g. actorEmail, details) that isn't explicitly listed.
+   */
+  private logAuditEvent(entry: AuditLogEntry): void {
+    const payload = {
+      eventType: LogEventType.AUDIT_LOG_RECORDED,
+      tenantId: entry.tenantId,
+      action: entry.action,
+      resourceType: entry.resourceType,
+      status: entry.status,
+      requestId: entry.requestId,
+    }
+    const redacted = redact(payload, { eventType: LogEventType.AUDIT_LOG_RECORDED })
+
+    if (entry.status === 'failure') {
+      logger.warn(redacted)
+    } else {
+      logger.info(redacted)
+    }
+  }
+
+  /**
+   * Append a batch of audit log entries while maintaining actor_id integrity.
+   *
+   * @param inputs - Array of audit log input objects
+   * @returns Array of created audit log entries
+   */
+  async appendBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    return this.repository.appendBatch(inputs)
+  }
+
+  /**
+   * Log a batch of audit actions.
+   * Alias for appendBatch.
+   */
+  async logBatch(inputs: AuditLogInput[]): Promise<AuditLogEntry[]> {
+    return this.appendBatch(inputs)
   }
 
   /**
    * Get audit logs with optional filtering
    * 
+   * SECURITY: Tenant scoping is DENY-BY-DEFAULT. Either tenantId or allowSuperScope must be provided.
+   * 
    * @param filters - Optional filters for action, adminId, targetUserId, etc.
    * @param limit - Maximum number of logs to return (default: 100)
-   * @param offset - Pagination offset (default: 0)
-   * @returns Array of matching audit log entries and total count
+   * @param cursor - Pagination cursor
+   * @param options - Additional options for tenant scoping
+   * @returns Array of matching audit log entries and pagination metadata
    */
-  getLogs(
-    filters?: {
-      action?: AuditAction
-      adminId?: string
-      targetUserId?: string
-      status?: 'success' | 'failure'
-    },
+  async getLogs(
+    tenantId: string | undefined,
+    filters: AuditLogFilters = {},
     limit = 100,
-    offset = 0
-  ): {
-    logs: AuditLogEntry[]
-    total: number
-  } {
-    let filtered = this.logs
-
-    if (filters?.action) {
-      filtered = filtered.filter((log) => log.action === filters.action)
-    }
-    if (filters?.adminId) {
-      filtered = filtered.filter((log) => log.adminId === filters.adminId)
-    }
-    if (filters?.targetUserId) {
-      filtered = filtered.filter((log) => log.targetUserId === filters.targetUserId)
-    }
-    if (filters?.status) {
-      filtered = filtered.filter((log) => log.status === filters.status)
+    cursor?: string,
+    options?: { allowSuperScope?: boolean }
+  ): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
+    // SECURITY: Enforce tenant scoping - deny by default
+    if (!tenantId && !options?.allowSuperScope) {
+      throw new Error(
+        'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
+      )
     }
 
-    // Sort by timestamp descending (newest first)
-    filtered.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-
-    const total = filtered.length
-    const paginated = filtered.slice(offset, offset + limit)
-
-    return { logs: paginated, total }
+    const effectiveTenantId = options?.allowSuperScope ? (filters.tenantId || tenantId) : tenantId
+    return this.repository.query({ ...filters, tenantId: effectiveTenantId }, limit, cursor)
   }
 
   /**
    * Get all audit logs (for testing)
    * @returns All audit log entries
    */
-  getAllLogs(): AuditLogEntry[] {
-    return this.logs
+  async getAllLogs(): Promise<AuditLogEntry[]> {
+    return this.repository.getAll()
   }
 
   /**
    * Clear all logs (for testing)
    */
-  clearLogs(): void {
-    this.logs = []
-    this.logId = 0
+  async clearLogs(): Promise<void> {
+    await this.repository.clear()
+  }
+
+  /**
+   * Persist the audit chain verifier's last run result for operator visibility.
+   */
+  async saveChainVerificationStatus(result: ChainVerificationResult): Promise<AuditChainVerificationState> {
+    return this.chainStatusRepository.saveStatus(toChainVerificationState(result))
+  }
+
+  /**
+   * Read the durable last-run verifier state (null when the verifier has never run).
+   */
+  async getChainVerificationStatus(): Promise<AuditChainVerificationState | null> {
+    return this.chainStatusRepository.getStatus()
+  }
+
+  /**
+   * Reset persisted verifier state (for testing).
+   */
+  async clearChainVerificationStatus(): Promise<void> {
+    await this.chainStatusRepository.clear()
   }
 
   /**
    * Stream audit logs as an AsyncGenerator to avoid memory spikes
    * Applies date filtering and redacts sensitive information compliance policy
    * 
+   * SECURITY: Tenant scoping is DENY-BY-DEFAULT. Either tenantId or allowSuperScope must be provided.
+   * 
    * @param startDate - Start date (inclusive)
    * @param endDate - End date (inclusive)
+   * @param tenantId - Tenant ID for scoped export (required unless allowSuperScope is true)
+   * @param options - Additional options for tenant scoping
    */
-  async *exportLogsStream(startDate: Date, endDate: Date): AsyncGenerator<AuditLogEntry> {
-    const startMs = startDate.getTime()
-    const endMs = endDate.getTime()
+  async *exportLogsStream(
+    startDate: Date,
+    endDate: Date,
+    tenantId?: string,
+    options?: {
+      /** Allow super-admin to export across all tenants. Must be explicitly set to true. */
+      allowSuperScope?: boolean
+    }
+  ): AsyncGenerator<AuditLogEntry> {
+    this.assertExportScope(tenantId, options)
 
-    // Sort logs descending but stream them chronologically or descending?
-    // Often compliance exports are fine descending, we'll keep the same order.
-    // Iterating over the array. Since it is in-memory we just filter and yield.
-    // In a database, this would use a cursor and fetch chunks.
-    for (const log of this.logs) {
-      const logTime = new Date(log.timestamp).getTime()
-      if (logTime >= startMs && logTime <= endMs) {
-        // Redact and yield
-        yield this.redactLogEntry(log)
-        // Yield to event loop to simulate genuine streaming and prevent blocking
-        await new Promise((resolve) => setImmediate(resolve))
+    const filters: AuditLogFilters = {
+      from: startDate.toISOString(),
+      to: endDate.toISOString(),
+    }
+
+    for await (const log of this.paginateLogs(tenantId, filters, options)) {
+      yield this.redactLogEntry(log)
+      await new Promise((resolve) => setImmediate(resolve))
+    }
+  }
+
+  private assertExportScope(
+    tenantId?: string,
+    options?: { allowSuperScope?: boolean },
+  ): void {
+    if (!tenantId && !options?.allowSuperScope) {
+      throw new Error(
+        'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
+      )
+    }
+  }
+
+  private async *paginateLogs(
+    tenantId: string | undefined,
+    filters: AuditLogFilters,
+    options?: { allowSuperScope?: boolean },
+    pageSize = 500,
+  ): AsyncGenerator<AuditLogEntry> {
+    let cursor: string | undefined
+    while (true) {
+      const page = await this.getLogs(tenantId, filters, pageSize, cursor, options)
+      for (const log of page.logs) {
+        yield log
       }
+      if (!page.hasNextPage || !page.nextCursor) {
+        break
+      }
+      cursor = page.nextCursor
     }
   }
 
@@ -236,11 +309,88 @@ export class AuditLogService {
 
     return redacted
   }
+
+  /**
+   * Purge audit log entries older than the specified number of days.
+   *
+   * Enforces the retention policy by deleting entries whose `occurred_at`
+   * timestamp is before the cutoff boundary (NOW() - olderThanDays days).
+   *
+   * Security: Tenant-scoped by default. When no tenant ID is provided and
+   * allowSuperScope is not explicitly set, the call throws.
+   *
+   * @param olderThanDays - Retention window in days. Entries older than this are purged. 0 = keep forever.
+   * @param options - Optional controls
+   * @param options.batchSize - Max entries to delete per batch (default: 5000)
+   * @param options.tenantId - Scope purge to a single tenant
+   * @param options.dryRun - Count but don't delete
+   * @param options.allowSuperScope - Allow cross-tenant purge (must be explicitly true)
+   */
+  async purgeExpired(
+    olderThanDays: number,
+    options?: {
+      batchSize?: number
+      tenantId?: string
+      dryRun?: boolean
+      allowSuperScope?: boolean
+    }
+  ): Promise<AuditLogPurgeResult> {
+    if (!options?.tenantId && !options?.allowSuperScope) {
+      throw new Error(
+        'Tenant scoping required: either provide tenantId or explicitly enable allowSuperScope for privileged access'
+      )
+    }
+
+    return this.repository.purgeExpired(olderThanDays, {
+      batchSize: options?.batchSize,
+      tenantId: options?.tenantId,
+      dryRun: options?.dryRun,
+    })
+  }
+
+  /**
+   * Get top N talker tenants by request count in the last window (default: 1 hour).
+   */
+  async getTopTalkers(
+    limit?: number,
+    windowMinutes?: number,
+    now?: Date,
+  ) {
+    return this.repository.getTopTalkers(limit, windowMinutes, now)
+  }
+}
+
+function createRepository(): AuditLogRepository {
+  const shouldUsePostgres = process.env.AUDIT_LOG_BACKEND === 'postgres'
+  if (!shouldUsePostgres) {
+    return new InMemoryAuditLogsRepository()
+  }
+
+  return new PostgresAuditLogsRepository(pool)
+}
+
+function createChainStatusRepository(): AuditChainVerificationRepository {
+  const shouldUsePostgres = process.env.AUDIT_LOG_BACKEND === 'postgres'
+  if (!shouldUsePostgres) {
+    return new InMemoryAuditChainVerificationRepository()
+  }
+
+  return new PostgresAuditChainVerificationRepository(pool)
 }
 
 // Create a singleton instance
-export const auditLogService = new AuditLogService()
+export const auditLogService = new AuditLogService(createRepository(), createChainStatusRepository())
 
-// Export types
 export { AuditAction } from './types.js'
-export type { AuditLogEntry } from './types.js'
+export type {
+  AuditChainVerificationState,
+  AuditLogEntry,
+  AuditLogInput,
+  AuditLogFilters,
+  ChainVerificationResult,
+  TopTalkerEntry,
+  TopTalkersReport,
+} from './types.js'
+export type { AuditLogPurgeResult } from '../../db/repositories/auditLogsRepository.js'
+export * from './serviceAccountAudit.js'
+
