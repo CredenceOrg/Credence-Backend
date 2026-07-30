@@ -1,1 +1,110 @@
-import { ReportRepository } from "../db/repositories/reportRepository.js"; import { ReportJob, ReportJobStatus } from "../jobs/types.js"; import { cache } from "../cache/redis.js"; import { ReportStorageService } from "./reportStorage.js"; import { computeRequestHash } from "../utils/hash.js"; import { loadConfig } from "../config/index.js"; const REPORT_CACHE_TTL = 60; export class ReportService { private config: ReturnType<typeof loadConfig> | null = null; constructor(private readonly reportRepository: ReportRepository, private readonly storage = new ReportStorageService()) {} private getConfig() { if (!this.config) { try { this.config = loadConfig(); } catch { this.config = { reports: { maxConcurrentJobsPerOrg: 10 } } as any; } } return this.config; } async startReportGeneration(type: string, tenantId: string = "default", params?: Record<string, unknown>): Promise<ReportJob> { const requestHash = computeRequestHash({ type, params }); const dedupKey = `report-dedup:${tenantId}:${requestHash}`; const countKey = `report-count:${tenantId}`; const existingJobId = await cache.get<string>("report", dedupKey); if (existingJobId) { const existingJob = await this.reportRepository.findById(existingJobId); if (existingJob && !this.isTerminalStatus(existingJob.status)) { return existingJob; } } const config = this.getConfig(); if (!config) throw new Error("Config not loaded"); const cap = config.reports.maxConcurrentJobsPerOrg; if (cap > 0) { const activeJobsStr = await cache.get<string>("report", countKey); const activeJobs = activeJobsStr ? parseInt(activeJobsStr, 10) : 0; if (activeJobs >= cap) { throw new Error(`Organization has reached maximum concurrent report jobs (${cap})`); } } const job = await this.reportRepository.create(type); await cache.set("report", dedupKey, job.id, 300); if (cap > 0) { const activeJobsStr = await cache.get<string>("report", countKey); const activeJobs = activeJobsStr ? parseInt(activeJobsStr, 10) : 0; await cache.set("report", countKey, String(activeJobs + 1), 300); } return job; } private isTerminalStatus(status: string): boolean { return status === ReportJobStatus.COMPLETED || status === ReportJobStatus.FAILED; } async getReportStatus(id: string): Promise<ReportJob | null> { const cached = await cache.get<ReportJob>("report", id); if (cached) return cached; const job = await this.reportRepository.findById(id); if (job) { const ttl = job.status === ReportJobStatus.COMPLETED || job.status === ReportJobStatus.FAILED ? 300 : REPORT_CACHE_TTL; await cache.set("report", id, job, ttl); } return job; } getSignedDownloadUrl(job: ReportJob): string | null { if (!job.storageKey) return null; return this.storage.generateSignedUrl(job.storageKey).url; } }
+import { ReportRepository } from "../db/repositories/reportRepository.js";
+import { ReportJob, ReportJobStatus } from "../jobs/types.js";
+import { cache } from "../cache/redis.js";
+import { ReportStorageService } from "./reportStorage.js";
+import { computeRequestHash } from "../utils/hash.js";
+import { loadConfig } from "../config/index.js";
+
+const REPORT_CACHE_TTL = 60;
+
+export class ReportService {
+  private config: ReturnType<typeof loadConfig> | null = null;
+
+  constructor(
+    private readonly reportRepository: ReportRepository,
+    private readonly storage = new ReportStorageService()
+  ) {}
+
+  private getConfig() {
+    if (!this.config) {
+      try {
+        this.config = loadConfig();
+      } catch {
+        this.config = { reports: { maxConcurrentJobsPerOrg: 10 } } as any;
+      }
+    }
+    return this.config;
+  }
+
+  async startReportGeneration(
+    type: string,
+    tenantId: string = "default",
+    params?: Record<string, unknown>
+  ): Promise<ReportJob> {
+    const requestHash = computeRequestHash({ type, params });
+    const dedupKey = `report-dedup:${tenantId}:${requestHash}`;
+    const countKey = `report-count:${tenantId}`;
+    
+    const existingJobId = await cache.get<string>("report", dedupKey);
+    if (existingJobId) {
+      const existingJob = await this.reportRepository.findById(existingJobId);
+      if (existingJob && !this.isTerminalStatus(existingJob.status)) {
+        return existingJob;
+      }
+    }
+    
+    const config = this.getConfig();
+    if (!config) throw new Error("Config not loaded");
+    const cap = config.reports.maxConcurrentJobsPerOrg;
+    if (cap > 0) {
+      const activeJobsStr = await cache.get<string>("report", countKey);
+      const activeJobs = activeJobsStr ? parseInt(activeJobsStr, 10) : 0;
+      if (activeJobs >= cap) {
+        throw new Error(`Organization has reached maximum concurrent report jobs (${cap})`);
+      }
+    }
+    
+    const job = await this.reportRepository.create(type);
+    await cache.set("report", dedupKey, job.id, 300);
+    if (cap > 0) {
+      const activeJobsStr = await cache.get<string>("report", countKey);
+      const activeJobs = activeJobsStr ? parseInt(activeJobsStr, 10) : 0;
+      await cache.set("report", countKey, String(activeJobs + 1), 300);
+    }
+    return job;
+  }
+
+  private isTerminalStatus(status: string): boolean {
+    return (
+      status === ReportJobStatus.COMPLETED ||
+      status === ReportJobStatus.FAILED ||
+      status === ReportJobStatus.CANCELLED
+    );
+  }
+
+  async getReportStatus(id: string): Promise<ReportJob | null> {
+    const cached = await cache.get<ReportJob>("report", id);
+    if (cached) return cached;
+    
+    const job = await this.reportRepository.findById(id);
+    if (job) {
+      const ttl = this.isTerminalStatus(job.status) ? 300 : REPORT_CACHE_TTL;
+      await cache.set("report", id, job, ttl);
+    }
+    return job;
+  }
+
+  async cancelReportJob(id: string): Promise<ReportJob | null> {
+    const job = await this.reportRepository.findById(id);
+    if (!job) return null;
+
+    if (this.isTerminalStatus(job.status)) {
+      return job; // Cannot cancel if already completed, failed, or cancelled
+    }
+
+    const cancelledJob = await this.reportRepository.updateStatus(id, ReportJobStatus.CANCELLED, {
+      failureReason: "Cancelled by user"
+    });
+
+    if (cancelledJob) {
+      await cache.set("report", id, cancelledJob, 300);
+    }
+
+    return cancelledJob;
+  }
+
+  getSignedDownloadUrl(job: ReportJob): string | null {
+    if (!job.storageKey) return null;
+    return this.storage.generateSignedUrl(job.storageKey).url;
+  }
+}
