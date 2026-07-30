@@ -145,6 +145,48 @@ router.get(
 );
 
 /**
+ * DELETE /api/reports/:jobId
+ *
+ * Cancels a report generation job
+ *
+ * @requires reports:generate scope
+ *
+ * @param {string} jobId - Unique report job ID
+ *
+ * @returns {object} Job status and artifact availability
+ */
+router.delete(
+  "/:jobId",
+  requireApiKey(ApiScope.REPORTS_GENERATE),
+  validate({ params: reportJobParamsSchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const validatedReq = req as ValidatedRequest<ReportJobParams>
+      const { jobId } = validatedReq.validated.params
+
+      const job = await reportService.cancelReportJob(jobId);
+
+      if (!job) {
+        sendError(res, ErrorCode.NOT_FOUND, `Report job ${jobId} not found`);
+        return;
+      }
+
+      res.status(200).json({
+        jobId: job.id,
+        status: job.status,
+        type: job.type,
+        failureReason: job.failureReason,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      });
+    } catch (error) {
+      console.error("Report cancel error:", error);
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while cancelling report job");
+    }
+  },
+);
+
+/**
  * GET /api/reports/download/:key
  *
  * Downloads a report artifact using a signed URL.

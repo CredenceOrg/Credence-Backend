@@ -76,8 +76,6 @@ vi.mock('../middleware/auth.js', () => ({
   },
   // Re-export types used by the module under test
   ApiScope: {},
-  MOCK_USERS: {},
-  API_KEY_TO_USER: {},
 }))
 
 // ---------------------------------------------------------------------------
