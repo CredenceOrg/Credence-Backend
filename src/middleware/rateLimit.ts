@@ -32,6 +32,14 @@ export interface RateLimitConfig {
   max?: number
   /** Window in seconds */
   windowSec: number
+  /**
+   * Redis-down behaviour override for the per-route `rateLimit()` helper.
+   * When omitted the default is derived from NODE_ENV (fail-closed in
+   * production, fail-open otherwise).  Has no effect when using
+   * `createRateLimitMiddleware` directly — use `Config.rateLimit.failOpen`
+   * instead.
+   */
+  failOpen?: boolean
   /** Function to extract tenant identifier from request */
   getTenantId?: (req: Request) => string | undefined
   /** Function to resolve tenant-specific rate-limit override if configured */
@@ -210,7 +218,10 @@ export function createRateLimitMiddleware(
     const now = Math.floor(Date.now() / 1000)
 
     const tenantKey = `${namespace}:${tenantSegment}`
-    const keyBucket = keyId ? `${namespace}:key:${keyId}` : null
+    // Per-key bucket keyed by key id + tier ceiling so a key that changes
+    // tiers (e.g. upgrade from free to pro) gets a fresh counter scoped to
+    // the new tier rather than inheriting the old tier's budget.
+    const keyBucket = keyId ? `${namespace}:key:${keyId}:${tier}` : null
 
     try {
       const redis = getRedis()
@@ -260,8 +271,17 @@ export function createRateLimitMiddleware(
   }
 }
 
-/** Backward-compatible helper that accepts only per-route rate-limit options. */
+/**
+ * Backward-compatible helper that accepts only per-route rate-limit options.
+ *
+ * Defaults to fail-closed in production and fail-open in dev/test so that a
+ * misconfigured per-route limiter never silently disables protection.
+ */
 export function rateLimit(options: RateLimitConfig) {
+  // Honour an explicit failOpen on the options when provided, otherwise
+  // default fail-closed in production for safety.
+  const failOpen = options.failOpen ?? (process.env.NODE_ENV !== 'production')
+
   return createRateLimitMiddleware(
     {
       enabled: true,
@@ -269,7 +289,7 @@ export function rateLimit(options: RateLimitConfig) {
       maxFree: options.max ?? 100,
       maxPro: options.max ?? 100,
       maxEnterprise: options.max ?? 100,
-      failOpen: true,
+      failOpen,
     },
     options,
   )

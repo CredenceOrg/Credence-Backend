@@ -31,6 +31,7 @@ import { securityHeadersMiddleware } from "./middleware/securityHeaders.js";
 import { createAttestationRouter } from "./routes/attestations.js";
 import { tenantContextMiddleware } from "./middleware/tenantContext.js";
 import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
+import { logger } from "./utils/logger.js";
 import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
   compressionMiddleware,
@@ -76,14 +77,21 @@ let rateLimitConfig: {
 };
 try {
   rateLimitConfig = validateConfig(process.env).rateLimit;
-} catch {
+} catch (err) {
   const isProd = process.env.NODE_ENV === "production";
+  logger.error(
+    { err, fallbackFailOpen: !isProd },
+    "Rate-limit config validation failed — using safe fallback. " +
+    "Fix RATE_LIMIT_* environment variables.",
+  );
   rateLimitConfig = {
     enabled: true,
     windowSec: 60,
     maxFree: 100,
     maxPro: 1000,
     maxEnterprise: 10000,
+    // Fail-closed in production: a config error must never silently
+    // disable rate limiting when the API is exposed to real traffic.
     failOpen: !isProd,
   };
 }
@@ -97,12 +105,19 @@ let authRateLimitConfig: {
 };
 try {
   authRateLimitConfig = validateConfig(process.env).authRateLimit;
-} catch {
+} catch (err) {
   const isProd = process.env.NODE_ENV === "production";
+  logger.error(
+    { err, fallbackFailOpen: !isProd },
+    "Auth rate-limit config validation failed — using safe fallback. " +
+    "Fix AUTH_RATE_LIMIT_* environment variables.",
+  );
   authRateLimitConfig = {
     enabled: true,
     windowSec: 60,
     maxPerTenant: 20,
+    // Fail-closed in production: a config error must never silently
+    // disable rate limiting when the API is exposed to real traffic.
     failOpen: !isProd,
   };
 }
