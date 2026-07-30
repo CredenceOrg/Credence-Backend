@@ -440,6 +440,9 @@ It also exports the following Prometheus metrics to track throughput, lag, and f
 - **`outbox_pending_gauge`** (Gauge): Current number of pending outbox events (lag/backlog).
 - **`outbox_lease_renew_total`** (Counter): Total number of outbox events whose lease was renewed, indicating processing duration or stalls.
 - **`outbox_dead_letter_total`** (Counter): Total number of outbox events moved to dead-letter, labeled by `error_code`.
+- **`outbox_quarantine_total`** (Counter): Total number of outbox events moved to quarantine, labeled by `reason`.
+- **`outbox_leader_acquired_total`** (Counter): Total number of times this instance acquired outbox leadership.
+- **`outbox_leader_lost_total`** (Counter): Total number of times this instance lost outbox leadership.
 
 ## Timeouts & Retry Policies
 
