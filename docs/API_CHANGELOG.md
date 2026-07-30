@@ -87,6 +87,49 @@ None required. The field is optional and backward-compatible.
 
 <!-- Entries are appended below in reverse chronological order. -->
 
+### 2026-07-29 — Trust score served from Postgres instead of the in-memory store
+
+**Impact:** backward-compatible
+**Related issue:** #991
+**OpenAPI spec:** docs/openapi.yaml
+**Zod schema:** src/schemas/trust.ts
+
+**What changes**
+
+`GET /api/trust/:address` now reads bond and attestation data through the Postgres-backed `PgTrustIdentityRepository` (read replica) rather than a process-local `Map` seeded with development fixtures. The response shape is unchanged; scores are now durable across restarts and consistent across instances.
+
+Two consequences for consumers:
+
+- The four seeded development identities (hardhat addresses such as `0xf39f…2266`) no longer resolve implicitly. Any address without a row in `identities` returns `404 Identity record not found`, where some previously returned a seeded score.
+- `agreedFields` is only present when the underlying record carries it; the `identities` table stores no attested key/value fields, so the field is currently omitted rather than empty.
+
+**Request shape**
+
+```json
+{
+  "address": "GAIQ...XPQ"
+}
+```
+
+**Response shape**
+
+```json
+{
+  "address": "GAIQ...XPQ",
+  "score": 87,
+  "bondedAmount": "1000000000000000000",
+  "bondStart": "2024-01-15T00:00:00.000Z",
+  "attestationCount": 5,
+  "scoringModelVersion": "1.0.0"
+}
+```
+
+**Migration steps**
+
+Ensure the `identities` and `attestations` tables are populated by the chain sync listener before cutover — an empty `identities` table turns every trust lookup into a `404`. Environments that relied on the seeded fixtures must insert equivalent rows explicitly.
+
+---
+
 ### 2026-07-28 — Add `agreedFields` to trust score response
 
 **Impact:** backward-compatible
