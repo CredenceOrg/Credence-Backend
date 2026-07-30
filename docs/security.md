@@ -110,3 +110,48 @@ tier ceiling on a per-tenant basis without affecting other tenants.
 
 > **Warning:** Do not set `RATE_LIMIT_FAIL_OPEN=true` in production.  The
 > application will refuse to start with this configuration.
+
+## API Key Authentication
+
+All API key validation is performed against the **persistent, hashed database
+store** (`src/services/apiKeys.ts`). No hardcoded keys, mock users, or
+plaintext key comparisons exist in the runtime code path.
+
+### Key storage
+
+- Keys are stored as **SHA-256 hashes** only. The raw key is never persisted.
+- Lookup uses a **prefix + hash** index for fast retrieval without scanning.
+- The `validateApiKey` function performs a timing-safe hash comparison — the
+  raw input key is hashed before any comparison against stored data, so the
+  runtime code path never compares raw key strings.
+
+### Key lifecycle
+
+- **Issue:** `POST /api/api-keys` — generates a `cr_`-prefixed key, stores
+  its SHA-256 hash, and returns the raw key exactly once.
+- **Rotate:** `POST /api/api-keys/:id/rotate` — atomically revokes the old
+  key and creates a new one with identical scopes and tier.
+- **Revoke:** `DELETE /api/api-keys/:id` — marks the key inactive; subsequent
+  validation returns `401 Unauthorized`.
+
+### Middleware
+
+Two middleware paths are available:
+
+| Middleware | File | Purpose |
+|---|---|---|
+| `requireApiKey(scope)` | `src/middleware/auth.ts` | Enforces a specific `ApiScope`. Uses the legacy `ApiScope` enum and `scopeSatisfies()` for backward-compatible authorization. |
+| `requireApiKey()` + `requireScope(scope)` | `src/middleware/apiKey.ts` | Canonical two-step middleware for DB-backed key validation with scope enforcement. |
+
+Both paths share `validateApiKey()` from `src/services/apiKeys.ts` as the
+single authoritative key validator.
+
+### Security guarantees
+
+- **Deny-by-default:** Unknown, revoked, or inactive keys receive `401`.
+- **No raw key logging:** Raw key values are never logged or included in
+  error responses.
+- **Constant-time hash comparison:** The hash is computed before any lookup,
+  preventing timing side-channels on key prefix or value.
+- **No in-code secrets:** All hardcoded keys (`API_KEYS`, `MOCK_USERS`,
+  `API_KEY_TO_USER`) were removed in favour of the database-backed store.

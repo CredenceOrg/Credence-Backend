@@ -181,6 +181,7 @@ Response: **204 No Content**. Subsequent requests using the revoked key receive 
 
 ## Security Notes
 
+- All key validation is performed exclusively against the persistent, hashed database store via `validateApiKey()` in `src/services/apiKeys.ts`. There are **no hardcoded keys, mock users, or plaintext key comparisons** anywhere in the authentication code path.
 - Keys are stored as **SHA-256 hashes** — the raw key is never persisted and is shown exactly once.
 - Issue keys with the **minimum scopes required** for the integration. Do not use `enterprise` unless all operations are needed.
 - Rotate keys periodically; compromised keys can be revoked at any time.
