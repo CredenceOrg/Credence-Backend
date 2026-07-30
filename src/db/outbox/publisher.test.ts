@@ -4,6 +4,21 @@ import { OutboxPublisher } from './publisher'
 import { OutboxRepository } from './repository'
 import type { OutboxEvent } from './types'
 import crypto from 'crypto'
+import { vi, beforeEach, describe, it, expect } from 'vitest'
+
+vi.mock('../pool.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../pool.js')>()
+  const mockPool = {
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+    connect: vi.fn(),
+    end: vi.fn(),
+    on: vi.fn(),
+  }
+  return {
+    ...actual,
+    pool: mockPool as any,
+  }
+})
 
 async function buildTestPool(): Promise<Pool> {
   const db = newDb()
@@ -600,5 +615,51 @@ describe('OutboxRepository correlation id persistence', () => {
 
     const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
     expect(claimed.correlationId).toBeFalsy()
+  })
+})
+
+describe('OutboxPublisher edge cases (#1003)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('resets pending gauge to 0 on stop', async () => {
+    const obs = await import('../../observability/index.js')
+    const spy = vi.spyOn(obs, 'setOutboxPendingGauge')
+
+    const publisher = new OutboxPublisher({ publish: async () => undefined })
+    ;(publisher as any).running = true
+    ;(publisher as any).metricsTimer = setTimeout(() => {}, 1_000_000)
+
+    await publisher.stop()
+
+    expect(spy).toHaveBeenCalledWith(0)
+    clearTimeout((publisher as any).metricsTimer)
+  })
+
+  it('does not log event payload content', async () => {
+    const { logger } = await import('../../utils/logger.js')
+    const infoSpy = vi.spyOn(logger, 'info')
+    const errorSpy = vi.spyOn(logger, 'error')
+    const warnSpy = vi.spyOn(logger, 'warn')
+
+    vi.spyOn(OutboxRepository.prototype, 'markPublished').mockResolvedValue(undefined)
+
+    const publisher = new OutboxPublisher({ publish: async () => undefined })
+    const event = baseEvent({
+      publishIdempotencyKey: 'already-published',
+      payload: { secret: 'should-not-appear-in-logs' },
+    })
+
+    await (publisher as any).processEvent(event)
+
+    const allLogArgs = [
+      ...infoSpy.mock.calls,
+      ...errorSpy.mock.calls,
+      ...warnSpy.mock.calls,
+    ].flat().map(String)
+
+    const leaked = allLogArgs.filter(arg => arg.includes('should-not-appear-in-logs'))
+    expect(leaked).toEqual([])
   })
 })
