@@ -1,8 +1,7 @@
 import { Request, Response, NextFunction } from "express";
-import type { StoredApiKey } from "../services/apiKeys.js";
+import type { StoredApiKey, KeyScope } from "../services/apiKeys.js";
 import { validateApiKey } from "../services/apiKeys.js";
 import { userRepo } from "../repositories/userRepository.js";
-import { requireApiKey as requireApiKeyFromApiKeyMiddleware } from "./apiKey.js";
 import { runWithTenant } from "../utils/tenantContext.js";
 
 /**
@@ -130,80 +129,40 @@ export interface AuthenticatedRequest extends Request {
   };
 }
 
-/**
- * Mock API key store — maps raw key → set of granted scopes.
- *
- * In production this is replaced by a database lookup via ApiKeyRepository.
- * The legacy single-scope values (PUBLIC / ENTERPRISE) are preserved here so
- * that existing test fixtures continue to work without modification.
- */
-const API_KEYS: Record<string, ApiScope[]> = {
-  // Legacy keys — kept for backward compatibility
-  "test-enterprise-key-12345": [ApiScope.ENTERPRISE],
-  "test-public-key-67890": [ApiScope.PUBLIC],
+// ── Hardcoded mock stores removed ───────────────────────────────────────
+// API_KEYS, MOCK_USERS, and API_KEY_TO_USER have been replaced by the
+// persistent, hashed key store in src/services/apiKeys.ts.
+// Test fixtures should use generateApiKey() to seed keys into the
+// in-memory or database store.
 
-  // Granular-scope test keys (used in auth.scopes.test.ts)
-  'test-trust-read-key': [ApiScope.TRUST_READ],
-  'test-attestations-write-key': [ApiScope.ATTESTATIONS_READ, ApiScope.ATTESTATIONS_WRITE],
-  'test-payouts-write-key': [ApiScope.PAYOUTS_WRITE],
-  'test-reports-key': [ApiScope.REPORTS_GENERATE, ApiScope.EXPORTS_READ],
-  'test-webhooks-admin-key': [ApiScope.WEBHOOKS_ADMIN],
-  'test-outbox-reinject-key': [ApiScope.OUTBOX_REINJECT],
-  'test-admin-read-key': [ApiScope.ADMIN_READ],
-  'test-admin-write-key': [ApiScope.ADMIN_READ, ApiScope.ADMIN_WRITE],
-  'test-flags-read-key': [ApiScope.FLAGS_READ],
-  'test-flags-write-key': [ApiScope.FLAGS_READ, ApiScope.FLAGS_WRITE],
-  'test-bond-read-key': [ApiScope.BOND_READ],
-  'test-bond-write-key': [ApiScope.BOND_READ, ApiScope.BOND_WRITE],
+/**
+ * Map DB-stored scope strings to ApiScope enum values.
+ * 'full' / 'enterprise' → ENTERPRISE (superset of all).
+ * 'read' / 'public' → PUBLIC (read-only subset).
+ * Granular scope strings (e.g. 'trust:read') pass through as-is.
+ */
+function mapDbScopesToApiScopes(dbScopes: string[]): ApiScope[] {
+  return dbScopes.map((s): ApiScope => {
+    if (s === 'full' || s === 'enterprise') return ApiScope.ENTERPRISE
+    if (s === 'read' || s === 'public') return ApiScope.PUBLIC
+    return s as ApiScope
+  })
 }
-
-/**
- * Mock user store - in production, use database or identity provider
- * Format: { userId: { id, role, email, apiKey } }
- */
-export const MOCK_USERS: Record<
-  string,
-  {
-    id: string;
-    role: UserRole;
-    email: string;
-    apiKey: string;
-    tenantId: string;
-  }
-> = {
-  "admin-user-1": {
-    id: "admin-user-1",
-    role: UserRole.SUPER_ADMIN,
-    email: "admin@credence.org",
-    apiKey: "admin-key-12345",
-    tenantId: "tenant-admin",
-  },
-  "verifier-user-1": {
-    id: "verifier-user-1",
-    role: UserRole.VERIFIER,
-    email: "verifier@credence.org",
-    apiKey: "verifier-key-67890",
-    tenantId: "tenant-verifier",
-  },
-};
-
-/**
- * Mock API key to user mapping - in production, use database
- */
-export const API_KEY_TO_USER: Record<string, string> = {
-  "admin-key-12345": "admin-user-1",
-  "verifier-key-67890": "verifier-user-1",
-};
 
 /**
  * Middleware to validate API key and enforce a required scope.
  *
+ * Key lookup is performed exclusively against the hashed database store
+ * via `validateApiKey`. Keys are never compared in plaintext and raw key
+ * values are never logged.
+ *
  * The middleware:
  * 1. Reads the key from `X-API-Key` or `Authorization: Bearer` headers.
- * 2. Looks up the granted scope set (deny-by-default when key is unknown).
- * 3. Calls `scopeSatisfies` to check whether the granted scopes cover the
+ * 2. Validates the key against the persistent, hashed key store.
+ * 3. Maps stored scope strings to `ApiScope` enum values.
+ * 4. Calls `scopeSatisfies` to check whether the granted scopes cover the
  *    required scope — including legacy ENTERPRISE superset expansion.
- * 4. Attaches `{ key, scopes }` to `req.apiKey` for downstream handlers.
+ * 5. Attaches the full `StoredApiKey` record to `req.apiKey`.
  *
  * @param requiredScope - The single scope that must be satisfied.
  *
@@ -213,23 +172,18 @@ export const API_KEY_TO_USER: Record<string, string> = {
  * router.get('/api/trust/:id',     requireApiKey(ApiScope.TRUST_READ),          handler)
  * ```
  */
-/**
- * Adapter to the canonical `requireApiKey` implemented in `src/middleware/apiKey.ts`.
- * Keeps the old `ApiScope` enum surface but delegates validation to the
- * DB-backed key validator. Mapping of scopes is performed below.
- */
 export function requireApiKey(requiredScope: ApiScope) {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     // Accept key from X-API-Key header or Authorization: Bearer <key>
-    let apiKey = req.headers["x-api-key"] as string | undefined;
-    if (!apiKey) {
+    let rawKey = req.headers["x-api-key"] as string | undefined;
+    if (!rawKey) {
       const authHeader = req.headers["authorization"];
       if (authHeader?.startsWith("Bearer ")) {
-        apiKey = authHeader.slice(7);
+        rawKey = authHeader.slice(7);
       }
     }
 
-    if (!apiKey) {
+    if (!rawKey) {
       res.status(401).json({
         error: "Unauthorized",
         message: "API key is required",
@@ -237,27 +191,19 @@ export function requireApiKey(requiredScope: ApiScope) {
       return;
     }
 
-    let grantedScopes = API_KEYS[apiKey]
-    let dbKey: StoredApiKey | null = null
+    // Validate against the persistent, hashed key store only.
+    // `validateApiKey` performs a timing-safe SHA-256 hash comparison.
+    const dbKey: StoredApiKey | null = await validateApiKey(rawKey)
 
-    if (!grantedScopes) {
-      dbKey = await validateApiKey(apiKey)
-      if (dbKey) {
-        grantedScopes = dbKey.scopes.map((s): ApiScope => {
-          if (s === 'full') return ApiScope.ENTERPRISE
-          if (s === 'read') return ApiScope.PUBLIC
-          return s as ApiScope
-        })
-      }
-    }
-
-    if (!grantedScopes) {
+    if (!dbKey) {
       res.status(401).json({
         error: "Unauthorized",
         message: "Invalid API key",
       });
       return;
     }
+
+    const grantedScopes = mapDbScopesToApiScopes(dbKey.scopes)
 
     // Deny-by-default: key must satisfy the required scope
     if (!scopeSatisfies(grantedScopes, requiredScope)) {
@@ -277,18 +223,8 @@ export function requireApiKey(requiredScope: ApiScope) {
       return
     }
 
-    // Attach metadata to request for downstream handlers.
-    if (dbKey) {
-      ;(req as any).apiKey = dbKey
-    } else {
-      ;(req as any).apiKey = {
-        key: apiKey,
-        scopes: grantedScopes,
-        scope: grantedScopes.includes(ApiScope.ENTERPRISE)
-          ? ApiScope.ENTERPRISE
-          : grantedScopes[0],
-      }
-    }
+    // Attach the full database record to the request for downstream handlers.
+    ;(req as AuthenticatedRequest).apiKey = dbKey
     next()
   }
 }
@@ -361,38 +297,26 @@ export async function requireUserAuth(
   }
 
   const raw = authHeader.substring(7); // Remove 'Bearer ' prefix
- 
-  let key = await validateApiKey(raw);
-  let user: any = null;
- 
-  if (key) {
-    user = userRepo.findById(key.ownerId);
-  } else {
-    const userId = API_KEY_TO_USER[raw];
-    if (userId) {
-      const mockUser = MOCK_USERS[userId];
-      if (mockUser) {
-        user = mockUser;
-        key = {
-          id: mockUser.apiKey,
-          hashedKey: "",
-          prefix: "",
-          scopes: [ApiScope.ENTERPRISE],
-          scope: ApiScope.ENTERPRISE,
-          tier: "enterprise",
-          ownerId: mockUser.id,
-          createdAt: new Date(),
-          lastUsedAt: new Date(),
-          active: true,
-        } as any;
-      }
-    }
-  }
- 
-  if (!key || !user) {
+
+  // Validate the token against the persistent, hashed key store.
+  // `validateApiKey` performs a timing-safe SHA-256 hash comparison.
+  const key = await validateApiKey(raw);
+
+  if (!key) {
     res.status(401).json({
       error: "Unauthorized",
       message: "Invalid or expired token",
+    });
+    return;
+  }
+
+  // Resolve the user record from the database via the key's owner.
+  const user = userRepo.findById(key.ownerId);
+
+  if (!user) {
+    res.status(401).json({
+      error: "Unauthorized",
+      message: "User not found for this key",
     });
     return;
   }
