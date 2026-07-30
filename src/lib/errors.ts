@@ -145,9 +145,9 @@ export class UnauthorizedError extends AppError {
 /**
  * Specific error for permission/scope failures.
  */
-export class ForbiddenError extends AppError {
-  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.FORBIDDEN).defaultMessage) {
-    super(message, ErrorCodeRegistry.FORBIDDEN)
+export class TenantRequiredError extends AppError {
+  constructor(message: string = getErrorCatalogEntry(ErrorCodeRegistry.TENANT_REQUIRED).defaultMessage) {
+    super(message, ErrorCodeRegistry.TENANT_REQUIRED)
   }
 }
 

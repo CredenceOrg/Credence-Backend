@@ -283,6 +283,14 @@ export const ERROR_CATALOG = freezeCatalog({
     defaultMessage: 'A required security response header is missing',
     category: 'system',
   },
+  TENANT_REQUIRED: {
+    code: 'tenant_required',
+    sdkClassName: 'TenantRequiredCredenceError',
+    kind: 'api',
+    httpStatus: 400,
+    defaultMessage: 'Tenant context is required for this request',
+    category: 'validation',
+  },
   invalid_input: {
     code: 'invalid_input',
     sdkClassName: 'InvalidInputCredenceError',

@@ -1,20 +1,26 @@
 import { Request, Response, NextFunction } from 'express'
-import { setTenantId, getTenantId } from '../utils/tenantContext.js'
+import { runWithTenant, getTenantId } from '../utils/tenantContext.js'
+import { TenantRequiredError } from '../lib/errors.js'
 
 export function tenantContextMiddleware(req: Request, res: Response, next: NextFunction) {
-  const tenantId = req.headers['x-tenant-id'] as string || 'default-tenant'
-  const originalTenant = getTenantId()
-  
-  if (!originalTenant) {
-    setTenantId(tenantId)
+  const rawTenantId = req.headers['x-tenant-id']
+  const tenantId = typeof rawTenantId === 'string' ? rawTenantId.trim() : ''
+
+  if (!tenantId) {
+    next(new TenantRequiredError())
+    return
   }
-  
-  // Store original tenant to restore later
-  res.on('finish', () => {
-    if (!originalTenant) {
-      setTenantId(null)
-    }
+
+  const existingTenant = getTenantId()
+
+  if (existingTenant) {
+    // Already inside a tenant-scoped ALS run (e.g. nested call) — don't
+    // start a new one, just continue.
+    next()
+    return
+  }
+
+  runWithTenant(tenantId, () => {
+    next()
   })
-  
-  next()
 }
