@@ -170,7 +170,7 @@ const CREATE_TABLE_STATEMENTS = [
     status TEXT NOT NULL CHECK (status IN ('pending', 'settled', 'failed')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CONSTRAINT settlements_bond_tx_unique UNIQUE (bond_id, transaction_hash)
+    CONSTRAINT settlements_transaction_hash_unique UNIQUE (transaction_hash)
   )
   `,
   `
@@ -232,6 +232,7 @@ const CREATE_TABLE_STATEMENTS = [
   `CREATE INDEX IF NOT EXISTS settlements_status_idx ON settlements (status)`,
   `CREATE INDEX IF NOT EXISTS settlements_settled_at_idx ON settlements (settled_at DESC)`,
   `CREATE INDEX IF NOT EXISTS settlements_transaction_hash_idx ON settlements (transaction_hash)`,
+  `CREATE INDEX IF NOT EXISTS idx_settlements_bond_tx ON settlements (bond_id, transaction_hash)`,
 ] as const;
 
 const DROP_TABLE_STATEMENTS = [
