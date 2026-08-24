@@ -350,3 +350,5 @@ Changing the reservation semantics requires a migration plan and a provider
 reconciliation drill before it is enabled for production payout traffic.
 
 The migration must be observable, reversible, and owned by the payments team.
+
+Record the rollout owner and reconciliation drill result with the release.
