@@ -39,6 +39,7 @@ export {
   incrementOutboxPublished,
   incrementOutboxFailed,
   setOutboxPendingGauge,
+  setOutboxLifecycleGauges,
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
   incrementOutboxLeaderAcquired,

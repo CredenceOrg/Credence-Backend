@@ -18,6 +18,7 @@ import {
   incrementOutboxPublished,
   incrementOutboxFailed,
   setOutboxPendingGauge,
+  setOutboxLifecycleGauges,
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
 } from '../../observability/index.js'
@@ -504,6 +505,7 @@ export class OutboxPublisher {
     if (!this.running) return
     const stats = await this.getStats()
     setOutboxPendingGauge(stats.pending)
+    setOutboxLifecycleGauges({ pending: stats.pending, processing: stats.processing, retrying: stats.failed, deadLetter: stats.dead_letter })
   }
 
   /**
