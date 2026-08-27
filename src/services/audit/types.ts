@@ -50,6 +50,7 @@ export enum AuditAction {
   UPDATE_SETTINGS = 'UPDATE_SETTINGS',
   PURGE_CACHE = 'PURGE_CACHE',
   RESET_CACHE = 'RESET_CACHE',
+  CHAIN_REPAIR_REQUESTED = 'CHAIN_REPAIR_REQUESTED',
 }
 
 
@@ -155,6 +156,20 @@ export interface ChainViolation {
   type: 'prev_hash_mismatch' | 'row_hash_mismatch' | 'missing_row' | 'deleted_row'
 }
 
+/** Explicit operator authorization required to request a non-destructive repair. */
+export interface ChainRepairAuthorization {
+  operatorId: string
+  approvedBy: string
+  authorizationRef: string
+  reason: string
+}
+
+/** Evidence marker appended to the chain instead of rewriting historical rows. */
+export interface ChainRepairMarker {
+  marker: AuditLogEntry
+  authorization: ChainRepairAuthorization
+}
+
 /**
  * Single tenant request count entry in top talkers report
  */
@@ -175,4 +190,3 @@ export interface TopTalkersReport {
   totalRequests: number
   topTalkers: TopTalkerEntry[]
 }
-
