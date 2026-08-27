@@ -82,10 +82,22 @@ export function subscribeBondCreationEvents(
                 return;
               }
               const event = parseBondEvent(validation.data);
-              await upsertIdentity(event.identity);
-              await upsertBond(event.bond);
-              if (cursorRepo) {
-                await cursorRepo.upsert({ streamName: STREAM_NAME, pagingToken: newCursor });
+              // The event mutation and checkpoint are one durable unit. If a
+              // process crashes before COMMIT, the next owner replays the
+              // event from the previous cursor; it can never acknowledge an
+              // event whose state was only partially persisted.
+              const client: PoolClient = await pool.connect();
+              try {
+                await client.query('BEGIN');
+                await upsertIdentity(event.identity, client);
+                await upsertBond(event.bond, client);
+                await upsertCursor({ streamName: STREAM_NAME, pagingToken: newCursor }, client);
+                await client.query('COMMIT');
+              } catch (transactionError) {
+                await client.query('ROLLBACK');
+                throw transactionError;
+              } finally {
+                client.release();
               }
               cursor = newCursor;
               updateMetrics(cursorRepo);
