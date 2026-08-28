@@ -1,4 +1,5 @@
 import {
+  getBackoffDelayMs,
   type ProviderRetryPolicies,
   type RetryPolicy,
 } from "../lib/retryPolicy.js";
@@ -77,9 +78,158 @@ export interface ContractEvent {
   [key: string]: unknown;
 }
 
+/**
+ * A page of contract-scoped events together with deterministic pagination
+ * metadata.
+ *
+ * The response shape is backward compatible: `events` and `cursor` retain
+ * their historical meaning. The additional `hasNextPage`, `seq`, and `limit`
+ * fields make ordering, cursor encoding, page limits, and end-of-stream
+ * behavior explicit and reviewable.
+ */
 export interface ContractEventsPage {
   events: ContractEvent[];
+  /**
+   * Opaque next-page cursor (always `null` at end of stream). It is safe to
+   * hand this back to `getContractEvents()` to resume from exactly where this
+   * page ended.
+   */
   cursor: string | null;
+  /**
+   * `true` when a subsequent page is available (i.e. the provider returned a
+   * next cursor). `false` signals deterministic end-of-stream.
+   */
+  hasNextPage: boolean;
+  /** Monotonic page sequence (1-based) for this request. */
+  seq: number;
+  /** The page limit that was applied to this request. */
+  limit: number;
+}
+
+/**
+ * Supported version of the client-issued event cursor envelope.
+ * Bump this only on a wire-incompatible change to the encoding.
+ */
+export const SOROBAN_EVENT_CURSOR_VERSION = 1;
+
+/**
+ * Default number of events requested per page.
+ */
+export const DEFAULT_EVENTS_PAGE_LIMIT = 100;
+
+/**
+ * Hard upper bound on the number of events requested per page. Requests above
+ * this are rejected with `CONFIG_ERROR` so page sizes stay bounded and
+ * deterministic (protecting downstream RPC payload sizes).
+ */
+export const MAX_EVENTS_PAGE_LIMIT = 1000;
+
+/**
+ * Maximum byte length (as UTF-8) of the decoded cursor payload. Guards against
+ * absurdly large cursor strings reaching the RPC, and keeps cursor storage
+ * bounded.
+ */
+export const MAX_EVENT_CURSOR_PAYLOAD_BYTES = 2048;
+
+interface EventCursorPayload {
+  v: number;
+  /** Opaque server-issued cursor token. */
+  c: string;
+  /** Monotonic page sequence (1-based). */
+  seq: number;
+}
+
+/**
+ * Encodes an opaque server cursor together with a monotonic page sequence
+ * into a deterministic, versioned, base64url token.
+ *
+ * The token is self-describing (it carries the envelope version) so a stale
+ * or incompatible token can be rejected deterministically instead of being
+ * silently forwarded to the RPC with unpredictable results.
+ */
+export function encodeEventCursor(serverCursor: string, seq: number): string {
+  const payload: EventCursorPayload = {
+    v: SOROBAN_EVENT_CURSOR_VERSION,
+    c: serverCursor,
+    seq,
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+/**
+ * Decodes and validates a client-issued event cursor token.
+ *
+ * @param token - The encoded cursor token produced by `encodeEventCursor()`.
+ * @returns The decoded server cursor and page sequence.
+ * @throws `SorobanClientError` (code `PARSE_ERROR`) when the token is not a
+ *   valid base64url string, has an unsupported version, is malformed JSON,
+ *   carries a non-string/non-finite cursor, or exceeds the size bounds.
+ *   Rejecting invalid tokens here guarantees a malformed cursor never reaches
+ *   the RPC and never mutates state.
+ */
+export function decodeEventCursor(
+  token: string,
+): { cursor: string; seq: number } {
+  if (typeof token !== "string" || token.trim() === "" || token.trim() !== token) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: cursor must be a non-empty, non-whitespace-padded string.",
+    });
+  }
+
+  let payload: Partial<EventCursorPayload>;
+  try {
+    const raw = Buffer.from(token, "base64url").toString("utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_EVENT_CURSOR_PAYLOAD_BYTES) {
+      throw new SorobanClientError({
+        code: "PARSE_ERROR",
+        message: `Invalid event cursor: payload exceeds ${MAX_EVENT_CURSOR_PAYLOAD_BYTES} bytes.`,
+      });
+    }
+    payload = JSON.parse(raw) as Partial<EventCursorPayload>;
+  } catch (error) {
+    if (error instanceof SorobanClientError) throw error;
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: unable to decode cursor token.",
+      cause: error,
+    });
+  }
+
+  if (payload.v !== SOROBAN_EVENT_CURSOR_VERSION) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: `Invalid event cursor: unsupported cursor version ${String(payload.v)}.`,
+    });
+  }
+
+  if (typeof payload.c !== "string" || payload.c.trim() === "") {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: missing server cursor payload.",
+    });
+  }
+
+  if (!Number.isSafeInteger(payload.seq) || (payload.seq as number) < 1) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: page sequence must be a positive integer.",
+    });
+  }
+
+  return { cursor: payload.c as string, seq: payload.seq as number };
+}
+
+/**
+ * Builds the next-page token from a server cursor and the current page
+ * sequence, or `null` when the stream has ended.
+ */
+function buildNextCursor(
+  serverCursor: string | undefined | null,
+  seq: number,
+): string | null {
+  if (!serverCursor) return null;
+  return encodeEventCursor(serverCursor, seq + 1);
 }
 
 interface SorobanRpcResponse<T> {
@@ -289,23 +439,83 @@ export class SorobanClient {
   }
 
   /**
-   * Fetches contract-scoped events and returns the normalized next cursor.
+   * Fetches contract-scoped events with deterministic pagination and cursor
+   * semantics.
+   *
+   * Ordering is explicitly ascending (ledger/sequence order), page limits are
+   * bounded (`1..MAX_EVENTS_PAGE_LIMIT`, default `DEFAULT_EVENTS_PAGE_LIMIT`),
+   * and the returned `cursor` is a self-describing, validated token that can be
+   * handed back to resume from exactly where this page ended. End-of-stream is
+   * signalled deterministically via `hasNextPage` (`false` when the provider
+   * returns no next cursor).
+   *
+   * A malformed, stale, or out-of-scope cursor is rejected here (before any RPC
+   * call) with a typed `SorobanClientError` (code `PARSE_ERROR`), so an invalid
+   * request never mutates downstream state and never yields a partial result.
+   *
+   * @param cursor  - Optional next-page token returned by a previous call.
+   * @param options - Optional `limit` (page size) override.
    */
-  async getContractEvents(cursor?: string): Promise<ContractEventsPage> {
+  async getContractEvents(
+    cursor?: string,
+    options: { limit?: number } = {},
+  ): Promise<ContractEventsPage> {
+    let seq = 1;
+    let serverCursor: string | undefined;
+
+    if (cursor) {
+      const decoded = decodeEventCursor(cursor);
+      serverCursor = decoded.cursor;
+      seq = decoded.seq;
+    }
+
+    const limit = this.resolveEventsPageLimit(options.limit);
+
     const result = await this.callRpc<{
       events?: ContractEvent[];
       latestCursor?: string;
       cursor?: string;
+      order?: string;
     }>("getEvents", {
       network: this.network,
       contractIds: [this.contractId],
-      ...(cursor ? { cursor } : {}),
+      order: "asc",
+      limit,
+      ...(serverCursor ? { cursor: serverCursor } : {}),
     });
 
+    const events = result.events ?? [];
+    const nextServerCursor = result.latestCursor ?? result.cursor ?? null;
+
     return {
-      events: result.events ?? [],
-      cursor: result.latestCursor ?? result.cursor ?? null,
+      events,
+      cursor: buildNextCursor(nextServerCursor, seq),
+      hasNextPage: Boolean(nextServerCursor),
+      seq,
+      limit,
     };
+  }
+
+  /**
+   * Resolves and validates the requested page limit.
+   * Page limits are bounded so oversized RPC payloads are never requested and
+   * page sizes stay deterministic.
+   */
+  private resolveEventsPageLimit(requested?: number): number {
+    if (requested === undefined) {
+      return DEFAULT_EVENTS_PAGE_LIMIT;
+    }
+    if (
+      !Number.isInteger(requested) ||
+      requested < 1 ||
+      requested > MAX_EVENTS_PAGE_LIMIT
+    ) {
+      throw new SorobanClientError({
+        code: "CONFIG_ERROR",
+        message: `Invalid events page limit: expected an integer in [1, ${MAX_EVENTS_PAGE_LIMIT}], got ${String(requested)}.`,
+      });
+    }
+    return requested;
   }
 
   private assertConfig(config: SorobanClientConfig): void {

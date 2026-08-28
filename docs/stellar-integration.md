@@ -19,12 +19,78 @@ Creates a `SorobanClient` instance.
 
 Fetches identity state from the configured contract using a `getContractData` RPC call shape.
 
-### `getContractEvents(cursor?)`
+### `getContractEvents(cursor?, options?)`
 
 Fetches contract-scoped events using `getEvents`, and returns:
 
-- `events`: parsed event array
-- `cursor`: normalized next cursor (`latestCursor` or `cursor` or `null`)
+```ts
+interface ContractEventsPage {
+  events: ContractEvent[];          // parsed event array for this page
+  cursor: string | null;            // deterministic next-page token, or null at end of stream
+  hasNextPage: boolean;             // true when a subsequent page is available
+  seq: number;                      // monotonic 1-based page sequence
+  limit: number;                    // page limit that was applied
+}
+```
+
+Pagination and cursor semantics are **deterministic and scope-safe**:
+
+- **Ordering** — `getEvents` is always requested with ascending (`asc`) order so
+  pages advance forward with no skipped or reordered window.
+- **Cursor encoding** — the client returns a self-describing, versioned token
+  (`base64url` JSON `{ v, c, seq }`) instead of forwarding the raw provider
+  token. It can be handed straight back to `getContractEvents(cursor)` to resume
+  from exactly where the previous page ended.
+- **Cursor validation** — a malformed, stale (unsupported version), oversized,
+  or structurally invalid cursor is rejected **before any RPC call** with a
+  typed `SorobanClientError` (`code: "PARSE_ERROR"`). Rejected requests never
+  mutate downstream state and never yield a partial result.
+- **Page limits** — optional `options.limit` (default `100`, hard cap `1000`);
+  out-of-range limits are rejected with `code: "CONFIG_ERROR"`. Page sizes are
+  bounded so oversized RPC payloads are never requested.
+- **End-of-stream** — `hasNextPage` is `false` (and `cursor` is `null`) when the
+  provider returns no next cursor, giving callers a deterministic terminal
+  signal.
+- **Idempotency** — replaying the same cursor re-requests the same provider
+  position, so repeated/replayed ingestion is safe and does not silently skip
+  or duplicate records.
+
+**Compatibility**: the historical `events` and `cursor` fields are preserved
+verbatim; only `hasNextPage`, `seq`, and `limit` are added. The first positional
+argument (`cursor`) is unchanged, so existing `getContractEvents()` and
+`getContractEvents(cursor)` call sites continue to work. Cursor tokens produced
+by the previous raw format are intentionally rejected (`PARSE_ERROR`) rather
+than silently interpreted — see the migration note below.
+
+#### Migration / rollback
+
+- **Migration**: consumers that treat `getContractEvents()` as a one-shot fetch
+  are unaffected. Consumers that persist the returned `cursor` should persist
+  the new token as-is; it remains a plain string column compatible with the
+  existing `horizon_cursors.paging_token` `TEXT` column (no schema change).
+- **Rollback**: reverting this change restores the prior raw-cursor behavior.
+  Any new-format cursor persisted meanwhile would then be forwarded verbatim to
+  the provider; providers reject unknown cursors, causing a non-destructive RPC
+  error (no partial state), so rollback is safe.
+
+#### Failure behaviour
+
+- Invalid page limit, malformed/stale/oversized cursor → `SorobanClientError`
+  (`CONFIG_ERROR` / `PARSE_ERROR`) thrown **without** contacting the RPC.
+- Network / timeout / HTTP / retryable-RPC failures follow the same retry and
+  circuit-breaker path as every other Soroban call; the provider cursor is only
+  advanced on success, so a failed page is retried from its original position.
+
+#### Security assumptions
+
+- The event cursor is an **opaque, unauthenticated hint**: the authoritative
+  source of truth is the ledger provider, which re-validates its own cursor and
+  re-derives the correct scope. The client-side wrapper adds structural
+  validation (format, version, bounds) to fail fast and avoid forwarding
+  garbage, but the cursor carries no authorization and must not be trusted as a
+  security boundary.
+- Cursor payload size is bounded (`MAX_EVENT_CURSOR_PAYLOAD_BYTES`) to keep
+  storage and RPC payloads bounded.
 
 ## Configuration
 
@@ -177,6 +243,11 @@ Tests live in `src/clients/__tests__/soroban.test.ts` and `src/clients/__tests__
 - circuit breaker multi-host isolation
 - circuit breaker concurrency limits during HALF_OPEN probes
 - backwards-compatible `cooldownPeriodMs` mapping
+- deterministic event pagination and cursor semantics: ascending ordering
+  request, default/boundary page limits, end-of-stream signalling, resumable
+  cursor round-trip, malformed/stale/oversized/invalid-cursor rejection (no RPC
+  contact), out-of-range-limit rejection, large-result and concurrent-replay
+  idempotency, plus a cursor encode/decode property test
 
 Run tests with:
 
