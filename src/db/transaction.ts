@@ -14,6 +14,43 @@ export interface TransactionContext {
 
 export const transactionContextStorage = new AsyncLocalStorage<TransactionContext>()
 
+/**
+ * Register a hook that runs after the current transaction commits successfully.
+ * Must be called while a transaction is active (inside a `withTransaction` callback).
+ * The hook is NOT executed if the transaction rolls back.
+ *
+ * Typical use: cache invalidation, metrics, event publication.
+ *
+ * @throws if no transaction is currently active (calling outside a transaction is a bug)
+ */
+export async function runPostCommit(hook: () => Promise<void>): Promise<void> {
+  const context = transactionContextStorage.getStore()
+  if (!context) {
+    // No active transaction — execute immediately so cache invalidation
+    // still works outside a transaction boundary.
+    await hook()
+    return
+  }
+  context.postCommitHooks.push(hook)
+}
+
+/**
+ * Register a compensating hook that runs when the current transaction rolls back.
+ * Must be called while a transaction is active (inside a `withTransaction` callback).
+ * The hook is NOT executed if the transaction commits successfully.
+ *
+ * Typical use: compensating actions, logging, operational signals.
+ */
+export async function runRollback(hook: () => Promise<void>): Promise<void> {
+  const context = transactionContextStorage.getStore()
+  if (!context) {
+    // No active transaction — nothing to compensate.
+    return
+  }
+  context.rollbackHooks.push(hook)
+}
+
+
 const originalPoolQuery = Pool.prototype.query
 Pool.prototype.query = function (this: Pool, ...args: any[]): any {
   const activeClient = transactionStorage.getStore()
@@ -288,11 +325,18 @@ export class TransactionManager {
           initAttrs.op = op;
         }
 
-        const result = await withSpan(DbSpans.TX, async (span) => {
-          const r = await fn(budgetedClient);
-          span.setAttribute('table_count', tablesRef.tables.size);
-          return r;
-        }, initAttrs);
+        // Propagate the transaction context and active client via AsyncLocalStorage
+        // so that runPostCommit / runRollback can register hooks, and pool.query()
+        // calls are redirected to the transaction client.
+        const result = await transactionContextStorage.run(context, () =>
+          transactionStorage.run(budgetedClient, () =>
+            withSpan(DbSpans.TX, async (span) => {
+              const r = await fn(budgetedClient);
+              span.setAttribute('table_count', tablesRef.tables.size);
+              return r;
+            }, initAttrs),
+          ),
+        );
 
         await client.query("COMMIT");
 

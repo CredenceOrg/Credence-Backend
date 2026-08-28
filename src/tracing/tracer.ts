@@ -35,13 +35,6 @@ export const ReputationSpans = {
   ATTESTATION_SCORE: "reputation.attestation_score",
   BOND_SCORE: "reputation.bond_score",
   TIME_WEIGHT: "reputation.time_weight",
-} as const;
-
-/**
- * Canonical span names for database operations.
- */
-export const DbSpans = {
-  TX: 'db.tx',
 } as const
 
 /**

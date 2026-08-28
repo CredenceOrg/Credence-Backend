@@ -6,6 +6,7 @@ import { getFlag } from '../config/featureFlags.js'
 import { executeShadowWrite } from './shadowWrite.js'
 import type { CreatePayoutInput } from '../schemas/payout.js'
 import { ValidationError } from '../lib/errors.js'
+import { runPostCommit } from '../db/transaction.js'
 
 export class SettlementService {
   constructor(private readonly repository: SettlementsRepository) {}
