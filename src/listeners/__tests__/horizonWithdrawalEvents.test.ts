@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import { compareDecimals } from '../../lib/decimalMath.js'
 
 // Mock Stellar SDK before importing the module
 vi.mock('@stellar/stellar-sdk', () => {
@@ -114,7 +115,7 @@ describe('HorizonWithdrawalListener', () => {
 
       const update = (listener as any).calculateBondUpdate(currentBond, event)
 
-      expect(update.newAmount).toBe('700')
+      expect(compareDecimals(update.newAmount, '700')).toBe(0)
       expect(update.isActive).toBe(true)
       expect(update.previousAmount).toBe('1000.0000000')
     })
