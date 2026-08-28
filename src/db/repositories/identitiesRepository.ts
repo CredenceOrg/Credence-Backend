@@ -49,11 +49,11 @@ export class IdentitiesRepository extends BaseRepository {
     this.assertTenant();
     const result = await this.db.query<IdentityRow>(
       `
-      INSERT INTO identities (address, display_name)
-      VALUES ($1, $2)
+      INSERT INTO identities (address, display_name, tenant_id)
+      VALUES ($1, $2, $3)
       RETURNING address, display_name, created_at, updated_at, version
       `,
-      [input.address, input.displayName ?? null],
+      [input.address, input.displayName ?? null, this.tenantId],
     );
 
     return mapIdentity(result.rows[0]);
@@ -65,9 +65,9 @@ export class IdentitiesRepository extends BaseRepository {
       `
       SELECT address, display_name, created_at, updated_at, version
       FROM identities
-      WHERE address = $1
+      WHERE address = $1 AND tenant_id = $2
       `,
-      [address],
+      [address, this.tenantId],
     );
 
     return result.rows[0] ? mapIdentity(result.rows[0]) : null;
@@ -79,8 +79,10 @@ export class IdentitiesRepository extends BaseRepository {
       `
       SELECT address, display_name, created_at, updated_at, version
       FROM identities
+      WHERE tenant_id = $1
       ORDER BY created_at ASC, address ASC
       `,
+      [this.tenantId],
     );
 
     return result.rows.map(mapIdentity);
@@ -97,10 +99,10 @@ export class IdentitiesRepository extends BaseRepository {
       SET display_name = $2,
           updated_at = NOW(),
           version = version + 1
-      WHERE address = $1
+      WHERE address = $1 AND tenant_id = $3
       RETURNING address, display_name, created_at, updated_at, version
       `,
-      [address, input.displayName],
+      [address, input.displayName, this.tenantId],
     );
 
     return result.rows[0] ? mapIdentity(result.rows[0]) : null;
@@ -109,7 +111,7 @@ export class IdentitiesRepository extends BaseRepository {
   /**
    * Updates an identity with optimistic locking.
    *
-   * Only proceeds when the row's current `version` matches
+   * Only proceeds when the row current `version` matches
    * `input.expectedVersion`. On success the version is atomically incremented
    * and the updated identity is returned.
    *
@@ -128,10 +130,10 @@ export class IdentitiesRepository extends BaseRepository {
       SET display_name = $2,
           updated_at = NOW(),
           version = version + 1
-      WHERE address = $1 AND version = $3
+      WHERE address = $1 AND version = $3 AND tenant_id = $4
       RETURNING address, display_name, created_at, updated_at, version
       `,
-      [address, input.displayName, input.expectedVersion],
+      [address, input.displayName, input.expectedVersion, this.tenantId],
     );
 
     if (!result.rows[0]) {
@@ -139,15 +141,15 @@ export class IdentitiesRepository extends BaseRepository {
       // surface the right error.  The extra read is only on the conflict path so
       // it does not affect the hot path.
       const existing = await this.db.query<{ version: number }>(
-        `SELECT version FROM identities WHERE address = $1`,
-        [address],
+        `SELECT version FROM identities WHERE address = $1 AND tenant_id = $2`,
+        [address, this.tenantId],
       );
 
       if (!existing.rows[0]) {
-        throw new Error(`Identity not found: ${address}`);
+        throw new Error(`Identity not found: $address`);
       }
 
-      // Row exists but version did not match → optimistic lock conflict.
+      // Row exists but version did not match ↑ optimistic lock conflict.
       throw new OptimisticLockError(address, input.expectedVersion);
     }
 
@@ -159,9 +161,9 @@ export class IdentitiesRepository extends BaseRepository {
     const result = await this.db.query(
       `
       DELETE FROM identities
-      WHERE address = $1
+      WHERE address = $1 AND tenant_id = $2
       `,
-      [address],
+      [address, this.tenantId],
     );
 
     return (result.rowCount ?? 0) > 0;
