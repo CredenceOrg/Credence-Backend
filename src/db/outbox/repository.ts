@@ -51,6 +51,21 @@ type OutboxQuarantineRow = {
   reinjected_by: string | null
 }
 
+/** The only status transitions permitted by the outbox lifecycle. */
+export const OUTBOX_STATE_TRANSITIONS = {
+  pending: ['processing'],
+  processing: ['published', 'pending', 'dead_letter'],
+  published: [],
+  failed: [],
+  dead_letter: [],
+} as const
+
+function requireTransition(rowCount: number, eventId: bigint, transition: string): void {
+  if (rowCount !== 1) {
+    throw new Error(`Outbox event ${eventId} cannot transition via ${transition}`)
+  }
+}
+
 function mapOutboxEvent(row: OutboxEventRow): OutboxEvent {
   let payload: Record<string, unknown> = {}
   let rawPayload: string | undefined
@@ -435,13 +450,16 @@ export class OutboxRepository {
   /**
    * Mark an event as successfully published.
    */
-  async markPublished(db: Queryable, eventId: bigint): Promise<void> {
-    await db.query(
+  async markPublished(db: Queryable, eventId: bigint, consumerId: string): Promise<void> {
+    const result = await db.query(
       `UPDATE event_outbox
        SET status = 'published', processed_at = NOW(), consumer_id = NULL, lease_expires_at = NULL, publish_idempotency_key = NULL
-       WHERE id = $1`,
-      [eventId.toString()]
+       WHERE id = $1 AND status = 'processing'
+         AND ($2::text IS NULL OR consumer_id = $2)
+       RETURNING id`,
+      [eventId.toString(), consumerId]
     )
+    requireTransition(result.rowCount ?? 0, eventId, 'markPublished')
   }
 
   /**
@@ -451,13 +469,14 @@ export class OutboxRepository {
    *
    * @returns true if the key was set (first attempt), false if already present
    */
-  async trySetPublishIdempotencyKey(db: Queryable, eventId: bigint, key: string): Promise<boolean> {
+  async trySetPublishIdempotencyKey(db: Queryable, eventId: bigint, key: string, consumerId: string): Promise<boolean> {
     const result = await db.query<{ id: string }>(
       `UPDATE event_outbox
        SET publish_idempotency_key = $2
-       WHERE id = $1 AND publish_idempotency_key IS NULL
+       WHERE id = $1 AND status = 'processing' AND publish_idempotency_key IS NULL
+         AND ($3::text IS NULL OR consumer_id = $3)
        RETURNING id`,
-      [eventId.toString(), key]
+      [eventId.toString(), key, consumerId]
     )
     return (result.rowCount ?? 0) > 0
   }
@@ -476,7 +495,7 @@ export class OutboxRepository {
    * Mark an event as failed and increment retry count.
    * If max retries exceeded, status remains 'failed'.
    */
-  async markFailed(db: Queryable, eventId: bigint, errorMessage: string): Promise<{ status: string; retryCount: number }> {
+  async markFailed(db: Queryable, eventId: bigint, errorMessage: string, consumerId: string): Promise<{ status: string; retryCount: number }> {
     // Truncate/redact before persisting: exception messages can incidentally
     // carry secrets (e.g. an Authorization header echoed by an HTTP client
     // error) or be unbounded in length.
@@ -494,26 +513,21 @@ export class OutboxRepository {
            processed_at = CASE WHEN retry_count + 1 >= max_retries THEN NOW() ELSE NULL END,
            consumer_id = NULL,
            lease_expires_at = NULL,
-           next_attempt_at = NULL,
+           next_attempt_at = CASE
+             WHEN retry_count + 1 >= max_retries THEN NULL
+             ELSE NOW() + (LEAST(POWER(2, retry_count + 1), $4::numeric)::text || ' seconds')::interval
+           END,
            publish_idempotency_key = NULL
-       WHERE id = $1
+       WHERE id = $1 AND status = 'processing'
+         AND ($3::text IS NULL OR consumer_id = $3)
        RETURNING retry_count, max_retries`,
-      [eventId.toString(), sanitizedMessage]
+      [eventId.toString(), sanitizedMessage, consumerId, MAX_BACKOFF_SECONDS]
     )
 
     const row = upd.rows[0]
-    const retryCount = row ? Number(row.retry_count) : 0
-    const maxRetries = row ? Number(row.max_retries) : 0
-
-    // If not yet exhausted, compute exponential backoff in JS and update next_attempt_at.
-    // Capped so a large max_retries budget can't produce a multi-day wait.
-    if (retryCount < maxRetries) {
-      const delaySeconds = Math.min(Math.pow(2, retryCount), MAX_BACKOFF_SECONDS)
-      await db.query(
-        `UPDATE event_outbox SET next_attempt_at = NOW() + ($2 || ' seconds')::interval WHERE id = $1`,
-        [eventId.toString(), String(Math.floor(delaySeconds))]
-      )
-    }
+    requireTransition(upd.rowCount ?? 0, eventId, 'markFailed')
+    const retryCount = Number(row.retry_count)
+    const maxRetries = Number(row.max_retries)
 
     const status = retryCount >= maxRetries ? 'dead_letter' : 'pending'
     return { status, retryCount }

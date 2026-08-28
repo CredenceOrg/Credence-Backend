@@ -452,11 +452,11 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
 
     // First call succeeds
-    const first = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1')
+    const first = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
     expect(first).toBe(true)
 
     // Second call (different consumer) fails
-    const second = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1')
+    const second = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
     expect(second).toBe(false)
 
     // Verify key is set in DB
@@ -472,10 +472,10 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
 
     // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1')
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
 
     // markPublished should clear the key
-    await repo.markPublished(pool, event.id)
+    await repo.markPublished(pool, event.id, 'consumer-1')
 
     const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
     expect(row.rows[0].status).toBe('published')
@@ -490,10 +490,10 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
 
     // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1')
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
 
     // markFailed should clear the key and reset to pending
-    const result = await repo.markFailed(pool, event.id, 'network error')
+    const result = await repo.markFailed(pool, event.id, 'network error', 'consumer-1')
     expect(result.status).toBe('pending')
 
     const row = await pool.query('SELECT status, publish_idempotency_key, retry_count FROM event_outbox WHERE id = $1', [event.id.toString()])
@@ -509,7 +509,7 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
 
     // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1')
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
 
     // releaseClaims should clear the key and reset status
     const released = await repo.releaseClaims(pool, 'consumer-1')
@@ -528,7 +528,7 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     )
     const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
 
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1')
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
     await repo.clearPublishIdempotencyKey(pool, event.id)
 
     const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
@@ -545,7 +545,7 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
 
     // Claim and set key (simulating consumer A's pre-publish state)
     const [eventA] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
-    await repo.trySetPublishIdempotencyKey(pool, eventA.id, 'consumer-a:1')
+    await repo.trySetPublishIdempotencyKey(pool, eventA.id, 'consumer-a:1', 'consumer-a')
 
     // Simulate consumer A crash: expire lease
     await pool.query("UPDATE event_outbox SET lease_expires_at = NOW() - INTERVAL '1 second'")
@@ -568,16 +568,16 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
 
     // Consumer A acquires the key
-    const aAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1')
+    const aAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
     expect(aAcquired).toBe(true)
 
     // Consumer B tries — fails
-    const bAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1')
+    const bAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
     expect(bAcquired).toBe(false)
 
     // Only consumer A would call publish()
     // After publish, markPublished clears the key
-    await repo.markPublished(pool, event.id)
+    await repo.markPublished(pool, event.id, 'consumer-a')
 
     const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
     expect(row.rows[0].status).toBe('published')

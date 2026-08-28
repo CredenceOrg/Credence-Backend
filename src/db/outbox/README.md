@@ -250,6 +250,21 @@ Backoff and dead-letter
 
 ### State machine (exact status values)
 
+The legal transition matrix is enforced by the repository entry points. A
+transition method must target a `processing` row owned by the supplied
+consumer; terminal, skipped, repeated, and stale-owner calls update zero rows
+and fail without changing the event. The allowed edges are:
+
+| Current status | Allowed next status |
+| --- | --- |
+| `pending` | `processing` |
+| `processing` | `published`, `pending`, `dead_letter` |
+| `published`, `failed`, `dead_letter` | none |
+
+The publisher passes its consumer ID to idempotency-key, acknowledgement, and
+failure operations. A failed transition is operationally actionable and must
+be retried only after the row is claimed by the active consumer.
+
 ```mermaid
 stateDiagram-v2
   [*] --> pending
