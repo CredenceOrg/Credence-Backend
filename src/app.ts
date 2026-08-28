@@ -69,6 +69,36 @@ import { createExportRouter } from "./routes/export/index.js";
 
 const app = express();
 
+function rejectMissingTenantContext(req, res, next) {
+  const tenantContext = req.tenantContext;
+  const expired =
+    typeof tenantContext?.exp === "number" &&
+    tenantContext.exp * 1000 <= Date.now();
+  if (!tenantContext?.tenantId || expired) {
+    res.status(401).json({
+      error: {
+        code: "UNAUTHENTICATED",
+        message: "Authentication required: missing or expired tenant identity",
+      },
+    });
+    return;
+  }
+  next();
+}
+
+function rejectCrossTenantOrgAccess(req, res, next) {
+  if (req.params.orgId !== req.tenantContext?.tenantId) {
+    res.status(403).json({
+      error: {
+        code: "FORBIDDEN",
+        message: "Cross-tenant access denied",
+      },
+    });
+    return;
+  }
+  next();
+}
+
 // ── Rate-limit configuration ──────────────────────────────────────────────────
 let rateLimitConfig: {
   enabled: boolean;
@@ -214,6 +244,7 @@ app.use("/api/version", createVersionRouter());
 app.use("/api/auth", createAuthRouter(authRateLimitConfig));
 
 app.use("/api", rateLimitMiddleware);
+app.use("/api", rejectMissingTenantContext);
 
 // Idempotency middleware — runs after body parsing, before route handlers.
 try {
@@ -284,7 +315,11 @@ app.use(
   createWebhookRouter(new PostgresWebhookRepository(pool), auditLogService),
 );
 
-app.use("/api/orgs/:orgId/policies", createPolicyRouter());
+app.use(
+  "/api/orgs/:orgId/policies",
+  rejectCrossTenantOrgAccess,
+  createPolicyRouter(),
+);
 
 const analyticsThresholdSeconds = Number(
   process.env.ANALYTICS_STALENESS_SECONDS ?? "300",
