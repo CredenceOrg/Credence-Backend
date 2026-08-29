@@ -23,6 +23,9 @@ function noopListener(): HorizonListener {
   return new HorizonListener({
     upsertNode: async () => true,
     updateNodeStatus: async () => true,
+    // Lease tests only emit `bond` events (creation), which never consult
+    // the current state; report a live node so the contract is satisfied.
+    getNodeStatus: async () => 'active',
   })
 }
 

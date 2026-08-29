@@ -181,6 +181,9 @@ class NoopHorizonListener extends HorizonListener {
     super({
       upsertNode: async () => true,
       updateNodeStatus: async () => true,
+      // The drill only emits `bond` events (creation), which never consult
+      // the current state; report a live node so the contract is satisfied.
+      getNodeStatus: async () => 'active',
     })
   }
 }
