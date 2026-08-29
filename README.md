@@ -373,6 +373,8 @@ The service includes a Horizon withdrawal events listener that:
 
 See [docs/horizon-listener.md](./docs/horizon-listener.md) for detailed documentation.
 
+Every committed Horizon transition also writes a versioned, correlation-identified record to the `horizon_events` ledger inside the same transaction as the state mutation, and a deterministic parity verifier reconciles event payloads against final state. See [docs/horizon-events-parity.md](./docs/horizon-events-parity.md) for the design, invariants, failure behavior, and compatibility notes.
+
 ## Caching
 
 The service includes a Redis-based caching layer with:
