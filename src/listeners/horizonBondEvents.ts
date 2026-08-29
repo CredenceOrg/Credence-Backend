@@ -190,3 +190,11 @@ function parseBondEvent(op: {
     },
   };
 }
+
+// Re-export atomic implementation for backward compatibility
+export { 
+  subscribeBondCreationEventsAtomic,
+  AtomicBondEventProcessor,
+  type BondCreationEvent,
+  type AtomicBondCreationHandle,
+} from './horizonBondEvents.atomic.js'
