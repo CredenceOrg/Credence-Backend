@@ -291,6 +291,13 @@ export class TransactionManager {
     let attempts = 0;
 
     while (true) {
+      // A fresh context per attempt prevents hooks registered in a rolled-back
+      // retry from emitting events for a transition that never committed.
+      const context: TransactionContext = {
+        correlationId: randomUUID(),
+        postCommitHooks: [],
+        rollbackHooks: [],
+      };
       const client = await this.pool.connect();
       const startTime = Date.now();
       const savepointCountRef = { count: 0 };
@@ -308,14 +315,14 @@ export class TransactionManager {
         // Propagate tenant id into the transaction so Postgres RLS policies
         // that rely on `current_setting('app.tenant_id', true)` can enforce
         // row-level isolation per-tenant.
-        try {
-          const tenantId = getTenantId();
-          if (tenantId) {
-            // Use a parameterized setting to avoid injection; cast to uuid in policies.
-            await client.query(`SET LOCAL app.tenant_id = '${tenantId}'`);
-          }
-        } catch (err) {
-          // Swallow: setting may not be needed in some environments
+        const tenantId = getTenantId();
+        if (tenantId) {
+          // Use set_config with a bind parameter to avoid SQL injection while
+          // keeping the setting local to this transaction for RLS scoping.
+          await client.query(
+            'SELECT set_config($1, $2, true)',
+            ['app.tenant_id', tenantId],
+          );
         }
 
         const budgetedClient = createBudgetedClient(client, startTime, maxDurationMs, maxSavepoints, savepointCountRef, tablesRef);
@@ -410,8 +417,12 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Placeholder for getTenantId to avoid compilation errors (this function should be defined elsewhere).
+ * Returns the tenant id bound by runWithTenant for the current async context.
  */
-function getTenantId(): string | undefined {
-  return undefined;
+export function getTenantId(): string | undefined {
+  return tenantStorage.getStore();
+}
+
+export function runWithTenant<T>(tenantId: string, fn: () => T): T {
+  return tenantStorage.run(tenantId, fn);
 }

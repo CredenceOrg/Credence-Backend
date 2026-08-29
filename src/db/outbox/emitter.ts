@@ -9,11 +9,7 @@ import { getActiveCorrelationIds } from '../../utils/logger.js'
  * Use this instead of directly publishing events to ensure atomicity.
  */
 export class OutboxEventEmitter {
-  private repository: OutboxRepository
-
-  constructor() {
-    this.repository = new OutboxRepository()
-  }
+  constructor(private readonly repository: OutboxRepository = new OutboxRepository()) {}
 
   /**
    * Emit a domain event to the outbox within the provided transaction.
@@ -28,6 +24,8 @@ export class OutboxEventEmitter {
     const { correlationId } = getActiveCorrelationIds()
     const eventWithTrace: CreateOutboxEvent = {
       ...event,
+      version: event.version ?? 1,
+      tenantId,
       traceId: spanContext?.traceId,
       spanId: spanContext?.spanId,
       tracestate: spanContext?.traceState?.serialize(),
@@ -41,12 +39,14 @@ export class OutboxEventEmitter {
    * Useful for emitting related events atomically.
    */
   async emitBatch(db: Queryable, events: CreateOutboxEvent[]): Promise<bigint[]> {
-    const ids: bigint[] = []
+    const ids = []
     const spanContext = trace.getActiveSpan()?.spanContext()
     const { correlationId } = getActiveCorrelationIds()
     for (const event of events) {
       const eventWithTrace: CreateOutboxEvent = {
         ...event,
+        version: event.version ?? 1,
+        tenantId,
         traceId: spanContext?.traceId,
         spanId: spanContext?.spanId,
         tracestate: spanContext?.traceState?.serialize(),

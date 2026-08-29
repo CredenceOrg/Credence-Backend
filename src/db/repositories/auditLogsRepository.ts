@@ -208,6 +208,9 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
   constructor(private readonly db: Queryable) {}
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
+    if (!input.tenantId) {
+      throw new Error('AuditLogRepository.append requires tenantId for tenant isolation')
+    }
     const id = randomUUID()
     const actorId = resolveActorId(input)
     const actorEmail = resolveActorEmail(input)
@@ -222,8 +225,14 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     // For standalone calls (no outer transaction), we use a DO block pattern.
     const result = await this.db.query<AuditLogRow>(
       `
-      WITH prev AS (
-        SELECT row_hash FROM audit_logs ORDER BY seq DESC LIMIT 1
+      WITH locked AS (
+        SELECT true AS locked
+        FROM pg_advisory_xact_lock(hashtext('audit_logs_append_lock'))
+      ),
+      prev AS (
+        SELECT row_hash FROM audit_logs
+        WHERE (SELECT locked FROM locked)
+        ORDER BY seq DESC LIMIT 1
       ),
       new_seq AS (
         SELECT nextval('audit_logs_seq') AS seq_val
@@ -385,6 +394,9 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
+    if (!filters?.tenantId) {
+      throw new Error('AuditLogRepository.query requires tenantId for tenant isolation')
+    }
     const whereClauses: string[] = []
     const params: unknown[] = []
     applyFilters(filters, whereClauses, params)
