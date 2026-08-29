@@ -18,7 +18,6 @@ export default [
   },
   {
     files: ["src/**/*.ts"],
-    ignores: ["src/utils/logger.ts"],
     languageOptions: {
       parser: tsParser,
       sourceType: "module",

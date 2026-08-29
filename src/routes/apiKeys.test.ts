@@ -3,6 +3,9 @@ import request from 'supertest'
 import express from 'express'
 import apiKeysRouter from './apiKeys.js'
 import { generateApiKey, _setUseInMemory, _resetStore, ApiKeyScope } from '../services/apiKeys.js'
+import { createApiKeyRouter } from './apiKeys.js'
+import { auditLogService, AuditAction } from '../services/audit/index.js'
+import { userRepo } from '../repositories/userRepository.js'
 
 describe('API Keys Routes', () => {
   let app: express.Express
@@ -197,6 +200,84 @@ describe('API Keys Routes', () => {
       const response = await request(app).post('/api/api-keys/some-id/rotate')
 
       expect(response.status).toBe(401)
+    })
+  })
+})
+
+describe('Integration API Key Rotation Routes', () => {
+  let app: express.Express
+  let ownerKey: string
+  let ownerKeyId: string
+
+  beforeEach(async () => {
+    _resetStore()
+    _setUseInMemory(true)
+    userRepo._reset()
+    await auditLogService.clearLogs()
+
+    userRepo.upsert({
+      id: 'owner-user',
+      role: 'user',
+      email: 'owner@example.com',
+      tenantId: 'tenant-rotation',
+      active: true,
+    })
+
+    const result = await generateApiKey('owner-user', [ApiKeyScope.BOND_READ, ApiKeyScope.TRUST_READ], 'pro')
+    ownerKey = result.key
+    ownerKeyId = result.id
+
+    app = express()
+    app.use(express.json())
+    app.use('/api/integrations/keys', createApiKeyRouter())
+  })
+
+  afterEach(() => {
+    _resetStore()
+    userRepo._reset()
+  })
+
+  it('rotates a key, logs the audit event, and invalidates the old key', async () => {
+    const response = await request(app)
+      .post(`/api/integrations/keys/${ownerKeyId}/rotate`)
+      .set('Authorization', `Bearer ${ownerKey}`)
+
+    expect(response.status).toBe(200)
+    expect(response.body.success).toBe(true)
+    expect(response.body.data).toHaveProperty('key')
+    expect(response.body.data.key).not.toBe(ownerKey)
+    expect(response.body.data.scopes).toEqual([ApiKeyScope.BOND_READ, ApiKeyScope.TRUST_READ])
+
+    const logs = await auditLogService.getAllLogs()
+    const rotationLogs = logs.filter((entry) => entry.action === AuditAction.ROTATE_API_KEY)
+    expect(rotationLogs).toHaveLength(1)
+    expect(rotationLogs[0].status).toBe('success')
+    expect(rotationLogs[0].details).toMatchObject({
+      revokedKeyId: ownerKeyId,
+      ownerId: 'owner-user',
+      scope: ApiKeyScope.BOND_READ,
+    })
+
+    const oldKeyResponse = await request(app)
+      .get('/api/integrations/keys')
+      .set('Authorization', `Bearer ${ownerKey}`)
+
+    expect(oldKeyResponse.status).toBe(401)
+  })
+
+  it('records a failed rotation attempt for a missing key', async () => {
+    const response = await request(app)
+      .post('/api/integrations/keys/missing-key/rotate')
+      .set('Authorization', `Bearer ${ownerKey}`)
+
+    expect(response.status).toBe(404)
+
+    const logs = await auditLogService.getAllLogs()
+    const failureLogs = logs.filter((entry) => entry.action === AuditAction.ROTATE_API_KEY && entry.status === 'failure')
+    expect(failureLogs).toHaveLength(1)
+    expect(failureLogs[0].details).toMatchObject({
+      keyId: 'missing-key',
+      reason: 'key_not_found',
     })
   })
 })

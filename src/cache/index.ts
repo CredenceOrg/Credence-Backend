@@ -3,13 +3,17 @@
  */
 
 export { cache, redisConnection, CacheService, RedisConnection } from './redis.js';
+export { singleflight } from '../lib/singleflight.js';
 export {
   invalidateCache,
   invalidateMultiple,
   invalidatePattern,
   withCacheInvalidation,
   createCacheKey,
-  type InvalidationOptions
+  invalidateTenantCache,
+  isValidTenantId,
+  type InvalidationOptions,
+  type TenantCacheInvalidationResult
 } from './invalidation.js';
 export {
   InvalidationBus,
@@ -17,3 +21,17 @@ export {
   resetInvalidationBus,
   type InvalidationEvent
 } from './invalidationBus.js';
+export {
+  createCacheInvalidationHook,
+  composeInvalidationHooks,
+  profileInvalidationHook,
+  trustScoreInvalidationHook,
+  bulkVerificationInvalidationHook,
+  orgMembersListInvalidationHook,
+  memberByIdInvalidationHook,
+  genericInvalidationHook,
+  invalidationHookExecutionsTotal,
+  type InvalidationHook,
+  type InvalidationHookOptions,
+  type InvalidationHookResult,
+} from './invalidationHooks.js';

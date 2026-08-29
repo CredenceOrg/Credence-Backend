@@ -70,12 +70,13 @@ Configured alerts (see `prometheus/alerts.yml`):
 
 ## Documentation
 
-See [docs/monitoring.md](../docs/monitoring.md) for:
-- Complete setup instructions
-- Metrics instrumentation guide
-- Deployment configurations
-- Troubleshooting guide
-- Kubernetes manifests
+- See **[docs/OBSERVABILITY.md](../docs/OBSERVABILITY.md)** for a single-operator index of every metric, Grafana panel, and PromQL query the backend exposes — useful when triaging an incident or onboarding a new operator.
+- See [docs/monitoring.md](../docs/monitoring.md) for:
+  - Complete setup instructions
+  - Metrics instrumentation guide
+  - Deployment configurations
+  - Troubleshooting guide
+  - Kubernetes manifests
 
 ## Development
 

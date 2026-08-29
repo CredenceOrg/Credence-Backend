@@ -77,7 +77,8 @@ describe('Health route – dependency-aware checks with degradation reasons', ()
   it('schema is stable: always has status, service, version, dependencies keys', async () => {
     const app = appWithHealth({})
     const res = await request(app).get('/api/health')
-    expect(res.status).toBe(200)
+    // Critical deps not configured → unhealthy (fail-closed); schema is still stable.
+    expect(res.status).toBe(503)
     expect(res.body).toHaveProperty('status')
     expect(res.body).toHaveProperty('service', 'credence-backend')
     expect(res.body).toHaveProperty('version')
@@ -112,3 +113,4 @@ describe('Health route – dependency-aware checks with degradation reasons', ()
     expect(res.body).not.toHaveProperty('dependencies')
   })
 })
+

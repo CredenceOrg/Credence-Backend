@@ -2,6 +2,7 @@ export * from './types.js'
 export * from './delivery.js'
 export * from './service.js'
 export * from './dlq.js'
+export * from './admission.js'
 
 import { MemoryDlqStore } from './dlq.js'
 import { MemoryWebhookStore } from './memoryStore.js'
@@ -11,4 +12,3 @@ export const dlqStore = new MemoryDlqStore()
 
 /** Shared singleton webhook config store. */
 export const memoryWebhookStore = new MemoryWebhookStore()
-

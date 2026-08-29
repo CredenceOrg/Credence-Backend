@@ -48,15 +48,31 @@ export interface InviteMemberRequest {
 }
 
 export interface UpdateMemberRoleRequest {
+  /** Org whose member list contains the row. Validated by the service. */
+  orgId: string
   memberId: string
   role: MemberRole
 }
 
+/**
+ * Soft-delete request. `orgId` MUST match the URL `:orgId` parameter —
+ * the service refuses cross-organisation deletes by mapping the audit
+ * `status = failure` and returning NOT_FOUND. Including it explicitly in
+ * the request type makes the contract surface clear at every call site.
+ */
 export interface DeleteMemberRequest {
+  orgId: string
   memberId: string
 }
 
+/**
+ * Restore request. Same ownership invariant as delete: the row's
+ * `org_id` must equal the URL `:orgId`. The service also refuses to
+ * restore if doing so would exceed the unique-active-membership cap
+ * (partial unique index `uq_org_members_active`).
+ */
 export interface RestoreMemberRequest {
+  orgId: string
   memberId: string
 }
 

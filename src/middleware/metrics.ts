@@ -11,10 +11,26 @@
 
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
-import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import {
+  httpRequestDurationHistogram,
+  httpRequestStatusTotal,
+  normalizeRoute,
+  getRouteTemplate,
+  registerLatencyMetrics,
+} from '../observability/latencyMetrics.js'
+import {
+  registerPoolMetrics,
+  registerRpcLatencyMetrics,
+  registerPreparedStatementCacheMetrics,
+} from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
-import { pool, workerPool } from '../db/pool.js'
+import {
+  pool,
+  workerPool,
+  apiPreparedStatementCache,
+  workerPreparedStatementCache,
+  replicaPreparedStatementCache,
+} from '../db/pool.js'
 
 // Create a Registry to register metrics
 export const register = new client.Registry()
@@ -24,6 +40,13 @@ registerLatencyMetrics(register)
 
 // Register database connection pool metrics
 registerPoolMetrics(register, pool, workerPool)
+
+// Register prepared-statement cache size metrics
+registerPreparedStatementCacheMetrics(register, {
+  api: apiPreparedStatementCache,
+  worker: workerPreparedStatementCache,
+  replica: replicaPreparedStatementCache,
+})
 
 // Register downstream RPC latency metrics
 registerRpcLatencyMetrics(register)
@@ -177,6 +200,13 @@ export const settlementUnmatchedCount = new client.Gauge({
   registers: [register],
 })
 
+export const shadowWriteMismatches = new client.Counter({
+  name: 'shadow_write_mismatches_total',
+  help: 'Total number of shadow write mode mismatches between old and new pipelines',
+  labelNames: ['mismatch_type'],
+  registers: [register]
+})
+
 // ============================================================================
 // Webhooks Metrics
 // ============================================================================
@@ -184,6 +214,68 @@ export const settlementUnmatchedCount = new client.Gauge({
 export const webhookDlqSize = new client.Gauge({
   name: 'webhook_dlq_size',
   help: 'Number of messages in the webhook dead-letter queue',
+  registers: [register]
+})
+
+// ============================================================================
+// JWT Signing-Key Metrics
+// ============================================================================
+
+export const signingKeyRotationsTotal = new client.Counter({
+  name: 'signing_key_rotations_total',
+  help: 'Total number of JWT signing-key rotations',
+  labelNames: ['result'],
+  registers: [register],
+})
+
+export const signingKeyPrunesTotal = new client.Counter({
+  name: 'signing_key_prunes_total',
+  help: 'Total number of retired signing keys garbage-collected after the grace window',
+  registers: [register],
+})
+
+export const jwksRequestsTotal = new client.Counter({
+  name: 'jwks_requests_total',
+  help: 'Total number of /.well-known/jwks.json requests, partitioned by HTTP outcome',
+  labelNames: ['cache', 'status'],
+  registers: [register],
+})
+
+/**
+ * Record a JWT signing-key rotation (`success` or `error`).
+ *
+ * Called from both the admin rotate route and the background
+ * KeyRotationScheduler.
+ */
+export function recordSigningKeyRotation(result: 'success' | 'error'): void {
+  signingKeyRotationsTotal.inc({ result })
+}
+
+/**
+ * Record the number of retired keys pruned by the KeyManager at the end
+ * of a grace window.
+ */
+export function recordSigningKeyPrune(count: number): void {
+  if (count > 0) signingKeyPrunesTotal.inc(count)
+}
+
+/**
+ * Record a single /.well-known/jwks.json request.
+ * `cache` is `'hit'` (304 Not Modified served) or `'miss'` (full body served).
+ */
+export function recordJwksRequest(cache: 'hit' | 'miss', status: number): void {
+  jwksRequestsTotal.inc({ cache, status: String(status) })
+}
+
+// ============================================================================
+// Redis Cache Metrics
+// ============================================================================
+
+export const redisKeySizeBytes = new client.Histogram({
+  name: 'redis_key_size_bytes',
+  help: 'Size in bytes of values written to Redis cache keys, labeled by cache namespace. Helps detect a single endpoint ballooning a key (e.g. a hash/JSON blob) into a mega-key.',
+  labelNames: ['namespace'],
+  buckets: [1024, 4096, 16384, 65536, 262144, 1048576, 4194304], // 1KB to 4MB
   registers: [register]
 })
 
@@ -211,13 +303,15 @@ export const oomEventsTotal = new client.Counter({
  * ```
  */
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
-  const start = Date.now()
+  // Initialize a fresh metrics namespace for each request to avoid leakage
+  (req as any).metrics = {};
   const hrStart = process.hrtime.bigint()
   
   res.on('finish', () => {
-    const duration = (Date.now() - start) / 1000
     const durationSeconds = Number(process.hrtime.bigint() - hrStart) / 1e9
-    const route = normalizeRoute(req.path, req.route?.path)
+    // Use getRouteTemplate which correctly joins req.baseUrl + req.route.path
+    // so sub-router mounted routes produce fully-qualified templates.
+    const route = getRouteTemplate(req)
     const statusClass = `${Math.floor(res.statusCode / 100)}xx`
     
     httpRequestsTotal.inc({
@@ -405,6 +499,24 @@ export function setSettlementUnmatchedCount(count: number) {
 }
 
 /**
+ * Record shadow write mode mismatch between old and new pipelines
+ * 
+ * Usage:
+ * ```typescript
+ * import { recordShadowWriteMismatch } from './middleware/metrics.js'
+ * 
+ * if (oldResult.status !== newResult.status) {
+ *   recordShadowWriteMismatch('status_mismatch')
+ * }
+ * ```
+ */
+export function recordShadowWriteMismatch(
+  mismatchType: 'status_mismatch' | 'data_mismatch' | 'error_mismatch'
+) {
+  shadowWriteMismatches.inc({ mismatch_type: mismatchType })
+}
+
+/**
  * Record webhook DLQ size
  * 
  * Usage:
@@ -423,4 +535,18 @@ export function recordWebhookDlqSize(size: number) {
  */
 export function recordOomEvent(): void {
   oomEventsTotal.inc()
+}
+
+/**
+ * Record the size (in bytes) of a value written to a Redis cache key.
+ *
+ * Usage:
+ * ```typescript
+ * import { recordRedisKeySize } from './middleware/metrics.js'
+ *
+ * recordRedisKeySize('attestation', Buffer.byteLength(serialized, 'utf8'))
+ * ```
+ */
+export function recordRedisKeySize(namespace: string, bytes: number): void {
+  redisKeySizeBytes.observe({ namespace }, bytes)
 }

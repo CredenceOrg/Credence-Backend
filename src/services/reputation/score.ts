@@ -4,7 +4,7 @@
  */
 
 import type { Queryable } from "../../db/repositories/queryable.js";
-import type { ReputationInput, ReputationScore } from "./types.js";
+import type { ReputationInput, ReputationModuleConfig, ReputationScore } from "./types.js";
 import { calculateBondScore } from "./bondScore.js";
 import { calculateAttestationScore } from "./attestationScore.js";
 import { calculateTimeWeight } from "./timeWeight.js";
@@ -37,6 +37,7 @@ import { SpanStatusCode, context, trace } from "@opentelemetry/api";
 export function calculateReputationScore(
   input: ReputationInput,
   identityId?: string,
+  config?: ReputationModuleConfig,
 ): ReputationScore {
   const tracer = getReputationTracer();
 
@@ -59,7 +60,7 @@ export function calculateReputationScore(
         parentCtx,
         (span) => {
           try {
-            const result = calculateBondScore(input.bond);
+            const result = calculateBondScore(input.bond, config);
             span.setAttribute("reputation.stage_result", result);
             span.setStatus({ code: SpanStatusCode.OK });
             return result;
@@ -82,7 +83,7 @@ export function calculateReputationScore(
         parentCtx,
         (span) => {
           try {
-            const result = calculateAttestationScore(input.attestations);
+            const result = calculateAttestationScore(input.attestations, config);
             span.setAttribute("reputation.stage_result", result);
             span.setStatus({ code: SpanStatusCode.OK });
             return result;
@@ -108,6 +109,8 @@ export function calculateReputationScore(
             const result = calculateTimeWeight(
               input.bond.bondStart,
               input.currentTime,
+              undefined,
+              config,
             );
             span.setAttribute("reputation.stage_result", result);
             span.setStatus({ code: SpanStatusCode.OK });
@@ -163,8 +166,9 @@ export function normalizeScore(score: number): number {
 export function calculatePersistedReputationScore(
   input: ReputationInput,
   identityId?: string,
+  config?: ReputationModuleConfig,
 ): number {
-  return normalizeScore(calculateReputationScore(input, identityId).totalScore);
+  return normalizeScore(calculateReputationScore(input, identityId, config).totalScore);
 }
 
 /**
@@ -178,8 +182,9 @@ export async function recordScoreHistorySnapshot(
   source: ScoreSource,
   inputVector: ReputationInput,
   computedAt?: Date,
+  config?: ReputationModuleConfig,
 ) {
-  const score = calculatePersistedReputationScore(inputVector, identityAddress);
+  const score = calculatePersistedReputationScore(inputVector, identityAddress, config);
   const repository = new ScoreHistoryRepository(db);
 
   return repository.create({
@@ -200,13 +205,15 @@ export async function recordScoreHistorySnapshot(
 export function calculateReputationScoreWithCustomDuration(
   input: ReputationInput,
   maxDuration: number,
+  config?: ReputationModuleConfig,
 ): ReputationScore {
-  const bondScore = calculateBondScore(input.bond);
-  const attestationScore = calculateAttestationScore(input.attestations);
+  const bondScore = calculateBondScore(input.bond, config);
+  const attestationScore = calculateAttestationScore(input.attestations, config);
   const timeWeight = calculateTimeWeight(
     input.bond.bondStart,
     input.currentTime,
     maxDuration,
+    config,
   );
 
   const totalScore = (bondScore + attestationScore) * timeWeight;

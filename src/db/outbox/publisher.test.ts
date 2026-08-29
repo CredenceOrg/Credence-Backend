@@ -4,6 +4,21 @@ import { OutboxPublisher } from './publisher'
 import { OutboxRepository } from './repository'
 import type { OutboxEvent } from './types'
 import crypto from 'crypto'
+import { vi, beforeEach, describe, it, expect } from 'vitest'
+
+vi.mock('../pool.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../pool.js')>()
+  const mockPool = {
+    query: vi.fn().mockResolvedValue({ rows: [] }),
+    connect: vi.fn(),
+    end: vi.fn(),
+    on: vi.fn(),
+  }
+  return {
+    ...actual,
+    pool: mockPool as any,
+  }
+})
 
 async function buildTestPool(): Promise<Pool> {
   const db = newDb()
@@ -96,7 +111,9 @@ async function buildTestPool(): Promise<Pool> {
       span_id TEXT,
       tracestate TEXT,
       shard_count INTEGER,
-      shard_id INTEGER
+      shard_id INTEGER,
+      correlation_id TEXT,
+      publish_idempotency_key TEXT
     )
   `)
 
@@ -140,6 +157,8 @@ function baseEvent(overrides: Partial<OutboxEvent> = {}): OutboxEvent {
     traceId: null,
     spanId: null,
     tracestate: null,
+    correlationId: null,
+    publishIdempotencyKey: null,
     ...overrides,
   }
 }
@@ -409,5 +428,238 @@ describe('OutboxPublisher lease-aware sharding', () => {
       const deviation = Math.abs(shardCounts[s] - expectedMean)
       expect(deviation).toBeLessThan(maxAllowedDeviation)
     }
+  })
+})
+
+describe('OutboxRepository publish idempotency (crash recovery)', () => {
+  let pool: Pool
+  let repo: OutboxRepository
+
+  beforeEach(async () => {
+    pool = await buildTestPool()
+    repo = new OutboxRepository()
+  })
+
+  afterEach(async () => {
+    await pool.end()
+  })
+
+  it('trySetPublishIdempotencyKey returns true on first call and false on second', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+
+    // First call succeeds
+    const first = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
+    expect(first).toBe(true)
+
+    // Second call (different consumer) fails
+    const second = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
+    expect(second).toBe(false)
+
+    // Verify key is set in DB
+    const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].publish_idempotency_key).toBe('consumer-a:1')
+  })
+
+  it('markPublished clears the publish idempotency key', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+
+    // Set the key (simulating pre-publish state)
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
+
+    // markPublished should clear the key
+    await repo.markPublished(pool, event.id, 'consumer-1')
+
+    const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].status).toBe('published')
+    expect(row.rows[0].publish_idempotency_key).toBeNull()
+  })
+
+  it('markFailed clears publish idempotency key so retry can publish again', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+
+    // Set the key (simulating pre-publish state)
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
+
+    // markFailed should clear the key and reset to pending
+    const result = await repo.markFailed(pool, event.id, 'network error', 'consumer-1')
+    expect(result.status).toBe('pending')
+
+    const row = await pool.query('SELECT status, publish_idempotency_key, retry_count FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].publish_idempotency_key).toBeNull()
+    expect(row.rows[0].status).toBe('pending')
+  })
+
+  it('releaseClaims clears publish idempotency key on graceful shutdown', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+
+    // Set the key (simulating pre-publish state)
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
+
+    // releaseClaims should clear the key and reset status
+    const released = await repo.releaseClaims(pool, 'consumer-1')
+    expect(released).toBe(1)
+
+    const row = await pool.query('SELECT status, publish_idempotency_key, consumer_id FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].status).toBe('pending')
+    expect(row.rows[0].publish_idempotency_key).toBeNull()
+    expect(row.rows[0].consumer_id).toBeNull()
+  })
+
+  it('clearPublishIdempotencyKey removes the key', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+
+    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
+    await repo.clearPublishIdempotencyKey(pool, event.id)
+
+    const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].publish_idempotency_key).toBeNull()
+  })
+
+  it('reclaimed event with idempotency key is mapped correctly to OutboxEvent', async () => {
+    // This test verifies that when an event is reclaimed, its
+    // publishIdempotencyKey is surfaced so the publisher can skip publish.
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+
+    // Claim and set key (simulating consumer A's pre-publish state)
+    const [eventA] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    await repo.trySetPublishIdempotencyKey(pool, eventA.id, 'consumer-a:1', 'consumer-a')
+
+    // Simulate consumer A crash: expire lease
+    await pool.query("UPDATE event_outbox SET lease_expires_at = NOW() - INTERVAL '1 second'")
+
+    // Consumer B reclaims
+    const [eventB] = await repo.claimEvents(pool, 'consumer-b', 10, 60)
+    expect(eventB).toBeDefined()
+    expect(eventB.id).toBe(eventA.id)
+    // Consumer B should see the idempotency key and skip publish
+    expect(eventB.publishIdempotencyKey).toBe('consumer-a:1')
+  })
+
+  it('concurrent trySetPublishIdempotencyKey prevents duplicate emissions', async () => {
+    // Simulate two consumers racing to publish the same event.
+    // Only one should acquire the idempotency key.
+    await pool.query(
+      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+    )
+    const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+
+    // Consumer A acquires the key
+    const aAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
+    expect(aAcquired).toBe(true)
+
+    // Consumer B tries — fails
+    const bAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
+    expect(bAcquired).toBe(false)
+
+    // Only consumer A would call publish()
+    // After publish, markPublished clears the key
+    await repo.markPublished(pool, event.id, 'consumer-a')
+
+    const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
+    expect(row.rows[0].status).toBe('published')
+    expect(row.rows[0].publish_idempotency_key).toBeNull()
+  })
+})
+
+describe('OutboxRepository correlation id persistence', () => {
+  it('persists correlation_id on create and returns it via claimEvents', async () => {
+    const pool = await buildTestPool()
+    const repo = new OutboxRepository()
+
+    await repo.create(pool, {
+      aggregateType: 'bond',
+      aggregateId: 'bond-1',
+      eventType: 'bond.created',
+      payload: { address: '0xabc' },
+      correlationId: 'corr-persisted-123',
+    })
+
+    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    expect(claimed.correlationId).toBe('corr-persisted-123')
+  })
+
+  it('leaves correlation_id null when the event was emitted with no active request context', async () => {
+    const pool = await buildTestPool()
+    const repo = new OutboxRepository()
+
+    await repo.create(pool, {
+      aggregateType: 'bond',
+      aggregateId: 'bond-2',
+      eventType: 'bond.created',
+      payload: { address: '0xdef' },
+    })
+
+    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    expect(claimed.correlationId).toBeFalsy()
+  })
+})
+
+describe('OutboxPublisher edge cases (#1003)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('resets pending gauge to 0 on stop', async () => {
+    const obs = await import('../../observability/index.js')
+    const spy = vi.spyOn(obs, 'setOutboxPendingGauge')
+
+    const publisher = new OutboxPublisher({ publish: async () => undefined })
+    ;(publisher as any).running = true
+    ;(publisher as any).metricsTimer = setTimeout(() => {}, 1_000_000)
+
+    await publisher.stop()
+
+    expect(spy).toHaveBeenCalledWith(0)
+    clearTimeout((publisher as any).metricsTimer)
+  })
+
+  it('does not log event payload content', async () => {
+    const { logger } = await import('../../utils/logger.js')
+    const infoSpy = vi.spyOn(logger, 'info')
+    const errorSpy = vi.spyOn(logger, 'error')
+    const warnSpy = vi.spyOn(logger, 'warn')
+
+    vi.spyOn(OutboxRepository.prototype, 'markPublished').mockResolvedValue(undefined)
+
+    const publisher = new OutboxPublisher({ publish: async () => undefined })
+    const event = baseEvent({
+      publishIdempotencyKey: 'already-published',
+      payload: { secret: 'should-not-appear-in-logs' },
+    })
+
+    await (publisher as any).processEvent(event)
+
+    const allLogArgs = [
+      ...infoSpy.mock.calls,
+      ...errorSpy.mock.calls,
+      ...warnSpy.mock.calls,
+    ].flat().map(String)
+
+    const leaked = allLogArgs.filter(arg => arg.includes('should-not-appear-in-logs'))
+    expect(leaked).toEqual([])
   })
 })

@@ -3,11 +3,13 @@
   "version": "0.1.0",
   "type": "module",
   "scripts": {
+    "predev": "tsx scripts/check-pending-migrations.ts",
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
     "prepare": "husky install",
     "lint": "node --import tsx ./node_modules/eslint/bin/eslint.js src",
+    "lint:fix": "node --import tsx ./node_modules/eslint/bin/eslint.js src --fix",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:chaos": "vitest run tests/chaos --sequence",
@@ -16,6 +18,7 @@
     "coverage:audit": "vitest run --config vitest.audit.config.ts --coverage",
     "coverage:services": "vitest run --config vitest.services.config.ts --coverage",
     "security:scan": "npm audit --omit=dev",
+    "deps:audit": "tsx scripts/deps-audit.ts",
     "sbom:generate": "npx @cyclonedx/cyclonedx-npm --output-file sbom.json --ignore-npm-errors",
     "sbom:check": "tsx scripts/sbom-validate.ts sbom.json",
     "sbom:diff": "node scripts/sbom-component-diff.js --base sbom.json --head sbom.json --summary",
@@ -25,12 +28,15 @@
     "migrate:dev": "npm run build && npm run migrate",
     "migrate:dry-run": "npm run build && tsx scripts/migrate-dry-run.ts",
     "migrate:lint": "tsx src/migrations/linter.ts check",
+    "migrate:lint:ci": "tsx scripts/migration-lint-ci.ts",
     "migrate:preflight": "tsx src/migrations/linter.ts pre-flight",
     "migrate:template": "tsx src/migrations/linter.ts template",
     "migrate:safety": "tsx src/migrations/linter.ts check --strict",
+    "test:db:reset": "npm run build && tsx scripts/reset-test-db.ts",
     "generate:openapi": "npx tsx scripts/generate-openapi.ts",
     "drill:horizon": "tsx scripts/horizon-failover-drill.ts",
-    "drill:restore": "tsx scripts/restore-verify.ts"
+    "drill:restore": "tsx scripts/restore-verify.ts",
+    "cache:invalidate-tenant": "tsx src/cli/invalidateTenantCache.ts"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^2.7.0",
@@ -46,11 +52,12 @@
     "better-sqlite3": "^12.6.2",
     "combined-stream": "^1.0.8",
     "compression": "^1.8.1",
+    "cors": "^2.8.6",
     "csv-parse": "^6.2.1",
     "delayed-stream": "^1.0.0",
     "dotenv": "^17.3.1",
     "es-set-tostringtag": "^2.1.0",
-    "express": "^4.18.2",
+    "express": "^4.22.2",
     "helmet": "^8.0.0",
     "ioredis": "^5.4.1",
     "jose": "^6.2.2",
@@ -61,15 +68,18 @@
     "pg-mem": "^3.0.13",
     "prom-client": "^15.1.3",
     "redis": "^5.11.0",
+    "rolldown": "^1.2.0",
     "ws": "^8.21.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
     "@asteasolutions/zod-to-openapi": "^8.5.0",
     "@cyclonedx/cyclonedx-npm": "^5.0.0",
+    "@rolldown/binding-linux-x64-gnu": "^1.2.6",
     "@types/better-sqlite3": "^7.6.13",
     "@types/compression": "^1.8.1",
-    "@types/express": "^4.17.21",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^4.17.25",
     "@types/jest": "^30.0.0",
     "@types/multer": "^2.1.0",
     "@types/node": "^20.19.37",
@@ -82,7 +92,7 @@
     "@vitest/coverage-istanbul": "^4.1.6",
     "@vitest/coverage-v8": "^4.1.6",
     "eslint": "^10.1.0",
-    "fast-check": "^3.22.0",
+    "fast-check": "^3.23.2",
     "husky": "^9.0.0",
     "jest": "^30.2.0",
     "pg-mem": "^3.0.13",
@@ -91,12 +101,16 @@
     "ts-jest": "^29.4.6",
     "tsx": "^4.7.0",
     "typescript": "~5.2.2",
-    "vitest": "^4.1.2",
+    "vitest": "^4.1.9",
     "yaml": "^2.9.0"
   },
   "overrides": {
     "@emnapi/core": "1.11.1",
     "@emnapi/runtime": "1.11.1",
-    "@emnapi/wasi-threads": "1.2.2"
+    "@emnapi/wasi-threads": "1.2.2",
+    "@rolldown/binding-linux-x64-gnu": false
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.0"
   }
 }

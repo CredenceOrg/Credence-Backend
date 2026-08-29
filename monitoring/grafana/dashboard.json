@@ -1153,6 +1153,93 @@
       }
     },
     {
+      "id": 17,
+      "title": "Outbox Dead Letter",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(outbox_dead_letter_total[5m])",
+          "legendFormat": "{{error_code}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 40
+      }
+    },
+    {
+      "id": 18,
+      "title": "Outbox Quarantine",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(outbox_quarantine_total[5m])",
+          "legendFormat": "{{reason}}",
+          "refId": "A"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 40
+      }
+    },
+    {
+      "id": 19,
+      "title": "Outbox Leader Elections",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(outbox_leader_acquired_total[5m])",
+          "legendFormat": "Acquired",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "rate(outbox_leader_lost_total[5m])",
+          "legendFormat": "Lost",
+          "refId": "B"
+        }
+      ],
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 40
+      }
+    },
+    {
       "id": 15,
       "title": "Horizon Listener Lag (seconds)",
       "description": "Seconds since the active Horizon listener last heartbeated / checkpointed its cursor. A sustained value above the lease TTL indicates the primary is unhealthy and a standby should have taken over. Threshold lines mirror the lease TTL (15s) and the alerting page-out level (60s).",
@@ -1206,7 +1293,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 40
+        "y": 48
       },
       "alert": {
         "name": "Horizon listener lag exceeds TTL",
@@ -1250,7 +1337,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 40
+        "y": 48
       }
     }
   ],

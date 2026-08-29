@@ -22,6 +22,20 @@ export interface OutboxEvent {
   tracestate?: string | null
   shardCount?: number | null
   shardId?: number | null
+  /**
+   * Application-level correlation id (distinct from the OTel trace/span
+   * ids above) captured from the originating HTTP request's tracing
+   * context at emit time. Restored into the tracing context when this
+   * event is published so downstream logs and outbound webhook requests
+   * can be tied back to the request that caused them.
+   */
+  correlationId?: string | null
+  /**
+   * Set before publishing to prevent duplicate emissions if the worker
+   * crashes mid-batch.  When present the publisher treats the event as
+   * already delivered and skips straight to markPublished.
+   */
+  publishIdempotencyKey?: string | null
 }
 
 export type OutboxEventStatus = 'pending' | 'processing' | 'published' | 'failed' | 'dead_letter'
@@ -60,6 +74,7 @@ export interface CreateOutboxEvent {
   traceId?: string | null
   spanId?: string | null
   tracestate?: string | null
+  correlationId?: string | null
 }
 
 /**

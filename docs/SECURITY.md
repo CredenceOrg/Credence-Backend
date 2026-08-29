@@ -13,12 +13,17 @@ Every API key is issued with an explicit set of **scopes** that determine which 
 | `attestations:write` | Create and revoke attestations                                     |
 | `payouts:write`      | Payout / settlement creation                                       |
 | `reports:generate`   | Report job creation and status polling                             |
-| `exports:read`       | Report artifact downloads and audit-log exports                    |
+| `exports:read`       | Report artifact downloads, audit-log exports, and top-talkers data |
 | `webhooks:admin`     | Webhook secret rotation and revocation                             |
-| `admin:read`         | Admin read operations (users, audit logs, failed events)           |
-| `admin:write`        | Admin write operations (role assignment, key revocation, impersonation, event replay) |
+| `outbox:reinject`    | Reinsert fixed quarantined outbox events                           |
+| `admin:read`         | Admin read operations (users, audit logs, failed events, imports previews/presets) |
+| `admin:write`        | Admin write operations (role assignment, key revocation, impersonation, event replay, import commits, manage presets) |
+| `flags:read`         | Read feature flag configurations and tenant rollouts               |
+| `flags:write`        | Create, update, and delete feature flags and overrides             |
+| `bond:read`          | Read bond state and status                                         |
+| `bond:write`         | Create and update bond records                                     |
 
-Legacy `public` and `enterprise` values are still accepted and automatically expanded to their respective scope sets (see `docs/api-keys.md`).
+Legacy `public` (expands to `trust:read`, `attestations:read`) and `enterprise` (expands to all 14 granular scopes) values are still accepted and automatically expanded to their respective scope sets (see `docs/api-keys.md`).
 
 ### Scope Enforcement Implementation
 
@@ -117,6 +122,8 @@ Never commit raw API keys, test fixtures with live keys, or example bearer token
 Each event includes actor metadata, action name, timestamp, and evidence resource id, enabling compliance queries by actor, resource, and time range.
 
 ## Rate Limiting
+
+For a detailed support and operations guide on rate limiting (including default tier numbers, environment configuration, troubleshooting FAQ, and Prometheus metrics), see the **[Rate Limiting Operations & Support Guide](rate-limiting.md)**.
 
 ### Architecture
 
@@ -297,3 +304,11 @@ When deploying to production, operators must configure allowed origins:
    ❌ Environment validation failed:
      - CORS_ORIGIN: Wildcard CORS origin (*) is prohibited in production environment
    ```
+
+---
+
+## See Also
+
+- **[docs/SCOPES.md](SCOPES.md)** — Every available API key scope, which endpoints each unlocks, legacy tier aliases, and how to request the right set for your integration.
+- **[docs/SECRETS.md](SECRETS.md)** — Secret-rotation posture: where credentials live, rotation cadence, and blast radius for the Evidence KEK, JWT signing keys, integration API keys, and webhook signing secrets.
+- **[docs/kms-rotation-runbook.md](kms-rotation-runbook.md)** — Step-by-step operational runbook for Evidence KEK rotation.

@@ -6,6 +6,9 @@ import type {
   SnapshotJobResult,
   ScoreSnapshot,
 } from './types.js'
+import { trustScoreInvalidationHook } from '../cache/invalidationHooks.js'
+import { logger } from '../utils/logger.js'
+import { loadConfig } from '../config/index.js'
 
 /**
  * Options for score snapshot job.
@@ -52,7 +55,7 @@ export class ScoreSnapshotJob {
     this.batchSize = options.batchSize ?? 100
     this.continueOnError = options.continueOnError ?? true
     this.logger = options.logger ?? (() => {})
-    this.scoringModelVersion = options.scoringModelVersion ?? '1.0.0'
+    this.scoringModelVersion = options.scoringModelVersion ?? loadConfig().reputation.scoringModelVersion
   }
 
   /**
@@ -164,6 +167,16 @@ export class ScoreSnapshotJob {
             await this.store.saveBatch(snapshots)
             saved += snapshots.length
             this.logger(`Saved ${snapshots.length} snapshots`)
+
+            // Post-commit hook: invalidate trust-score cache for all
+            // addresses in this batch so the next read fetches fresh scores.
+            const addresses = snapshots.map((s) => s.address)
+            trustScoreInvalidationHook.execute(...addresses).catch((err) =>
+              logger.error(
+                { err, batchSize: addresses.length },
+                '[ScoreSnapshotJob] Failed to invalidate trust-score cache after batch save',
+              ),
+            )
           } catch (error) {
             errors += snapshots.length
             const errorMsg = error instanceof Error ? error.message : 'Unknown error'

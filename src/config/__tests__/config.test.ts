@@ -50,6 +50,7 @@ describe('validateConfig – valid environments', () => {
     expect(config.nodeEnv).toBe('development')
     expect(config.logLevel).toBe('info')
     expect(config.jwt.expiry).toBe('1h')
+    expect(config.jwt.jwksCacheMaxAgeSeconds).toBe(300)
     expect(config.features.trustScoring).toBe(false)
     expect(config.features.bondEvents).toBe(false)
     expect(config.cors.origin).toBe('*')
@@ -102,6 +103,11 @@ describe('validateConfig – valid environments', () => {
     expect(config.jwt.expiry).toBe('7d')
   })
 
+  it('accepts custom JWKS_CACHE_MAX_AGE_SECONDS', () => {
+    const config = validateConfig(validEnv({ JWKS_CACHE_MAX_AGE_SECONDS: '600' }))
+    expect(config.jwt.jwksCacheMaxAgeSeconds).toBe(600)
+  })
+
   it('applies outbound retry defaults when env overrides are omitted', () => {
     const config = validateConfig(validEnv())
 
@@ -110,6 +116,17 @@ describe('validateConfig – valid environments', () => {
     expect(config.outboundHttp.retry.defaults.maxDelayMs).toBe(2000)
     expect(config.outboundHttp.retry.defaults.backoffMultiplier).toBe(2)
     expect(config.outboundHttp.retry.defaults.jitterStrategy).toBe('none')
+  })
+
+  it('defaults DB_POOL_IDLE_TIMEOUT_MS to 300 000 ms (5 minutes) when unset', () => {
+    // Ensures idle connections are evicted after 5 min by default (#724)
+    const config = validateConfig(validEnv())
+    expect(config.db.pool.idleTimeoutMillis).toBe(300_000)
+  })
+
+  it('accepts a custom DB_POOL_IDLE_TIMEOUT_MS value', () => {
+    const config = validateConfig(validEnv({ DB_POOL_IDLE_TIMEOUT_MS: '60000' }))
+    expect(config.db.pool.idleTimeoutMillis).toBe(60_000)
   })
 
   it('supports provider-specific outbound retry overrides', () => {
@@ -258,6 +275,36 @@ describe('validateConfig – invalid values', () => {
   })
 })
 
+// ─── Database replica pool config (#887) ─────────────────────────────────────
+
+describe('validateConfig – database replica pool', () => {
+  it('falls back replicaPool.max to DB_POOL_MAX when DB_REPLICA_POOL_MAX is unset', () => {
+    const config = validateConfig(validEnv({ DB_POOL_MAX: '35' }))
+    expect(config.db.replicaPool.max).toBe(35)
+  })
+
+  it('uses DB_REPLICA_POOL_MAX when explicitly set, independent of DB_POOL_MAX', () => {
+    const config = validateConfig(validEnv({ DB_POOL_MAX: '20', DB_REPLICA_POOL_MAX: '8' }))
+    expect(config.db.pool.max).toBe(20)
+    expect(config.db.replicaPool.max).toBe(8)
+  })
+
+  it('rejects a DB_REPLICA_POOL_MAX outside the 1-200 range (failure mode)', () => {
+    expect(() => validateConfig(validEnv({ DB_REPLICA_POOL_MAX: '0' }))).toThrow(ConfigValidationError)
+    expect(() => validateConfig(validEnv({ DB_REPLICA_POOL_MAX: '500' }))).toThrow(ConfigValidationError)
+  })
+
+  it('defaults maxReplicaLagMs to 1000ms when MAX_REPLICA_LAG_MS is unset', () => {
+    const config = validateConfig(validEnv())
+    expect(config.db.maxReplicaLagMs).toBe(1000)
+  })
+
+  it('honors an explicit MAX_REPLICA_LAG_MS override', () => {
+    const config = validateConfig(validEnv({ MAX_REPLICA_LAG_MS: '2500' }))
+    expect(config.db.maxReplicaLagMs).toBe(2500)
+  })
+})
+
 // ─── ConfigValidationError ───────────────────────────────────────────────────
 
 describe('ConfigValidationError', () => {
@@ -292,5 +339,38 @@ describe('envSchema', () => {
   it('is exported and usable directly', () => {
     const result = envSchema.safeParse(validEnv())
     expect(result.success).toBe(true)
+  })
+})
+
+// ─── Bond / attestation cache TTL ────────────────────────────────────────────
+
+describe('validateConfig – bond/attestation cache TTL', () => {
+  it('defaults bondCache.ttl and attestationCache.ttl to 300 seconds', () => {
+    const config = validateConfig(validEnv())
+
+    expect(config.bondCache.ttl).toBe(300)
+    expect(config.attestationCache.ttl).toBe(300)
+  })
+
+  it('applies BOND_CACHE_TTL_SECONDS and ATTESTATION_CACHE_TTL_SECONDS overrides', () => {
+    const config = validateConfig(validEnv({
+      BOND_CACHE_TTL_SECONDS: '900',
+      ATTESTATION_CACHE_TTL_SECONDS: '120',
+    }))
+
+    expect(config.bondCache.ttl).toBe(900)
+    expect(config.attestationCache.ttl).toBe(120)
+  })
+
+  it('rejects a non-numeric BOND_CACHE_TTL_SECONDS', () => {
+    expect(() =>
+      validateConfig(validEnv({ BOND_CACHE_TTL_SECONDS: 'not-a-number' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects an out-of-range ATTESTATION_CACHE_TTL_SECONDS', () => {
+    expect(() =>
+      validateConfig(validEnv({ ATTESTATION_CACHE_TTL_SECONDS: '999999' })),
+    ).toThrow(ConfigValidationError)
   })
 })

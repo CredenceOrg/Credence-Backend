@@ -307,6 +307,7 @@ alertmanager_notifications_total{receiver="..."}
 
 ## Related Documentation
 
+- [docs/alert-routing-pipeline.md](./alert-routing-pipeline.md) - End-to-end pipeline walkthrough for contributors adding or modifying alert rules
 - [docs/sla-metrics.md](./sla-metrics.md) - SLO targets and metrics
 - [docs/monitoring.md](./monitoring.md) - Prometheus/Grafana setup
 - [docs/observability.md](./observability.md) - Logging and tracing

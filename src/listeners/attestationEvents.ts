@@ -17,6 +17,8 @@
 
 import type { Attestation, CreateAttestationParams } from '../types/attestation.js'
 import type { IdempotencyGuard } from '../lib/idempotencyGuard.js'
+import { attestationEventSchema } from '../schemas/queue.js'
+import { validateMessage } from './messageValidator.js'
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Public types
@@ -70,6 +72,11 @@ export interface AttestationListenerConfig {
   lastCursor?: string
   /** Optional idempotency guard for preventing duplicate processing. */
   idempotencyGuard?: IdempotencyGuard
+  /** Durable checkpoint store. The cursor advances only after event processing succeeds. */
+  cursorRepository?: {
+    findByStreamName: (streamName: string) => Promise<{ pagingToken: string } | null>
+    upsert: (input: { streamName: string; pagingToken: string }) => Promise<unknown>
+  }
 }
 
 /** Runtime statistics exposed by `getStats()`. */
@@ -117,6 +124,7 @@ export class AttestationEventListener {
   private lastCursor: string
   private readonly pollingInterval: number
   private readonly idempotencyGuard?: IdempotencyGuard
+  private readonly cursorRepository?: AttestationListenerConfig['cursorRepository']
 
   // Stats
   private eventsProcessed = 0
@@ -142,6 +150,7 @@ export class AttestationEventListener {
     this.pollingInterval = config.pollingInterval ?? 5_000
     this.lastCursor = config.lastCursor ?? 'now'
     this.idempotencyGuard = config.idempotencyGuard
+    this.cursorRepository = config.cursorRepository
   }
 
   // ── Lifecycle ────────────────────────────────────────────────────────
@@ -149,6 +158,10 @@ export class AttestationEventListener {
   /** Start polling for attestation events. */
   async start(): Promise<void> {
     if (this.isRunning) return
+    if (this.cursorRepository) {
+      const saved = await this.cursorRepository.findByStreamName('attestation')
+      if (saved) this.lastCursor = saved.pagingToken
+    }
     this.isRunning = true
     await this.poll()
   }
@@ -179,8 +192,22 @@ export class AttestationEventListener {
 
       for (const event of events) {
         try {
+          const validation = validateMessage(attestationEventSchema, event)
+          if (!validation.valid) {
+            this.errors += 1
+            await this.replayService.captureFailure(
+              'attestation',
+              event,
+              `[${validation.reasonCode}] ${validation.detail}`,
+            )
+            continue
+          }
+
           const affected = await this.processEvent(event)
           if (affected) affectedAddresses.add(affected)
+          if (this.cursorRepository) {
+            await this.cursorRepository.upsert({ streamName: 'attestation', pagingToken: event.pagingToken })
+          }
           this.lastCursor = event.pagingToken
         } catch (error: any) {
           this.errors += 1

@@ -59,6 +59,11 @@ export class IdempotencyRepository {
   }
 
   async save(input: CreateIdempotencyInput): Promise<void> {
+    if (input.responseCode >= 400) {
+      await this.delete(input.key)
+      return
+    }
+
     const ttlSeconds = input.expiresInSeconds ?? input.ttlSeconds
     const expiresAt = new Date(Date.now() + ttlSeconds * 1000)
 
@@ -86,6 +91,16 @@ export class IdempotencyRepository {
         input.ttlSeconds,
         expiresAt,
       ]
+    )
+  }
+
+  async delete(key: string): Promise<void> {
+    await this.db.query(
+      `
+      DELETE FROM idempotency_keys
+      WHERE key = $1
+      `,
+      [key]
     )
   }
 

@@ -104,22 +104,22 @@ export class MemberRepository {
   ): Promise<{ members: Member[]; total: number }> {
     const deleteFilter = includeDeleted ? '' : 'AND deleted_at IS NULL'
 
-    const countResult = await this.pool.query(
-      `SELECT COUNT(*) FROM org_members
-        WHERE org_id = $1 ${deleteFilter}`,
-      [orgId],
-    )
-    const total = parseInt(countResult.rows[0].count, 10)
-
     const { rows } = await this.pool.query(
-      `SELECT * FROM org_members
+      `SELECT *, COUNT(*) OVER() AS total_count
+        FROM org_members
         WHERE org_id = $1 ${deleteFilter}
         ORDER BY created_at ASC
         LIMIT $2 OFFSET $3`,
       [orgId, limit, offset],
     )
 
-    return { members: rows.map(rowToMember), total }
+    const total = rows.length > 0 ? parseInt(rows[0].total_count, 10) : 0
+    const members = rows.map((r) => {
+      const { total_count: _tc, ...memberRow } = r
+      return rowToMember(memberRow)
+    })
+
+    return { members, total }
   }
 
   /**
@@ -176,6 +176,29 @@ export class MemberRepository {
       [id, deletedBy],
     )
     return rows.length ? rowToMember(rows[0]) : null
+  }
+
+  /**
+   * Count active members holding the `owner` role in a given organisation.
+   *
+   * Used by the service to enforce the last-owner guard: soft-deleting or
+   * demoting the last owner would leave the org with no one authorised to
+   * perform administrative actions, so the service blocks such transitions
+   * before applying them. Returns the exact count; no LIMIT because COUNT(*)
+   * over a filtered set is already aggregated to one row and a LIMIT on the
+   * outer query would be dead, while a future maintainer re-shaping the
+   * query for a different scan would risk silent undercount.
+   */
+  async countActiveOwners(orgId: string): Promise<number> {
+    const { rows } = await this.pool.query<{ count: string | number }>(
+      `SELECT COUNT(*)::int AS count
+         FROM org_members
+        WHERE org_id = $1
+          AND role = 'owner'
+          AND deleted_at IS NULL`,
+      [orgId],
+    )
+    return Number(rows[0]?.count ?? 0)
   }
 
   /**

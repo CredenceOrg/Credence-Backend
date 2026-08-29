@@ -10,6 +10,28 @@ export interface IdempotencyOptions {
   expiresInSeconds?: number
 }
 
+// A request can finish after Express has returned from the middleware. Keeping
+// the lock until the response has been persisted closes the check-then-save
+// window for concurrent retries handled by this process. The database record
+// remains the durable source of truth across processes and restarts.
+const inFlightKeys = new Map<string, Promise<void>>()
+
+export async function waitForInFlight(key: string): Promise<() => void> {
+  const previous = inFlightKeys.get(key)
+  if (previous) await previous
+
+  let release!: () => void
+  const current = new Promise<void>((resolve) => { release = resolve })
+  inFlightKeys.set(key, current)
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    if (inFlightKeys.get(key) === current) inFlightKeys.delete(key)
+    release()
+  }
+}
+
 /**
  * Extract the actor ID from the request.
  * 
@@ -104,11 +126,16 @@ export function idempotencyMiddleware(
       return next()
     }
 
+    let release: (() => void) | undefined
     try {
       const actorId = extractActorId(req)
       const payloadHash = computeRequestHash(req.body)
       const boundKeyHash = computeBoundKeyHash(actorId, payloadHash)
-      
+
+      // Serialize identical-key requests until the first response has been
+      // durably saved. A second worker still converges through findByKey.
+      release = await waitForInFlight(key)
+      res.once('close', release)
       const existing = await repo.findByKey(key)
 
       if (existing) {
@@ -122,18 +149,17 @@ export function idempotencyMiddleware(
             'Idempotency key is already bound to a different actor or payload',
             ErrorCode.IDEMPOTENCY_KEY_MISMATCH
           )
-          return res.status(mismatchError.status).json(mismatchError.toJSON())
+          const response = res.status(mismatchError.status).json(mismatchError.toJSON())
+          release()
+          release = undefined
+          return response
         }
 
         // Actor and payload match - safe to replay the stored response
-        if (existing.responseHeaders) {
-          Object.entries(existing.responseHeaders).forEach(([name, value]) => {
-            if (value !== undefined && value !== null) {
-              res.setHeader(name, value as any);
-            }
-          });
-        }
-        return res.status(existing.responseCode).json(existing.responseBody)
+        const response = res.status(existing.responseCode).json(existing.responseBody)
+        release()
+        release = undefined
+        return response
       }
 
       // Intercept the response to persist it
@@ -142,8 +168,10 @@ export function idempotencyMiddleware(
       res.json = (body: any) => {
         // Only persist successful or client-side errors (not transient 5xx)
         if (res.statusCode < 500) {
-          // Fire and forget the save operation to avoid blocking the response
-          repo.save({
+          // Save before releasing the per-process lock. The HTTP response is
+          // still returned immediately, while a concurrent retry waits for the
+          // durable record rather than executing the payout again.
+          const savePromise = repo.save({
             key,
             actorId,
             requestHash: payloadHash,
@@ -152,16 +180,17 @@ export function idempotencyMiddleware(
             responseHeaders: res.getHeaders(),
             ttlSeconds,
             expiresInSeconds: ttlSeconds,
-          }).catch((err) => {
-            console.error(`[Idempotency] Failed to save key ${key}:`, err)
-          })
+          }).catch((err) => console.error(`[Idempotency] Failed to save key ${key}:`, err))
+          savePromise.finally(release).catch(() => undefined)
+        } else {
+          release()
         }
-        
         return originalJson(body)
       }
 
       next()
     } catch (error) {
+      release?.()
       console.error('[Idempotency] Middleware error:', error)
       next(error)
     }

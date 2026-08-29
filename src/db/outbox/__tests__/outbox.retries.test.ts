@@ -110,7 +110,9 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
             span_id TEXT,
             tracestate TEXT,
             shard_count INTEGER,
-            shard_id INTEGER
+            shard_id INTEGER,
+            correlation_id TEXT,
+            publish_idempotency_key TEXT
         );
     `)
 
@@ -136,13 +138,13 @@ describe('Outbox bounded retries and backoff', () => {
 
     it('transitions to dead_letter exactly at max retries', async () => {
         const insert = await pool.query(
-            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, created_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,NOW()) RETURNING id`,
+                `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,'consumer',NOW()) RETURNING id`,
             ['agg', '1', 't', JSON.stringify({ a: 1 }), 'processing', 4, 5]
         )
         const id = BigInt(insert.rows[0].id)
 
-        const result = await repo.markFailed(pool, id, 'SOME_ERROR')
+        const result = await repo.markFailed(pool, id, 'SOME_ERROR', 'consumer')
         expect(result.status).toBe('dead_letter')
         expect(result.retryCount).toBe(5)
 
@@ -199,5 +201,115 @@ describe('Outbox bounded retries and backoff', () => {
         const events = await repo.claimEvents(pool, consumerId, 10, 60)
         // Should skip t1 and return t2 then t3 preserving order
         expect(events.map(e => e.id)).toEqual([BigInt(t2.rows[0].id), BigInt(t3.rows[0].id)])
+    })
+
+    it('caps the backoff delay at 3600s even when 2^retryCount would be far larger', async () => {
+        const insert = await pool.query(
+              `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,'consumer',NOW()) RETURNING id`,
+            ['agg', 'cap2', 't', JSON.stringify({}), 'processing', 15, 20]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const before = Date.now()
+        await repo.markFailed(pool, id, 'timeout', 'consumer')
+
+        const check = await pool.query('SELECT next_attempt_at FROM event_outbox WHERE id = $1', [id.toString()])
+        const nextAttemptAt = new Date(check.rows[0].next_attempt_at).getTime()
+        const deltaSeconds = (nextAttemptAt - before) / 1000
+
+        // Uncapped this would be 2^16 = 65536s (~18 hours); capped it must stay near 3600s.
+        expect(deltaSeconds).toBeGreaterThan(3000)
+        expect(deltaSeconds).toBeLessThanOrEqual(3600 + 5)
+    })
+
+    it('sanitizes the error message before persisting it (truncation + secret redaction)', async () => {
+        const insert = await pool.query(
+              `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,'consumer',NOW()) RETURNING id`,
+            ['agg', 'sanitize', 't', JSON.stringify({}), 'processing', 0, 5]
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const seed = 'S' + 'A'.repeat(55)
+        await repo.markFailed(pool, id, `webhook rejected signer ${seed}`, 'consumer')
+
+        const check = await pool.query('SELECT error_message FROM event_outbox WHERE id = $1', [id.toString()])
+        expect(check.rows[0].error_message).not.toContain(seed)
+        expect(check.rows[0].error_message).toContain('[REDACTED]')
+    })
+})
+
+describe('Outbox lifecycle transition invariants', () => {
+    let pool: Pool
+    let repo: OutboxRepository
+
+    beforeEach(async () => {
+        const built = await buildTestDb()
+        pool = built.pool
+        repo = new OutboxRepository()
+    })
+
+    afterEach(async () => {
+        await pool.end()
+    })
+
+    it('allows each legal edge and rejects stale, repeated, skipped, and out-of-order edges', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries)
+             VALUES ('agg', 'legal', 't', '{}', 'pending', 2)`
+        )
+        const [claimed] = await repo.claimEvents(pool, 'owner-a', 1, 60)
+
+        expect(await repo.trySetPublishIdempotencyKey(pool, claimed.id, 'key', 'owner-a')).toBe(true)
+        await repo.markPublished(pool, claimed.id, 'owner-a')
+
+        await expect(repo.markPublished(pool, claimed.id, 'owner-a')).rejects.toThrow('cannot transition')
+        await expect(repo.markFailed(pool, claimed.id, 'late', 'owner-a')).rejects.toThrow('cannot transition')
+
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status)
+             VALUES ('agg', 'stale', 't', '{}', 'processing')`
+        )
+        const stale = await pool.query<{ id: string }>(
+            `SELECT id FROM event_outbox WHERE aggregate_id = 'stale'`
+        )
+        await expect(repo.markPublished(pool, BigInt(stale.rows[0].id), 'owner-a')).rejects.toThrow('cannot transition')
+
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status)
+             VALUES ('agg', 'skipped', 't', '{}', 'pending')`
+        )
+        const skipped = await pool.query<{ id: string }>(
+            `SELECT id FROM event_outbox WHERE aggregate_id = 'skipped'`
+        )
+        expect(await repo.trySetPublishIdempotencyKey(pool, BigInt(skipped.rows[0].id), 'key', 'owner-a')).toBe(false)
+        await expect(repo.markFailed(pool, BigInt(skipped.rows[0].id), 'early', 'owner-a')).rejects.toThrow('cannot transition')
+
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status)
+             VALUES ('agg', 'terminal', 't', '{}', 'dead_letter')`
+        )
+        const terminal = await pool.query<{ id: string }>(
+            `SELECT id FROM event_outbox WHERE aggregate_id = 'terminal'`
+        )
+        await expect(repo.markFailed(pool, BigInt(terminal.rows[0].id), 'out of order', 'owner-a')).rejects.toThrow('cannot transition')
+    })
+
+    it('rejects a stale owner without changing the processing row', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id)
+             VALUES ('agg', 'wrong-owner', 't', '{}', 'processing', 'owner-b')`
+        )
+        const row = await pool.query<{ id: string }>(
+            `SELECT id FROM event_outbox WHERE aggregate_id = 'wrong-owner'`
+        )
+
+        await expect(repo.markFailed(pool, BigInt(row.rows[0].id), 'stale', 'owner-a')).rejects.toThrow('cannot transition')
+        const unchanged = await pool.query<{ status: string; retry_count: number }>(
+            `SELECT status, retry_count FROM event_outbox WHERE id = $1`,
+            [row.rows[0].id]
+        )
+        expect(unchanged.rows[0]).toMatchObject({ status: 'processing', retry_count: 0 })
     })
 })

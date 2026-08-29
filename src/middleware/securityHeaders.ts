@@ -7,31 +7,34 @@ import { Request, Response, NextFunction } from 'express'
  * 
  * Features:
  * - Content Security Policy with no unsafe-inline
- * - HSTS (HTTP Strict Transport Security) with preload in production
+ * - HSTS (HTTP Strict Transport Security) with preload enabled
  * - Referrer Policy
  * - Cross-Origin Resource Policy
  * - Per-route override capability via res.locals
  */
-const getSecurityHeadersMiddleware = () => helmet({
-  contentSecurityPolicy: {
-    directives: {
-      defaultSrc: ["'self'"],
-      scriptSrc: ["'self'"],
-      styleSrc: ["'self'"],
-      imgSrc: ["'self'", "data:", "https:"],
-      connectSrc: ["'self'"],
-      fontSrc: ["'self'"],
-      objectSrc: ["'none'"],
-      mediaSrc: ["'self'"],
-      frameSrc: ["'none'"],
-      // Block unsafe-inline and unsafe-eval
-      scriptSrcAttr: ["'none'"],
+const getSecurityHeadersMiddleware = () => {
+  const isProd = process.env.NODE_ENV === 'production'
+  return helmet({
+    contentSecurityPolicy: {
+      reportOnly: isProd,
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'"],
+        imgSrc: ["'self'", "data:", "https:"],
+        connectSrc: ["'self'"],
+        fontSrc: ["'self'"],
+        objectSrc: ["'none'"],
+        mediaSrc: ["'self'"],
+        frameSrc: ["'none'"],
+        scriptSrcAttr: ["'none'"],
+        ...(isProd ? { reportUri: ['/csp-report'] } : {}),
+      },
     },
-  },
   hsts: {
     maxAge: 31536000, // 1 year
     includeSubDomains: true,
-    preload: process.env.NODE_ENV === 'production',
+    preload: true,
   },
   referrerPolicy: {
     policy: 'strict-origin-when-cross-origin',
@@ -49,7 +52,8 @@ const getSecurityHeadersMiddleware = () => helmet({
   noSniff: true,
   permittedCrossDomainPolicies: false,
   xssFilter: false, // Deprecated in favor of CSP
-})
+  })
+}
 
 let cachedMiddleware: any = null
 let lastEnv: string | undefined = undefined
@@ -104,7 +108,9 @@ export const securityHeadersWithOverride = (
   if (overrides.contentSecurityPolicy !== undefined) {
     helmetConfig.contentSecurityPolicy = overrides.contentSecurityPolicy
   } else {
+    const isProd = process.env.NODE_ENV === 'production'
     helmetConfig.contentSecurityPolicy = {
+      reportOnly: isProd,
       directives: {
         defaultSrc: ["'self'"],
         scriptSrc: ["'self'"],
@@ -116,6 +122,7 @@ export const securityHeadersWithOverride = (
         mediaSrc: ["'self'"],
         frameSrc: ["'none'"],
         scriptSrcAttr: ["'none'"],
+        ...(isProd ? { reportUri: ['/csp-report'] } : {}),
       },
     }
   }
@@ -126,7 +133,7 @@ export const securityHeadersWithOverride = (
     helmetConfig.hsts = {
       maxAge: 31536000,
       includeSubDomains: true,
-      preload: process.env.NODE_ENV === 'production',
+      preload: true,
     }
   }
 

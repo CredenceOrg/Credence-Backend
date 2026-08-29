@@ -50,6 +50,21 @@ registry.registerPath({
 
 registry.registerPath({
   method: 'get',
+  path: '/api/version',
+  summary: 'Build version',
+  description:
+    "Returns the running build's git SHA, build timestamp, and Node version, so support/on-call can confirm which build is deployed.",
+  tags: ['Health'],
+  responses: {
+    200: {
+      description: 'Version metadata',
+      content: { 'application/json': { schema: schemas.versionResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
   path: '/.well-known/jwks.json',
   summary: 'JWKS',
   description: 'JSON Web Key Set for verifying JWT signatures.',
@@ -59,6 +74,28 @@ registry.registerPath({
       description: 'JWKS returned',
       content: { 'application/json': { schema: z.record(z.any()) } },
     },
+  },
+});
+
+// Fault-injection (dev-only, behind DEV_MODE flag)
+registry.registerPath({
+  method: 'post',
+  path: '/api/dev/fault-injection',
+  summary: 'Fault injection',
+  description:
+    'Returns a configurable HTTP error (default 500) with a structured JSON body. ' +
+    'Only available when DEV_MODE is enabled (404 otherwise). Intended for chaos / retry testing.',
+  tags: ['Dev'],
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.faultInjectionRequestSchema } },
+    },
+  },
+  responses: {
+    200: { description: 'Simulated fault response', content: { 'application/json': { schema: schemas.faultInjectionResponseSchema } } },
+    400: { description: 'Validation error (invalid statusCode or message too long)', content: { 'application/json': { schema: z.object({ error: z.string(), details: z.array(z.any()) }) } } },
+    404: { description: 'DEV_MODE is disabled', content: { 'application/json': { schema: z.object({ error: z.string() }) } } },
   },
 });
 
@@ -727,14 +764,234 @@ registry.registerPath({
       description: 'Missing or invalid bearer token',
       content: { 'application/json': { schema: schemas.flagErrorResponseSchema } },
     },
+  },
+});
+
+// Admin Migrations API
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/migrations/dry-run',
+  summary: 'Migration dry-run (GET)',
+  description: 'Previews the SQL statements that would be executed by the next pending database migration up.',
+  tags: ['Admin Migrations'],
+  security: bearerAuth,
+  request: {
+    query: schemas.migrationsDryRunQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'Dry run completed successfully with pending SQL statements',
+      content: { 'application/json': { schema: schemas.migrationsDryRunResponseSchema } },
+    },
+    400: {
+      description: 'Migration dry run failed',
+      content: { 'application/json': { schema: z.object({ success: z.literal(false), error: z.string(), message: z.string() }) } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/migrations/dry-run',
+  summary: 'Migration dry-run (POST)',
+  description: 'Previews the SQL statements that would be executed by the next pending database migration up.',
+  tags: ['Admin Migrations'],
+  security: bearerAuth,
+  request: {
+    body: {
+      required: false,
+      content: { 'application/json': { schema: schemas.migrationsDryRunBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Dry run completed successfully with pending SQL statements',
+      content: { 'application/json': { schema: schemas.migrationsDryRunResponseSchema } },
+    },
+    400: {
+      description: 'Migration dry run failed',
+      content: { 'application/json': { schema: z.object({ success: z.literal(false), error: z.string(), message: z.string() }) } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
+// Admin Replay Event API
+registry.registerPath({
+  method: 'post',
+  path: '/api/admin/replay-event',
+  summary: 'Replay a failed inbound event',
+  description:
+    'Replays a specific failed inbound event by id (passed in body) to its registered handler pipeline. Audit-logged via ReplayService.replayEvent.',
+  tags: ['Admin'],
+  security: bearerAuth,
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.replayEventBodySchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'Event replayed successfully',
+      content: {
+        'application/json': {
+          schema: z.object({
+            success: z.boolean().openapi({ example: true }),
+            message: z.string().openapi({ example: 'Event successfully replayed' }),
+          }),
+        },
+      },
+    },
+    400: {
+      description: 'Validation error',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
     404: {
-      description: 'Per-tenant rollout not found',
-      content: { 'application/json': { schema: schemas.flagErrorResponseSchema } },
+      description: 'Event not found',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
+// Admin System API
+registry.registerPath({
+  method: 'get',
+  path: '/api/admin/system/backup-status',
+  summary: 'System Backup Status',
+  description: 'Returns the status of the continuous WAL archiving backup job.',
+  tags: ['Admin System'],
+  security: bearerAuth,
+  responses: {
+    200: {
+      description: 'Backup status returned successfully',
+      content: { 'application/json': { schema: schemas.backupStatusResponseSchema } },
+    },
+    401: {
+      description: 'Missing or invalid bearer token',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+    403: {
+      description: 'Forbidden - Requires admin role',
+      content: { 'application/json': { schema: z.object({ error: z.string(), message: z.string() }) } },
+    },
+  },
+});
+
+// Reports paths
+registry.registerPath({
+  method: 'post',
+  path: '/api/reports',
+  summary: 'Start a report generation job',
+  description: 'Queues an asynchronous report generation job for the given report type. Returns job metadata immediately.',
+  tags: ['Reports'],
+  request: {
+    body: {
+      required: true,
+      content: { 'application/json': { schema: schemas.createReportBodySchema } },
+    },
+  },
+  responses: {
+    202: {
+      description: 'Report job queued',
+      content: {
+        'application/json': {
+          schema: z.object({ jobId: z.string(), status: z.string(), type: z.string(), createdAt: z.string() }),
+        },
+      },
+    },
+    400: {
+      description: 'Validation error (invalid or missing report type)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), details: z.array(z.any()) }) } },
+    },
+    429: {
+      description: 'Rate limit exceeded (maximum concurrent jobs per org)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/top-talkers',
+  summary: 'Top talkers report',
+  description: 'Returns the top N tenants by request count in the aggregate window.',
+  tags: ['Reports'],
+  request: { query: schemas.topTalkersQuerySchema },
+  responses: {
+    200: {
+      description: 'Top talkers data',
+      content: { 'application/json': { schema: schemas.topTalkersResponseSchema } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/{jobId}',
+  summary: 'Get report job status',
+  description: 'Returns the status and artifact URL of a report generation job.',
+  tags: ['Reports'],
+  request: { params: schemas.reportJobParamsSchema },
+  responses: {
+    200: {
+      description: 'Report job status',
+      content: {
+        'application/json': {
+          schema: z.object({ jobId: z.string(), status: z.string(), type: z.string(), artifactUrl: z.string().optional(), failureReason: z.string().optional(), createdAt: z.string(), updatedAt: z.string() }),
+        },
+      },
+    },
+    404: {
+      description: 'Report job not found',
+      content: { 'application/json': { schema: z.object({ error: z.string() }) } },
+    },
+  },
+});
+
+registry.registerPath({
+  method: 'get',
+  path: '/api/reports/download/{key}',
+  summary: 'Download a report artifact',
+  description: 'Serves the report artifact using a signed URL with expires and signature query parameters.',
+  tags: ['Reports'],
+  request: {
+    params: z.object({ key: z.string().min(1) }),
+    query: z.object({ expires: z.string().min(1), signature: z.string().min(1) }),
+  },
+  responses: {
+    200: {
+      description: 'Report artifact (PDF)',
+      content: { 'application/pdf': { schema: z.any() } },
+    },
+    400: {
+      description: 'Missing required query parameters (expires or signature)',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
+    },
+    401: {
+      description: 'Invalid or expired signed URL',
+      content: { 'application/json': { schema: z.object({ error: z.string(), code: z.string() }) } },
     },
   },
 });
 
 const generator = new OpenApiGeneratorV3(registry.definitions);
+
 const document = generator.generateDocument({
   openapi: '3.0.0',
   info: { version: '1.0.0', title: 'Credence API', description: 'Generated OpenAPI documentation from Zod schemas' },

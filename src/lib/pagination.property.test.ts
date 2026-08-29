@@ -21,10 +21,12 @@ import {
   DEFAULT_LIMIT,
   MAX_LIMIT,
   PaginationValidationError,
+  buildLinkHeader,
   decodeCursor,
   encodeCursor,
   parsePaginationParams,
 } from './pagination.js'
+
 
 const SEED = 0xc0ffee
 
@@ -223,3 +225,48 @@ describe('limit clamping: parsed limit always in [DEFAULT_LIMIT, MAX_LIMIT]', ()
     )
   })
 })
+
+// ---------------------------------------------------------------------------
+// 5. Link Header Pagination Invariants
+// ---------------------------------------------------------------------------
+
+describe('Link Header Pagination Invariants (RFC 5988)', () => {
+  it('first_page_has_no_prev_and_last_page_has_no_next', () => {
+    fc.assert(
+      fc.property(
+        fc.integer({ min: 1, max: 200 }),
+        fc.integer({ min: 1, max: MAX_LIMIT }),
+        fc.integer({ min: 1, max: 10000 }),
+        (page, limit, total) => {
+          const lastPage = Math.max(1, Math.ceil(total / limit))
+          const actualPage = Math.min(page, lastPage)
+          const header = buildLinkHeader({ baseUrl: '/api/test', page: actualPage, limit, total })
+
+          expect(header).not.toBeNull()
+
+          // Invariant 1: First page (page 1) MUST NOT contain prev link
+          if (actualPage === 1) {
+            expect(header).not.toContain('rel="prev"')
+          }
+
+          // Invariant 2: Last page MUST NOT contain next link
+          if (actualPage === lastPage) {
+            expect(header).not.toContain('rel="next"')
+          }
+
+          // Invariant 3: If page > 1, prev link MUST be present
+          if (actualPage > 1) {
+            expect(header).toContain('rel="prev"')
+          }
+
+          // Invariant 4: If page < lastPage, next link MUST be present
+          if (actualPage < lastPage) {
+            expect(header).toContain('rel="next"')
+          }
+        },
+      ),
+      { seed: SEED },
+    )
+  })
+})
+

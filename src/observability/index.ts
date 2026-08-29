@@ -4,9 +4,13 @@
 
 export {
   normalizeRoute,
+  getRouteTemplate,
   httpRequestDurationHistogram,
   httpRequestStatusTotal,
   registerLatencyMetrics,
+  MAX_ROUTE_CARDINALITY,
+  OVERFLOW_ROUTE_LABEL,
+  _resetSeenRoutes,
 } from './latencyMetrics.js'
 
 export {
@@ -23,7 +27,7 @@ export {
   createSuccessEvent,
 } from './timeoutMetrics.js'
 
-export { registerPoolMetrics } from './poolMetrics.js'
+export { registerPoolMetrics, registerPreparedStatementCacheMetrics } from './poolMetrics.js'
 export {
   DOWNSTREAM_RPC_LATENCY_BUCKETS_MS,
   downstreamRpcLatencyHistogram,
@@ -35,8 +39,11 @@ export {
   incrementOutboxPublished,
   incrementOutboxFailed,
   setOutboxPendingGauge,
+  setOutboxLifecycleGauges,
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
+  incrementOutboxLeaderAcquired,
+  incrementOutboxLeaderLost,
 } from './outboxMetrics.js'
 
 export {
@@ -44,5 +51,7 @@ export {
   syntheticProbeFailureTotal,
   dbTxnDurationSeconds,
   dbTxnSavepoints,
+  dbSlowQueriesTotal,
+  dbSlowQueryDurationSeconds,
   registerSyntheticMetrics,
 } from './customMetrics.js'

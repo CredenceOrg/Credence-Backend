@@ -12,3 +12,11 @@ export type {
   SlashEvent,
   CreateSlashEventInput,
 } from "./slashEvents.repository.js";
+
+export { BatchPayoutRepository } from "./batchPayout.repository.js";
+export { SettlementsRepository } from "../db/repositories/settlementsRepository.js";
+export type { Settlement, CreateSettlementInput, UpsertSettlementResult } from "../db/repositories/settlementsRepository.js";
+export { PayoutsRepository } from "../db/repositories/payoutsRepository.js";
+export type { Payout, CreatePayoutInput } from "../db/repositories/payoutsRepository.js";
+export { WebhookDlqRepository } from "./webhookDlqRepository.js";
+export type { ReplayAuditRow, RecordReplayInput, ListDlqOptions } from "./webhookDlqRepository.js";

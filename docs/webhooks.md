@@ -80,6 +80,8 @@ if (signature !== request.headers["x-webhook-signature"]) {
 }
 ```
 
+For full operator guidance on signature verification, replay window tolerances, 24-hour secret rotation grace periods, Express middleware usage, and failure troubleshooting, see **[WEBHOOK_SIGNING.md](WEBHOOK_SIGNING.md)**.
+
 ## Mutual TLS (mTLS) Support
 
 For enterprise subscribers requiring mutual TLS authentication, webhooks can be configured with client certificates and server certificate pinning.
@@ -236,3 +238,4 @@ Key metrics for webhook delivery:
 - `webhook_mtls_failure_total` - Count of mTLS-specific failures (with `subscriber` and `reason` labels)
 - `webhook_dlq_size` - Current size of the dead letter queue
 - `webhook_payload_bytes` - Histogram of webhook payload sizes in bytes (with `subscriber` label)
+- `webhook_queued_oldest_age_seconds` / `webhook_delivery_outcome_total` - Compact operator summary for queue lag and success rate (see [WEBHOOK_LAG_DASHBOARD.md](WEBHOOK_LAG_DASHBOARD.md))

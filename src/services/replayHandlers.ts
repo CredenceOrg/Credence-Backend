@@ -1,6 +1,7 @@
 import { ReplayHandler, ReplayService } from './replayService.js'
 import { IdentityRepository } from '../db/repositories/identityRepository.js'
 import { BondsRepository } from '../db/repositories/bondsRepository.js'
+import { replaySafeHandler } from '../lib/replaySafe.js'
 
 /**
  * Handler for bond creation events.
@@ -60,13 +61,14 @@ export function registerAllReplayHandlers(
   attestationProcessor?: any,
   withdrawalProcessor?: any
 ): void {
-  replayService.registerHandler('bond_creation', new BondCreationReplayHandler(identityRepo, bondsRepo))
+  replayService.registerHandler('bond_creation', replaySafeHandler(new BondCreationReplayHandler(identityRepo, bondsRepo)))
   
   if (attestationProcessor) {
-    replayService.registerHandler('attestation', new AttestationReplayHandler(attestationProcessor))
+    replayService.registerHandler('attestation', replaySafeHandler(new AttestationReplayHandler(attestationProcessor)))
   }
   
   if (withdrawalProcessor) {
-    replayService.registerHandler('withdrawal', new WithdrawalReplayHandler(withdrawalProcessor))
+    replayService.registerHandler('withdrawal', replaySafeHandler(new WithdrawalReplayHandler(withdrawalProcessor)))
   }
 }
+

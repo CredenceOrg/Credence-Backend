@@ -65,6 +65,9 @@ docker-compose -f docker-compose.test.yml exec test-db pg_isready
 # Run tests
 TEST_DATABASE_URL=postgresql://credence:credence@localhost:5433/credence_test npm test
 
+# Drop, recreate, and re-migrate the test database (requires test-db running)
+npm run test:db:reset
+
 # Stop when done
 docker-compose -f docker-compose.test.yml down
 ```

@@ -5,6 +5,18 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('../../db/pool.js', () => ({
+  pool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  workerPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  replicaPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
+  withReplica: vi.fn(),
+  // reputationService imports middleware/metrics, which registers gauges over
+  // these caches at module load. Omitting them fails the whole suite on import.
+  apiPreparedStatementCache: new Map<string, string>(),
+  workerPreparedStatementCache: new Map<string, string>(),
+  replicaPreparedStatementCache: new Map<string, string>(),
+}))
+
 vi.mock('../../cache/redis.js', () => ({
   cache: {
     get: vi.fn(),
@@ -15,6 +27,14 @@ vi.mock('../../cache/redis.js', () => ({
 
 vi.mock('../../config/index.js', () => ({
   loadConfig: () => ({
+    db: {
+      url: 'postgres://mock:5432/test',
+      pool: { max: 10, idleTimeoutMillis: 30000, connectionTimeoutMillis: 5000, statementTimeoutMs: 30000 },
+      workerPool: { max: 5 },
+      replicaPool: { max: 10 },
+      slowQueryThresholdMs: 1000,
+      maxReplicaLagMs: 1000,
+    },
     reputation: {
       scoringModelVersion: '1.0.0',
       bondScoreMax: 50,

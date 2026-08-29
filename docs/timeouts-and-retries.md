@@ -10,6 +10,16 @@ The Credence Backend implements a layered timeout and retry strategy:
 2. **Retry Policies** (`src/lib/retryPolicy.ts`): Exponential backoff, jitter strategies, and per-provider overrides
 3. **Environment Variables** (`src/config/index.ts`): Runtime tuning without code changes
 4. **Timeout Executor** (`src/lib/timeoutExecutor.ts`): Unified wrapper for all service calls with observability
+5. **Global Request Budgets** (`src/middleware/timeoutBudget.ts` & `src/utils/timeoutContext.ts`): Enforces an absolute upper bound per-request.
+
+## Global Request Budgets
+
+Every incoming request is wrapped in an `AsyncLocalStorage` context that tracks a global deadline. The global budget limits the *total* time a request can spend executing, ensuring long-running requests fail fast.
+
+- **Environment Variable**: `TIMEOUT_GLOBAL_MS` (default: 30000)
+- **Header Override**: `x-timeout-ms` (clients can optionally request a stricter timeout, up to `TIMEOUT_GLOBAL_MS`)
+
+When a downstream call (e.g., DB query, HTTP request) is made, its specific service budget is evaluated against the *remaining* global budget. If the remaining budget is smaller than the requested service timeout, the timeout is clamped to the remaining global budget.
 
 ## Service Type Timeout Budgets
 
@@ -350,6 +360,7 @@ All timeout and retry env vars with defaults:
 
 ```bash
 # Timeout budgets (milliseconds)
+TIMEOUT_GLOBAL_MS=30000
 TIMEOUT_DB_MS=2000
 TIMEOUT_CACHE_MS=500
 TIMEOUT_QUEUE_MS=1000
@@ -376,7 +387,89 @@ OUTBOUND_RETRY_WEBHOOK_BASE_DELAY_MS=
 OUTBOUND_RETRY_WEBHOOK_MAX_DELAY_MS=
 OUTBOUND_RETRY_WEBHOOK_BACKOFF_MULTIPLIER=
 OUTBOUND_RETRY_WEBHOOK_JITTER_STRATEGY=
+
+# Pool idle-connection timeout (milliseconds)
+# Connections idle longer than this are closed and removed from the pool.
+# Prevents stale connections from accumulating and keeps pool counts predictable.
+DB_POOL_IDLE_TIMEOUT_MS=300000   # 5 minutes (default)
 ```
+
+---
+
+## Connection Pool Idle Timeout
+
+The `idleTimeoutMillis` option controls how long a connection can remain idle in
+the pool before it is automatically closed and evicted. This keeps the live
+connection count predictable and reclaims OS resources held by connections that
+are no longer needed.
+
+### Default behaviour
+
+All three pools (API, worker, replica) share the same `DB_POOL_IDLE_TIMEOUT_MS`
+value:
+
+| Pool | Purpose | Idle timeout |
+|------|---------|--------------|
+| `pool` | Route handlers and services | `DB_POOL_IDLE_TIMEOUT_MS` |
+| `workerPool` | Background jobs (outbox, exports) | `DB_POOL_IDLE_TIMEOUT_MS` |
+| `replicaPool` | Read-heavy endpoints | `DB_POOL_IDLE_TIMEOUT_MS` |
+
+The default is **300 000 ms (5 minutes)**, chosen because:
+- Short enough to reclaim connections after a traffic lull (e.g. nightly quiet
+  period or after a burst).
+- Long enough not to thrash the pool on workloads that naturally pause for tens
+  of seconds between bursts.
+
+### Tuning
+
+| Scenario | Recommendation |
+|----------|---------------|
+| Very low-traffic service | Lower to `60000` (1 min) to free connections sooner |
+| High-frequency background jobs | Raise to `600000` (10 min) to avoid reconnect overhead |
+| Connection-limit-constrained DB | Lower to reap idle connections more aggressively |
+
+```bash
+# Example: reclaim idle connections after 1 minute
+DB_POOL_IDLE_TIMEOUT_MS=60000
+
+# Example: tolerate longer idle periods for batch-heavy workloads
+DB_POOL_IDLE_TIMEOUT_MS=600000
+```
+
+### Related pool env vars
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_POOL_IDLE_TIMEOUT_MS` | `300000` | Milliseconds before an idle connection is closed |
+| `DB_POOL_MAX` | `20` | Max connections in the API / replica pool |
+| `DB_WORKER_POOL_MAX` | `5` | Max connections in the worker pool |
+| `DB_POOL_CONNECTION_TIMEOUT_MS` | `5000` | Max wait time for a free connection |
+| `DB_STATEMENT_TIMEOUT_MS` | `30000` | Per-statement timeout (kills runaway queries) |
+
+---
+
+## Long Transaction Reaper
+
+`DB_STATEMENT_TIMEOUT_MS` bounds a single statement, but it resets on every
+new statement within a transaction — it does nothing for an idle-in-transaction
+session (no statement is running) or a transaction built from many small,
+fast statements separated by slow application-level work. Either shape holds
+row/table locks and blocks autovacuum for as long as the transaction stays
+open. Waiters queue up behind the stale locks, their own connections stay
+checked out of the pool while they wait, and the pool eventually saturates —
+a hold-off cascade.
+
+`LongTransactionReaper` (`src/jobs/longTransactionReaper.ts`) closes this gap
+by periodically scanning `pg_stat_activity` and calling
+`pg_terminate_backend()` on any client backend whose transaction has been
+open longer than the configured max age.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `DB_LONG_TRANSACTION_REAPER_ENABLED` | `true` | Master on/off switch |
+| `DB_LONG_TRANSACTION_MAX_AGE_MS` | `30000` | Transactions open longer than this are terminated |
+| `DB_LONG_TRANSACTION_REAPER_INTERVAL_MS` | `10000` | How often `pg_stat_activity` is scanned |
+| `DB_LONG_TRANSACTION_REAPER_DRY_RUN` | `false` | Log/count over-age transactions without terminating them |
 
 ---
 

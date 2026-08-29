@@ -130,6 +130,27 @@ describe('KeyManager (singleton)', () => {
       expect(keys).toHaveLength(1)
     })
 
+    it('reuses the cached JWKS response while the key set is unchanged', async () => {
+      await keyManager.initialize()
+      const first = await keyManager.getPublicJwks()
+      const second = await keyManager.getPublicJwks()
+
+      expect(second).toBe(first)
+      expect(second.keys).toEqual(first.keys)
+    })
+
+    it('invalidates the cached JWKS response after rotation', async () => {
+      await keyManager.initialize()
+      const beforeRotation = await keyManager.getPublicJwks()
+
+      await keyManager.rotate()
+
+      const afterRotation = await keyManager.getPublicJwks()
+      expect(afterRotation).not.toBe(beforeRotation)
+      expect(afterRotation.keys).toHaveLength(2)
+      expect(afterRotation.keys.some((key) => key.kid === beforeRotation.keys[0].kid)).toBe(true)
+    })
+
     it('returns two entries immediately after rotation', async () => {
       await keyManager.initialize()
       await keyManager.rotate()

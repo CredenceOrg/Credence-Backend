@@ -1,16 +1,20 @@
 import {
   getBackoffDelayMs,
-  resolveProviderRetryPolicy,
   type ProviderRetryPolicies,
   type RetryPolicy,
 } from "../lib/retryPolicy.js";
+import {
+  executeWithRetry,
+  resolveExtendedProviderRetryPolicy,
+  type ExtendedRetryPolicy,
+} from "./retryExecutor.js";
 import {
   executeSorobanOperation,
   createMetricsAdapter,
   TimeoutExceededError,
 } from "../lib/timeoutExecutor.js";
 import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.js";
-import { normalizeTransportError, isAbortError } from "./httpErrors.js";
+import { normalizeTransportError } from "./httpErrors.js";
 import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
 import {
@@ -35,6 +39,8 @@ export interface SorobanClientConfig {
   rpcUrl: string;
   network: SorobanNetwork;
   contractId: string;
+  /** Maximum number of events accepted from one getEvents response. */
+  maxEventsPerPage?: number;
   timeoutMs?: number;
   retry?: Partial<RetryOptions>;
   retryPolicies?: ProviderRetryPolicies;
@@ -72,11 +78,165 @@ export interface ContractEvent {
   topic?: string[];
   value?: unknown;
   [key: string]: unknown;
+  /**
+   * Added for #1268 Horizon ingestion and reconciliation: storage and migration compatibility
+   * Preserves backward compatibility and resumes migrations observables.
+   */
+  _migrationVersion?: number;
 }
 
+/**
+ * A page of contract-scoped events together with deterministic pagination
+ * metadata.
+ *
+ * The response shape is backward compatible: `events` and `cursor` retain
+ * their historical meaning. The additional `hasNextPage`, `seq`, and `limit`
+ * fields make ordering, cursor encoding, page limits, and end-of-stream
+ * behavior explicit and reviewable.
+ */
 export interface ContractEventsPage {
   events: ContractEvent[];
+  /**
+   * Opaque next-page cursor (always `null` at end of stream). It is safe to
+   * hand this back to `getContractEvents()` to resume from exactly where this
+   * page ended.
+   */
   cursor: string | null;
+  /**
+   * `true` when a subsequent page is available (i.e. the provider returned a
+   * next cursor). `false` signals deterministic end-of-stream.
+   */
+  hasNextPage: boolean;
+  /** Monotonic page sequence (1-based) for this request. */
+  seq: number;
+  /** The page limit that was applied to this request. */
+  limit: number;
+}
+
+/**
+ * Supported version of the client-issued event cursor envelope.
+ * Bump this only on a wire-incompatible change to the encoding.
+ */
+export const SOROBAN_EVENT_CURSOR_VERSION = 1;
+
+/**
+ * Default number of events requested per page.
+ */
+export const DEFAULT_EVENTS_PAGE_LIMIT = 100;
+
+/**
+ * Hard upper bound on the number of events requested per page. Requests above
+ * this are rejected with `CONFIG_ERROR` so page sizes stay bounded and
+ * deterministic (protecting downstream RPC payload sizes).
+ */
+export const MAX_EVENTS_PAGE_LIMIT = 1000;
+
+/**
+ * Maximum byte length (as UTF-8) of the decoded cursor payload. Guards against
+ * absurdly large cursor strings reaching the RPC, and keeps cursor storage
+ * bounded.
+ */
+export const MAX_EVENT_CURSOR_PAYLOAD_BYTES = 2048;
+
+interface EventCursorPayload {
+  v: number;
+  /** Opaque server-issued cursor token. */
+  c: string;
+  /** Monotonic page sequence (1-based). */
+  seq: number;
+}
+
+/**
+ * Encodes an opaque server cursor together with a monotonic page sequence
+ * into a deterministic, versioned, base64url token.
+ *
+ * The token is self-describing (it carries the envelope version) so a stale
+ * or incompatible token can be rejected deterministically instead of being
+ * silently forwarded to the RPC with unpredictable results.
+ */
+export function encodeEventCursor(serverCursor: string, seq: number): string {
+  const payload: EventCursorPayload = {
+    v: SOROBAN_EVENT_CURSOR_VERSION,
+    c: serverCursor,
+    seq,
+  };
+  return Buffer.from(JSON.stringify(payload), "utf8").toString("base64url");
+}
+
+/**
+ * Decodes and validates a client-issued event cursor token.
+ *
+ * @param token - The encoded cursor token produced by `encodeEventCursor()`.
+ * @returns The decoded server cursor and page sequence.
+ * @throws `SorobanClientError` (code `PARSE_ERROR`) when the token is not a
+ *   valid base64url string, has an unsupported version, is malformed JSON,
+ *   carries a non-string/non-finite cursor, or exceeds the size bounds.
+ *   Rejecting invalid tokens here guarantees a malformed cursor never reaches
+ *   the RPC and never mutates state.
+ */
+export function decodeEventCursor(
+  token: string,
+): { cursor: string; seq: number } {
+  if (typeof token !== "string" || token.trim() === "" || token.trim() !== token) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: cursor must be a non-empty, non-whitespace-padded string.",
+    });
+  }
+
+  let payload: Partial<EventCursorPayload>;
+  try {
+    const raw = Buffer.from(token, "base64url").toString("utf8");
+    if (Buffer.byteLength(raw, "utf8") > MAX_EVENT_CURSOR_PAYLOAD_BYTES) {
+      throw new SorobanClientError({
+        code: "PARSE_ERROR",
+        message: `Invalid event cursor: payload exceeds ${MAX_EVENT_CURSOR_PAYLOAD_BYTES} bytes.`,
+      });
+    }
+    payload = JSON.parse(raw) as Partial<EventCursorPayload>;
+  } catch (error) {
+    if (error instanceof SorobanClientError) throw error;
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: unable to decode cursor token.",
+      cause: error,
+    });
+  }
+
+  if (payload.v !== SOROBAN_EVENT_CURSOR_VERSION) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: `Invalid event cursor: unsupported cursor version ${String(payload.v)}.`,
+    });
+  }
+
+  if (typeof payload.c !== "string" || payload.c.trim() === "") {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: missing server cursor payload.",
+    });
+  }
+
+  if (!Number.isSafeInteger(payload.seq) || (payload.seq as number) < 1) {
+    throw new SorobanClientError({
+      code: "PARSE_ERROR",
+      message: "Invalid event cursor: page sequence must be a positive integer.",
+    });
+  }
+
+  return { cursor: payload.c as string, seq: payload.seq as number };
+}
+
+/**
+ * Builds the next-page token from a server cursor and the current page
+ * sequence, or `null` when the stream has ended.
+ */
+function buildNextCursor(
+  serverCursor: string | undefined | null,
+  seq: number,
+): string | null {
+  if (!serverCursor) return null;
+  return encodeEventCursor(serverCursor, seq + 1);
 }
 
 interface SorobanRpcResponse<T> {
@@ -92,6 +252,8 @@ interface SorobanRpcResponse<T> {
 
 export interface SorobanClientDependencies {
   fetchFn?: typeof fetch;
+  /** Optional abort signal for cancelling an in-flight RPC operation. */
+  signal?: AbortSignal;
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
   retryObserver?: RetryObserver;
@@ -102,6 +264,7 @@ export interface SorobanClientDependencies {
 export class SorobanClientError extends Error {
   public readonly code:
     | "CONFIG_ERROR"
+    | "LIMIT_ERROR"
     | "NETWORK_ERROR"
     | "TIMEOUT_ERROR"
     | "HTTP_ERROR"
@@ -117,6 +280,7 @@ export class SorobanClientError extends Error {
     message: string;
     code:
       | "CONFIG_ERROR"
+      | "LIMIT_ERROR"
       | "NETWORK_ERROR"
       | "TIMEOUT_ERROR"
       | "HTTP_ERROR"
@@ -138,7 +302,7 @@ export class SorobanClientError extends Error {
   }
 }
 
-const DEFAULT_RETRY: RetryOptions = {
+const DEFAULT_RETRY: ExtendedRetryPolicy = {
   maxAttempts: 3,
   baseDelayMs: 200,
   maxDelayMs: 2_000,
@@ -150,8 +314,10 @@ export class SorobanClient {
   private readonly rpcUrl: string;
   private readonly network: SorobanNetwork;
   private readonly contractId: string;
+  private readonly maxEventsPerPage: number;
+  private readonly signal?: AbortSignal;
   private readonly timeoutMs: number;
-  private readonly retryOptions: RetryOptions;
+  private readonly retryOptions: ExtendedRetryPolicy;
   private readonly fetchFn: typeof fetch;
   private readonly sleepFn: (ms: number) => Promise<void>;
   private readonly randomFn: () => number;
@@ -175,11 +341,19 @@ export class SorobanClient {
     this.rpcUrl = config.rpcUrl;
     this.network = config.network;
     this.contractId = config.contractId;
+    this.maxEventsPerPage = config.maxEventsPerPage ?? 100;
+    if (!Number.isInteger(this.maxEventsPerPage) || this.maxEventsPerPage < 1) {
+      throw new SorobanClientError({
+        code: "CONFIG_ERROR",
+        message: "maxEventsPerPage must be a positive integer.",
+      });
+    }
+    this.signal = deps.signal;
     this.timeoutMs = resolveTimeout(
       "soroban",
       createTimeoutConfig("soroban", "SOROBAN_RPC_TIMEOUT", config.timeoutMs),
     );
-    this.retryOptions = resolveProviderRetryPolicy("soroban", DEFAULT_RETRY, {
+    this.retryOptions = resolveExtendedProviderRetryPolicy("soroban", DEFAULT_RETRY, {
       providerPolicies: config.retryPolicies,
       overrides: config.retry,
     });
@@ -253,6 +427,7 @@ export class SorobanClient {
    * live RPC calls. TTL is controlled by SOROBAN_STATE_CACHE_TTL_MS (0 = off).
    */
   async getIdentityState(address: string): Promise<unknown> {
+    this.throwIfCancelled();
     if (!address?.trim()) {
       throw new SorobanClientError({
         code: "CONFIG_ERROR",
@@ -286,23 +461,83 @@ export class SorobanClient {
   }
 
   /**
-   * Fetches contract-scoped events and returns the normalized next cursor.
+   * Fetches contract-scoped events with deterministic pagination and cursor
+   * semantics.
+   *
+   * Ordering is explicitly ascending (ledger/sequence order), page limits are
+   * bounded (`1..MAX_EVENTS_PAGE_LIMIT`, default `DEFAULT_EVENTS_PAGE_LIMIT`),
+   * and the returned `cursor` is a self-describing, validated token that can be
+   * handed back to resume from exactly where this page ended. End-of-stream is
+   * signalled deterministically via `hasNextPage` (`false` when the provider
+   * returns no next cursor).
+   *
+   * A malformed, stale, or out-of-scope cursor is rejected here (before any RPC
+   * call) with a typed `SorobanClientError` (code `PARSE_ERROR`), so an invalid
+   * request never mutates downstream state and never yields a partial result.
+   *
+   * @param cursor  - Optional next-page token returned by a previous call.
+   * @param options - Optional `limit` (page size) override.
    */
-  async getContractEvents(cursor?: string): Promise<ContractEventsPage> {
+  async getContractEvents(
+    cursor?: string,
+    options: { limit?: number } = {},
+  ): Promise<ContractEventsPage> {
+    let seq = 1;
+    let serverCursor: string | undefined;
+
+    if (cursor) {
+      const decoded = decodeEventCursor(cursor);
+      serverCursor = decoded.cursor;
+      seq = decoded.seq;
+    }
+
+    const limit = this.resolveEventsPageLimit(options.limit);
+
     const result = await this.callRpc<{
       events?: ContractEvent[];
       latestCursor?: string;
       cursor?: string;
+      order?: string;
     }>("getEvents", {
       network: this.network,
       contractIds: [this.contractId],
-      ...(cursor ? { cursor } : {}),
+      order: "asc",
+      limit,
+      ...(serverCursor ? { cursor: serverCursor } : {}),
     });
 
+    const events = result.events ?? [];
+    const nextServerCursor = result.latestCursor ?? result.cursor ?? null;
+
     return {
-      events: result.events ?? [],
-      cursor: result.latestCursor ?? result.cursor ?? null,
+      events,
+      cursor: buildNextCursor(nextServerCursor, seq),
+      hasNextPage: Boolean(nextServerCursor),
+      seq,
+      limit,
     };
+  }
+
+  /**
+   * Resolves and validates the requested page limit.
+   * Page limits are bounded so oversized RPC payloads are never requested and
+   * page sizes stay deterministic.
+   */
+  private resolveEventsPageLimit(requested?: number): number {
+    if (requested === undefined) {
+      return DEFAULT_EVENTS_PAGE_LIMIT;
+    }
+    if (
+      !Number.isInteger(requested) ||
+      requested < 1 ||
+      requested > MAX_EVENTS_PAGE_LIMIT
+    ) {
+      throw new SorobanClientError({
+        code: "CONFIG_ERROR",
+        message: `Invalid events page limit: expected an integer in [1, ${MAX_EVENTS_PAGE_LIMIT}], got ${String(requested)}.`,
+      });
+    }
+    return requested;
   }
 
   private assertConfig(config: SorobanClientConfig): void {
@@ -361,67 +596,22 @@ export class SorobanClient {
     params: Record<string, unknown>,
   ): Promise<T> {
     return breaker.execute(async () => {
-      let attempt = 0;
-      let lastError: SorobanClientError | null = null;
-      const startMs = Date.now();
-
-      while (attempt < this.retryOptions.maxAttempts) {
-        attempt += 1;
-        try {
-          const result = await this.executeRpc<T>(method, params, attempt);
-          this.retryObserver.onSuccess?.({
-            provider: "soroban",
-            attempt,
-            durationMs: Date.now() - startMs,
-          });
-          return result;
-        } catch (error) {
-          const normalized = this.normalizeError(error, attempt);
-          lastError = normalized;
-
-          const hasAttemptsRemaining = attempt < this.retryOptions.maxAttempts;
-          const shouldRetry =
-            hasAttemptsRemaining && this.isRetryable(normalized);
-
-          if (!shouldRetry) {
-            if (!hasAttemptsRemaining || !this.isRetryable(normalized)) {
-              this.retryObserver.onRetryExhausted?.({
-                provider: "soroban",
-                attempts: attempt,
-                errorCode: normalized.code,
-              });
-            }
-            throw normalized;
-          }
-
-          const delay = this.getDelayMs(attempt);
-          this.retryObserver.onRetryAttempt?.({
-            provider: "soroban",
-            attempt,
-            delayMs: delay,
-            errorCode: normalized.code,
-          });
-          logger.info(
-            `Retrying outbound request provider=soroban attempt=${attempt + 1}/${this.retryOptions.maxAttempts} delayMs=${delay} code=${normalized.code}`,
-          );
-          await this.sleepFn(delay);
+      let attemptCounter = 0;
+      return executeWithRetry<T>(
+        "soroban",
+        async () => {
+          attemptCounter += 1;
+          return this.executeRpc<T>(method, params, attemptCounter);
+        },
+        {
+          policy: this.retryOptions,
+          retryObserver: this.retryObserver,
+          sleepFn: this.sleepFn,
+          randomFn: this.randomFn,
         }
-      }
-
-      this.retryObserver.onRetryExhausted?.({
-        provider: "soroban",
-        attempts: attempt,
-        errorCode: lastError?.code ?? "NETWORK_ERROR",
+      ).catch((error) => {
+        throw this.normalizeError(error, attemptCounter);
       });
-
-      throw (
-        lastError ??
-        new SorobanClientError({
-          code: "NETWORK_ERROR",
-          message: `Unknown Soroban RPC failure after ${this.retryOptions.maxAttempts} attempts.`,
-          attempts: this.retryOptions.maxAttempts,
-        })
-      );
     });
   }
 
@@ -433,6 +623,9 @@ export class SorobanClient {
     return executeSorobanOperation(
       method,
       async (signal) => {
+        if (this.signal?.aborted) {
+          throw this.signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+        }
         const response = await this.fetchFn(this.rpcUrl, {
           method: "POST",
           headers: {
@@ -502,7 +695,7 @@ export class SorobanClient {
 
         return payload.result;
       },
-      { overrideMs: this.timeoutMs, metrics: this.metrics },
+      { overrideMs: this.retryOptions.timeoutMs ?? this.timeoutMs, metrics: this.metrics },
     );
   }
 

@@ -27,6 +27,7 @@ import {
   resolveTierLimit,
   rateLimitRejectedTotal,
   rateLimitHitsTotal,
+  getClientIp,
 } from '../rateLimit.js'
 import type { Config } from '../../config/index.js'
 import type { SubscriptionTier } from '../../services/apiKeys.js'
@@ -41,32 +42,45 @@ import type { SubscriptionTier } from '../../services/apiKeys.js'
  * inspect state directly without network or timer side-effects.
  */
 class FakeRedis {
-  private readonly counts = new Map<string, number>()
-  private readonly ttls   = new Map<string, number>()
+  private readonly counts    = new Map<string, number>()
+  private readonly expiresAt = new Map<string, number>()
 
   async incr(key: string): Promise<number> {
+    this.pruneIfExpired(key)
     const next = (this.counts.get(key) ?? 0) + 1
     this.counts.set(key, next)
     return next
   }
 
   async expire(key: string, seconds: number): Promise<void> {
-    this.ttls.set(key, seconds)
+    this.expiresAt.set(key, Date.now() + seconds * 1000)
   }
 
   async ttl(key: string): Promise<number> {
-    return this.ttls.get(key) ?? -1
+    this.pruneIfExpired(key)
+    const expiresAt = this.expiresAt.get(key)
+    if (expiresAt === undefined) return -1
+    return Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000))
   }
 
   /** Reset all state between tests. */
   flush(): void {
     this.counts.clear()
-    this.ttls.clear()
+    this.expiresAt.clear()
   }
 
   /** Peek at the current count for a key (test introspection only). */
   count(key: string): number {
+    this.pruneIfExpired(key)
     return this.counts.get(key) ?? 0
+  }
+
+  private pruneIfExpired(key: string): void {
+    const expiresAt = this.expiresAt.get(key)
+    if (expiresAt !== undefined && Date.now() >= expiresAt) {
+      this.counts.delete(key)
+      this.expiresAt.delete(key)
+    }
   }
 }
 
@@ -249,14 +263,16 @@ describe('burst behaviour', () => {
  */
 describe('refill behaviour', () => {
   const windowSec   = 60
-  // Anchor to a known epoch-aligned window far from any edge.
-  const windowStart = 1_700_004_000 // already a multiple of 60
-  const lastSecOfN  = (windowStart + windowSec - 1) * 1000
-  const firstSecOfN1 = (windowStart + windowSec)   * 1000
+  // Anchor near an epoch-aligned boundary to prove that refill is driven by
+  // the key TTL, not by crossing a wall-clock second/minute boundary.
+  const firstHitAt = 1_700_004_059_999
+  const oneMsAfterEpochBoundary = 1_700_004_060_001
+  const oneMsBeforeTtlExpiry = firstHitAt + windowSec * 1000 - 1
+  const exactTtlExpiry = firstHitAt + windowSec * 1000
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(lastSecOfN) // start every refill test inside window N
+    vi.setSystemTime(firstHitAt)
   })
 
   it('token_bucket_refills_after_window_rolls_over', async () => {
@@ -273,9 +289,9 @@ describe('refill behaviour', () => {
     }
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance clock into window N+1 — a new Redis key is produced, so the
-    // counter starts from zero again.
-    vi.setSystemTime(firstSecOfN1)
+    // Advance past the TTL started by the first hit. The existing Redis key
+    // has expired, so the counter starts from zero again.
+    vi.setSystemTime(exactTtlExpiry)
 
     for (let i = 0; i < max; i++) {
       expect((await request(app).get('/api/ping')).status).toBe(200)
@@ -295,8 +311,8 @@ describe('refill behaviour', () => {
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance one millisecond — still inside window N.
-    vi.setSystemTime(lastSecOfN + 500)
+    // Advance almost to expiry, but stay inside the TTL started by the first hit.
+    vi.setSystemTime(oneMsBeforeTtlExpiry)
 
     // Must remain blocked — no refill yet.
     expect((await request(app).get('/api/ping')).status).toBe(429)
@@ -313,8 +329,8 @@ describe('refill behaviour', () => {
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance to the exact first millisecond of window N+1.
-    vi.setSystemTime(firstSecOfN1)
+    // Advance to exact TTL expiry.
+    vi.setSystemTime(exactTtlExpiry)
 
     // Budget is fully restored.
     expect((await request(app).get('/api/ping')).status).toBe(200)
@@ -331,11 +347,30 @@ describe('refill behaviour', () => {
     // Consume 1 request in window N.
     expect((await request(app).get('/api/ping')).status).toBe(200)
 
-    // Roll into window N+1 — the NEW window starts at 0, not at 1.
-    vi.setSystemTime(firstSecOfN1)
+    // Roll past TTL expiry. The NEW window starts at 0, not at 1.
+    vi.setSystemTime(exactTtlExpiry)
 
     // Should have the full budget of max=2 again, not max-1=1.
     expect((await request(app).get('/api/ping')).status).toBe(200)
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+    expect((await request(app).get('/api/ping')).status).toBe(429)
+  })
+
+  it('token_bucket_counts_sub_second_burst_across_epoch_boundary_in_same_window', async () => {
+    const max = 2
+    const app = buildApp({
+      max,
+      namespace: 'unit:refill:subsecond-boundary',
+      config: { windowSec },
+    })
+
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+
+    // Previously this crossed an epoch-aligned window boundary and received a
+    // fresh counter only 2ms after the first hit. It must still spend the same
+    // TTL-backed window budget.
+    vi.setSystemTime(oneMsAfterEpochBoundary)
+
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
   })
@@ -433,6 +468,61 @@ describe('per-tier overrides', () => {
     expect(blocked.body.details).toMatchObject({ limit: 1 })
   })
 
+  it('x_ratelimit_limit_header_matches_config_across_free_pro_enterprise', async () => {
+    // Free vs Pro vs Enterprise X-RateLimit-Limit values must mirror config
+    // (production defaults and arbitrary overrides).
+    const defaultCfg = { maxFree: 100, maxPro: 1000, maxEnterprise: 10000 }
+    const customCfg = { maxFree: 9, maxPro: 42, maxEnterprise: 777 }
+
+    const cases: Array<{
+      tier: SubscriptionTier
+      config: typeof defaultCfg
+      expected: number
+      ns: string
+    }> = [
+      { tier: 'free', config: defaultCfg, expected: 100, ns: 'unit:hdr:def:free' },
+      { tier: 'pro', config: defaultCfg, expected: 1000, ns: 'unit:hdr:def:pro' },
+      { tier: 'enterprise', config: defaultCfg, expected: 10000, ns: 'unit:hdr:def:ent' },
+      { tier: 'free', config: customCfg, expected: 9, ns: 'unit:hdr:cus:free' },
+      { tier: 'pro', config: customCfg, expected: 42, ns: 'unit:hdr:cus:pro' },
+      { tier: 'enterprise', config: customCfg, expected: 777, ns: 'unit:hdr:cus:ent' },
+    ]
+
+    for (const { tier, config, expected, ns } of cases) {
+      fakeRedis.flush()
+      const app = buildApp({
+        namespace: ns,
+        config,
+        tier,
+        keyId: `key-${ns}`,
+        ownerId: `owner-${ns}`,
+      })
+      const res = await request(app).get('/api/ping')
+      expect(res.status).toBe(200)
+      expect(res.headers['x-ratelimit-limit']).toBe(String(expected))
+      expect(res.headers['x-ratelimit-remaining']).toBe(String(expected - 1))
+    }
+  })
+
+  it('x_ratelimit_limit_on_429_matches_tier_config_not_higher_tiers', async () => {
+    const cfg = { maxFree: 1, maxPro: 50, maxEnterprise: 200 }
+    const app = buildApp({
+      namespace: 'unit:hdr:sad:free',
+      config: cfg,
+      tier: 'free',
+      keyId: 'key-hdr-sad',
+      ownerId: 'owner-hdr-sad',
+    })
+
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+    const blocked = await request(app).get('/api/ping')
+    expect(blocked.status).toBe(429)
+    expect(blocked.headers['x-ratelimit-limit']).toBe(String(cfg.maxFree))
+    expect(blocked.headers['x-ratelimit-remaining']).toBe('0')
+    expect(blocked.headers['retry-after']).toBeDefined()
+    expect(blocked.body.details).toMatchObject({ limit: cfg.maxFree })
+  })
+
   it('different_tiers_operate_independently_on_separate_tenant_buckets', async () => {
     // Two separate apps, same config, different tiers — each exhausts its
     // own bucket without affecting the other.
@@ -523,5 +613,61 @@ describe('prometheus counter behaviour', () => {
       .reduce((sum, v) => sum + v.value, 0)
 
     expect(after).toBeGreaterThan(before)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 5. getClientIp — XFF spoofing prevention (security fix #723)
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Negative tests for getClientIp.
+ *
+ * These tests document and pin the exact security invariant: the IP used for
+ * rate limiting must come from the TCP socket, not from the HTTP
+ * X-Forwarded-For header, which is fully attacker-controlled.
+ *
+ * A test that calls getClientIp and gets back the spoofed req.ip value would
+ * indicate a regression to the vulnerable behaviour.
+ */
+describe('getClientIp — XFF spoofing prevention', () => {
+  it('returns socket.remoteAddress, not req.ip (spoofed XFF)', () => {
+    const req: any = {
+      ip: '1.2.3.4',                        // spoofed via X-Forwarded-For under trust proxy
+      socket: { remoteAddress: '10.0.0.1' }, // real peer IP
+      headers: { 'x-forwarded-for': '1.2.3.4, 10.0.0.1' },
+    }
+    expect(getClientIp(req)).toBe('10.0.0.1')
+    // Explicitly assert that the spoofed value is NOT returned.
+    expect(getClientIp(req)).not.toBe('1.2.3.4')
+  })
+
+  it('returns socket.remoteAddress even when X-Forwarded-For contains many hops', () => {
+    const req: any = {
+      ip: '192.168.1.1',   // Express resolved from XFF chain under trust proxy
+      socket: { remoteAddress: '172.16.0.1' },
+      headers: { 'x-forwarded-for': '192.168.1.1, 10.10.0.1, 172.16.0.1' },
+    }
+    expect(getClientIp(req)).toBe('172.16.0.1')
+  })
+
+  it('returns "unknown" when socket.remoteAddress is absent (no socket object)', () => {
+    const req: any = { ip: '5.5.5.5', socket: undefined, headers: {} }
+    expect(getClientIp(req)).toBe('unknown')
+  })
+
+  it('returns "unknown" when socket exists but remoteAddress is undefined', () => {
+    const req: any = { ip: '6.6.6.6', socket: {}, headers: {} }
+    expect(getClientIp(req)).toBe('unknown')
+  })
+
+  it('returns socket.remoteAddress when req.ip is undefined (no proxy)', () => {
+    // Direct connection, no trust proxy — socket.remoteAddress is the client.
+    const req: any = {
+      ip: undefined,
+      socket: { remoteAddress: '203.0.113.42' },
+      headers: {},
+    }
+    expect(getClientIp(req)).toBe('203.0.113.42')
   })
 })

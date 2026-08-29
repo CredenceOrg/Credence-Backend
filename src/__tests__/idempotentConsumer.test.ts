@@ -40,10 +40,18 @@ function createMockDb(): Queryable {
 
       if (sql.includes('DELETE FROM idempotency_keys')) {
         let deleted = 0
-        for (const [key, row] of storage.entries()) {
-          if (new Date(row.expires_at) <= new Date()) {
+        if (params.length === 1 && typeof params[0] === 'string') {
+          const key = params[0]
+          if (storage.has(key)) {
             storage.delete(key)
-            deleted++
+            deleted = 1
+          }
+        } else {
+          for (const [key, row] of storage.entries()) {
+            if (new Date(row.expires_at) <= new Date()) {
+              storage.delete(key)
+              deleted++
+            }
           }
         }
         return { rowCount: deleted }
@@ -108,15 +116,20 @@ describe('IdempotentConsumer', () => {
       expect(result.error).toBe('handler failed')
     })
 
-    it('should not retry failed message', async () => {
+    it('should allow retrying failed message', async () => {
       const messageId = randomUUID()
-      const handler = vi.fn().mockRejectedValue(new Error('handler failed'))
+      const handler = vi
+        .fn()
+        .mockRejectedValueOnce(new Error('handler failed'))
+        .mockResolvedValueOnce({ processed: true })
 
-      await consumer.process(messageId, handler)
-      const cachedResult = await consumer.process(messageId, handler)
+      const firstResult = await consumer.process(messageId, handler)
+      expect(firstResult.success).toBe(false)
 
-      expect(handler).toHaveBeenCalledTimes(1)
-      expect(cachedResult.success).toBe(false)
+      const secondResult = await consumer.process(messageId, handler)
+      expect(secondResult.success).toBe(true)
+      expect(secondResult.result).toEqual({ processed: true })
+      expect(handler).toHaveBeenCalledTimes(2)
     })
   })
 

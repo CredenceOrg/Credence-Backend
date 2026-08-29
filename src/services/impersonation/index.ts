@@ -1,5 +1,5 @@
 import { randomBytes } from 'crypto'
-import { MOCK_USERS } from '../../middleware/auth.js'
+import { userRepo } from '../../repositories/userRepository.js'
 import { AuditLogService, AuditAction, auditLogService } from '../audit/index.js'
 import { pool } from '../../db/pool.js'
 import { ImpersonationTokenRepository } from '../../repositories/impersonationTokenRepository.js'
@@ -45,7 +45,7 @@ export class ImpersonationService {
     const { targetUserId, reason, ttlSeconds } = request
 
     if (!reason || reason.trim().length === 0) {
-      void this.auditLog.logAction(
+      await this.auditLog.logAction(
         tenantId,
         adminId,
         adminEmail,
@@ -61,9 +61,9 @@ export class ImpersonationService {
       throw new Error('reason is required and must not be empty')
     }
 
-    const target = MOCK_USERS[targetUserId]
+    const target = userRepo.findById(targetUserId)
     if (!target) {
-      void this.auditLog.logAction(
+      await this.auditLog.logAction(
         tenantId,
         adminId,
         adminEmail,
@@ -98,7 +98,7 @@ export class ImpersonationService {
 
     await this.repo.create(record)
 
-    void this.auditLog.logAction(
+    await this.auditLog.logAction(
       tenantId,
       adminId,
       adminEmail,
@@ -144,7 +144,7 @@ export class ImpersonationService {
 
     await this.repo.revoke(tokenId, adminId)
 
-    void this.auditLog.logAction(
+    await this.auditLog.logAction(
       tenantId,
       adminId,
       adminEmail,
