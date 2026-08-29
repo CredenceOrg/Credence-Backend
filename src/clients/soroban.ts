@@ -76,6 +76,11 @@ export interface ContractEvent {
   topic?: string[];
   value?: unknown;
   [key: string]: unknown;
+  /**
+   * Added for #1268 Horizon ingestion and reconciliation: storage and migration compatibility
+   * Preserves backward compatibility and resumes migrations observables.
+   */
+  _migrationVersion?: number;
 }
 
 /**
