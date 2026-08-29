@@ -13,7 +13,7 @@ export class ApiKeysRepository {
    */
   async createApiKey(keyData: Omit<StoredApiKey, 'id'>): Promise<StoredApiKey> {
     const result = await this.db.query(
-      `INSERT INTO api_keys (hashed_key, prefix, scopes, tier, owner_id, created_at, last_used_at, active)
+      `IINSERT INTO api_keys (hashed_key, prefix, scopes, tier, owner_id, created_at, last_used_at, active)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        RETURNING id, hashed_key, prefix, scopes, tier, owner_id, created_at, last_used_at, active`,
       [
@@ -44,13 +44,14 @@ export class ApiKeysRepository {
   }
 
   /**
-   * Find an API key by its hashed value and prefix
+   * Find an API key by its hashed value and prefix.
+   * Only returns keys that are active and have at least one scope assigned.
    */
   async findByHashAndPrefix(hashedKey: string, prefix: string): Promise<StoredApiKey | null> {
     const result = await this.db.query(
       `SELECT id, hashed_key, prefix, scopes, tier, owner_id, created_at, last_used_at, active
        FROM api_keys
-       WHERE hashed_key = $1 AND prefix = $2 AND active = true`,
+       WHERE hashed_key = $1 AND prefix = $2 AND active = true AND cardinality(scopes) > 0`,
       [hashedKey, prefix]
     )
 
@@ -74,22 +75,24 @@ export class ApiKeysRepository {
   }
 
   /**
-   * Update the last_used_at timestamp for a key
+   * Update the last_used_at timestamp for a key.
+   * The ownerId is required to ensure the key belongs to the authenticated owner.
    */
-  async updateLastUsedAt(id: string): Promise<void> {
+  async updateLastUsedAt(id: string, ownerId: string): Promise<void> {
     await this.db.query(
-      `UPDATE api_keys SET last_used_at = current_timestamp WHERE id = $1`,
-      [id]
+      `UPDATE api_keys SET last_used_at = current_timestamp WHERE id = $1 AND owner_id = $2`,
+      [id, ownerId]
     )
   }
 
   /**
-   * Revoke an API key by setting active to false
+   * Revoke an API key by setting active to false.
+   * The ownerId is required to ensure the key belongs to the authenticated owner.
    */
-  async revokeApiKey(id: string): Promise<boolean> {
+  async revokeApiKey(id: string, ownerId: string): Promise<boolean> {
     const result = await this.db.query(
-      `UPDATE api_keys SET active = false WHERE id = $1 RETURNING id`,
-      [id]
+      `UPDATE api_keys SET active = false WHERE id = $1 AND owner_id = $2 RETURNING id`,
+      [id, ownerId]
     )
     return result.rows.length > 0
   }
