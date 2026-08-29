@@ -6,6 +6,7 @@ export interface IdempotencyRecord {
   requestHash: string
   responseCode: number
   responseBody: any
+  responseHeaders?: any
   ttlSeconds: number
   expiresAt: Date
   createdAt: Date
@@ -17,6 +18,7 @@ export interface CreateIdempotencyInput {
   requestHash: string
   responseCode: number
   responseBody: any
+  responseHeaders?: any
   /** Time-to-live in seconds; persisted to the `ttl_seconds` column. */
   ttlSeconds: number
   /**
@@ -33,7 +35,7 @@ export class IdempotencyRepository {
   async findByKey(key: string): Promise<IdempotencyRecord | null> {
     const result = await this.db.query<any>(
       `
-      SELECT key, actor_id, request_hash, response_code, response_body, ttl_seconds, expires_at, created_at
+      SELECT key, actor_id, request_hash, response_code, response_body, response_headers, ttl_seconds, expires_at, created_at
       FROM idempotency_keys
       WHERE key = $1 AND expires_at > NOW()
       `,
@@ -49,6 +51,7 @@ export class IdempotencyRepository {
       requestHash: row.request_hash,
       responseCode: row.response_code,
       responseBody: typeof row.response_body === 'string' ? JSON.parse(row.response_body) : row.response_body,
+      responseHeaders: row.response_headers ? (typeof row.response_headers === 'string' ? JSON.parse(row.response_headers) : row.response_headers) : undefined,
       ttlSeconds: row.ttl_seconds,
       expiresAt: new Date(row.expires_at),
       createdAt: new Date(row.created_at),
@@ -61,13 +64,14 @@ export class IdempotencyRepository {
 
     await this.db.query(
       `
-      INSERT INTO idempotency_keys (key, actor_id, request_hash, response_code, response_body, ttl_seconds, expires_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
+      INSERT INTO idempotency_keys (key, actor_id, request_hash, response_code, response_body, response_headers, ttl_seconds, expires_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
       ON CONFLICT (key) DO UPDATE SET
         actor_id     = EXCLUDED.actor_id,
         request_hash = EXCLUDED.request_hash,
         response_code = EXCLUDED.response_code,
         response_body = EXCLUDED.response_body,
+        response_headers = EXCLUDED.response_headers,
         ttl_seconds  = EXCLUDED.ttl_seconds,
         expires_at   = EXCLUDED.expires_at,
         created_at   = NOW()
@@ -78,6 +82,7 @@ export class IdempotencyRepository {
         input.requestHash,
         input.responseCode,
         JSON.stringify(input.responseBody),
+        JSON.stringify(input.responseHeaders ?? null),
         input.ttlSeconds,
         expiresAt,
       ]

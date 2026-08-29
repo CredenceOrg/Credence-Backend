@@ -162,6 +162,19 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+  OUTBOX_RETRY_MAX_ATTEMPTS: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  OUTBOX_RETRY_INITIAL_DELAY_MS: z
+    .string()
+    .default('200')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  QUARANTINE_PROCESSOR_CRON: z
+    .string()
+    .default('*/1 * * * *'),
 
   // Request snapshots retention
   REQUEST_SNAPSHOT_RETENTION_DAYS: z
@@ -450,6 +463,9 @@ export interface Config {
     publishedRetentionDays: number
     failedRetentionDays: number
     cleanupIntervalMs: number
+    retryMaxAttempts: number
+    retryInitialDelayMs: number
+    quarantineProcessorCron: string
   }
   requestSnapshots: {
     retentionDays: number
@@ -643,6 +659,9 @@ function mapEnvToConfig(env: Env): Config {
       publishedRetentionDays: env.OUTBOX_PUBLISHED_RETENTION_DAYS,
       failedRetentionDays: env.OUTBOX_FAILED_RETENTION_DAYS,
       cleanupIntervalMs: env.OUTBOX_CLEANUP_INTERVAL_MS,
+      retryMaxAttempts: env.OUTBOX_RETRY_MAX_ATTEMPTS,
+      retryInitialDelayMs: env.OUTBOX_RETRY_INITIAL_DELAY_MS,
+      quarantineProcessorCron: env.QUARANTINE_PROCESSOR_CRON,
     },
     requestSnapshots: {
       retentionDays: env.REQUEST_SNAPSHOT_RETENTION_DAYS,

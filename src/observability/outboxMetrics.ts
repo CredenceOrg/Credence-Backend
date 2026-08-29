@@ -91,6 +91,16 @@ export function incrementOutboxQuarantine(reason: string = 'unknown') {
     }
 }
 
+let _quarantineReinjectCounter: any | undefined = undefined
+export function incrementOutboxQuarantineReinject(status: 'success' | 'failure') {
+    if (!_quarantineReinjectCounter) {
+        _quarantineReinjectCounter = getMetric('outbox_quarantine_reinject_total', 'Counter', 'Total number of quarantine events reinjected', ['status'])
+    }
+    if (_quarantineReinjectCounter) {
+        try { _quarantineReinjectCounter.inc({ status }, 1) } catch {}
+    }
+}
+
 export function _resetOutboxMetricsCacheForTests(): void {
     const prom = tryLoadPromClient()
     if (prom) {
@@ -103,4 +113,5 @@ export function _resetOutboxMetricsCacheForTests(): void {
     _pendingGauge = undefined
     _leaseRenewCounter = undefined
     _quarantineCounter = undefined
+    _quarantineReinjectCounter = undefined
 }

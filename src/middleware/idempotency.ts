@@ -126,6 +126,13 @@ export function idempotencyMiddleware(
         }
 
         // Actor and payload match - safe to replay the stored response
+        if (existing.responseHeaders) {
+          Object.entries(existing.responseHeaders).forEach(([name, value]) => {
+            if (value !== undefined && value !== null) {
+              res.setHeader(name, value as any);
+            }
+          });
+        }
         return res.status(existing.responseCode).json(existing.responseBody)
       }
 
@@ -142,6 +149,7 @@ export function idempotencyMiddleware(
             requestHash: payloadHash,
             responseCode: res.statusCode,
             responseBody: body,
+            responseHeaders: res.getHeaders(),
             ttlSeconds,
             expiresInSeconds: ttlSeconds,
           }).catch((err) => {
