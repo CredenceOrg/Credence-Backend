@@ -51,7 +51,12 @@ type OutboxQuarantineRow = {
   reinjected_by: string | null
 }
 
-/** The only status transitions permitted by the outbox lifecycle. */
+/**
+ * The only status transitions permitted by the outbox lifecycle.
+ * @deprecated Use `OUTBOX_LIFECYCLE_TRANSITIONS` from `./transitions.js` for
+ * programmatic validation.  This object is retained for backward compatibility
+ * with callers that iterate the adjacency list.
+ */
 export const OUTBOX_STATE_TRANSITIONS = {
   pending: ['processing'],
   processing: ['published', 'pending', 'dead_letter'],
