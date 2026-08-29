@@ -5,6 +5,7 @@ This project includes a dedicated Soroban RPC adapter in `src/clients/soroban.ts
 ## Goals
 
 - Encapsulate Soroban network configuration (`rpcUrl`, `network`, `contractId`)
+- Bound event pages before provider calls
 - Provide a stable facade for contract interactions
 - Apply consistent timeout, retry, and error handling
 - Keep transport logic testable via dependency injection
@@ -113,6 +114,7 @@ const soroban = createSorobanClient({
   network: (process.env.SOROBAN_NETWORK as 'testnet' | 'mainnet') ?? 'testnet',
   contractId: process.env.SOROBAN_CONTRACT_ID!,
   timeoutMs: Number(process.env.SOROBAN_TIMEOUT_MS ?? 5000),
+  maxEventsPerPage: 100,
   retry: {
     maxAttempts: 3,
     baseDelayMs: 200,
@@ -132,6 +134,13 @@ The adapter throws `SorobanClientError` with a typed `code`:
 - `HTTP_ERROR`
 - `RPC_ERROR`
 - `PARSE_ERROR`
+- `LIMIT_ERROR` for an oversized event response or cancelled operation
+
+`getContractEvents` sends a bounded `limit` and rejects responses larger than
+`maxEventsPerPage` before callers can process them. An operation can be
+cancelled with the dependency `signal`; cancellation before the request starts
+is rejected immediately without contacting the provider. A rejected, stale, or
+cancelled operation does not advance a cursor or cache a result.
 
 Retries are attempted for:
 
