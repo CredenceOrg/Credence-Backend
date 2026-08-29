@@ -12,13 +12,44 @@ const poolMocks = vi.hoisted(() => {
   return { mockClientQuery, mockClientRelease, mockClient, mockPoolConnect, mockPoolQuery }
 })
 
-vi.mock("prom-client", () => ({
-  register: {},
-  Gauge: vi.fn().mockImplementation(function() { return { set: vi.fn() }; }),
-}));
+vi.mock("prom-client", () => {
+  // Provide a default export and the metric classes pulled in by modules that
+  // `import client from "prom-client"` (e.g. observability/latencyMetrics via
+  // the transaction/outbox graph), so the mocked module satisfies both the
+  // named and default import styles used across the codebase.
+  const makeMetric = vi.fn(function(this: any) {
+    return {
+      set: vi.fn(),
+      inc: vi.fn(),
+      dec: vi.fn(),
+      observe: vi.fn(),
+      labels: vi.fn().mockReturnValue({ set: vi.fn(), inc: vi.fn(), observe: vi.fn() }),
+      reset: vi.fn(),
+    }
+  });
+  const makeRegistry = vi.fn(function(this: any) {
+    return { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) }
+  });
+  const registry = { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) };
+  const client = {
+    register: registry,
+    Registry: makeRegistry,
+    Gauge: makeMetric,
+    Counter: makeMetric,
+    Histogram: makeMetric,
+    Summary: makeMetric,
+    collectDefaultMetrics: vi.fn(),
+    exponentialBuckets: vi.fn().mockReturnValue([]),
+  };
+  return { ...client, default: client };
+});
 
 vi.mock("../../db/pool.js", () => ({
   pool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
+  workerPool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
+  apiPreparedStatementCache: new Map(),
+  workerPreparedStatementCache: new Map(),
+  replicaPreparedStatementCache: new Map(),
 }))
 
 vi.mock("../../services/identityService.js", () => ({
@@ -32,6 +63,14 @@ vi.mock("../../observability/horizonMetrics.js", () => ({
     reconnectTotal: { inc: vi.fn() },
     streamUp: { set: vi.fn() },
   }),
+}));
+
+// The listener load graph transitively pulls reputationService (via the
+// transaction/cache-invalidation edge introduced on the rebased base), which
+// would otherwise import middleware/metrics and the full observability +
+// pool setup. Mock it so the module graph loads cleanly in isolation.
+vi.mock("../../services/reputationService.js", () => ({
+  invalidateTrustScoreCache: vi.fn().mockResolvedValue(undefined),
 }));
 
 let capturedHandlers: { onmessage?: any; onerror?: any } = {};

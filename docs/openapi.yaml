@@ -527,10 +527,15 @@ components:
               type: string
               checks:
                 - {}
+                - {}
+                - def:
+                    type: custom
+                    check: custom
+                  type: custom
             type: string
             format: regex
             minLength: null
-            maxLength: null
+            maxLength: 32
           duration:
             def:
               type: optional
@@ -7314,10 +7319,15 @@ components:
               type: string
               checks:
                 - {}
+                - {}
+                - def:
+                    type: custom
+                    check: custom
+                  type: custom
             type: string
             format: regex
             minLength: null
-            maxLength: null
+            maxLength: 32
           assetType:
             def:
               type: string
