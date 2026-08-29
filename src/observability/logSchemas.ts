@@ -45,6 +45,11 @@ export enum LogEventType {
   HTTP_REQUEST = "http:request",
   HTTP_ERROR = "http:error",
 
+  // ── Idempotency Events ──
+  IDEMPOTENCY_REPLAY = "idempotency:replay",
+  IDEMPOTENCY_MISMATCH = "idempotency:mismatch",
+  IDEMPOTENCY_NOT_CACHED = "idempotency:not-cached",
+
   // ── Auth Events ──
   AUTH_LOGIN = "auth:login",
   AUTH_FAILURE = "auth:failure",
@@ -235,6 +240,52 @@ export const LOG_SCHEMAS: Record<LogEventType, Record<string, FieldSchema>> = {
     actor: { type: "string" },
     /** Distributed trace correlation ID. */
     correlationId: { type: "string" },
+  },
+
+  // ── Idempotency ──
+
+  [LogEventType.IDEMPOTENCY_REPLAY]: {
+    message: { type: "string" },
+    /** Distributive trace correlation ID. */
+    correlationId: { type: "string" },
+    requestId: { type: "string" },
+    tenantId: { type: "string" },
+    actorId: { type: "string" },
+    route: { type: "string" },
+    /** First 8 chars of the idempotency key (never the full key). */
+    key: { type: "string" },
+    /** Status code of the replayed response. */
+    statusCode: { type: "number" },
+  },
+
+  [LogEventType.IDEMPOTENCY_MISMATCH]: {
+    message: { type: "string" },
+    correlationId: { type: "string" },
+    requestId: { type: "string" },
+    tenantId: { type: "string" },
+    actorId: { type: "string" },
+    route: { type: "string" },
+    key: { type: "string" },
+    /** Actor the key was originally bound to. */
+    storedActorId: { type: "string" },
+    /** Actor trying to reuse the key. */
+    requestActorId: { type: "string" },
+    /** Prefix of the stored request hash (never the full hash). */
+    storedPayloadHash: { type: "string" },
+    /** Prefix of the incoming request hash (never the full hash). */
+    requestPayloadHash: { type: "string" },
+  },
+
+  [LogEventType.IDEMPOTENCY_NOT_CACHED]: {
+    message: { type: "string" },
+    correlationId: { type: "string" },
+    requestId: { type: "string" },
+    tenantId: { type: "string" },
+    actorId: { type: "string" },
+    route: { type: "string" },
+    key: { type: "string" },
+    /** Response status that was intentionally not persisted. */
+    status: { type: "number" },
   },
 
   // ── Auth Events ──
