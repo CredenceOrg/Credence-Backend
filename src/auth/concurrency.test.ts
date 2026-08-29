@@ -706,7 +706,7 @@ describe('final-state safety — no unauthorized or partial state after rejectio
     expect(guard.snapshotCount).toBe(0)
   })
 
-  it('a scope-conflict response does not update the stored snapshot', async () => {
+  it('a scope-conflict response evicts the stored snapshot to resolve the conflict on retry', async () => {
     const guard = new AuthConcurrencyGuard()
     const rawKey = 'cr_' + 'p'.repeat(64)
 
@@ -717,19 +717,21 @@ describe('final-state safety — no unauthorized or partial state after rejectio
     await guard.validate(rawKey, async () => v1)
     expect(guard.snapshotCount).toBe(1)
 
-    // Second burst changes scopes → conflict returned, snapshot NOT updated
+    // Second burst changes scopes → conflict returned, snapshot IS evicted
     const conflictResult = await guard.validate(rawKey, async () => v2)
     expect(conflictResult.ok).toBe(false)
     if (!conflictResult.ok) {
       expect(conflictResult.status).toBe(409)
     }
 
-    // Snapshot should still reflect the FIRST (authoritative) scope set
-    // Verify by doing a third burst with the original scopes — no conflict
-    const v3 = makeKey({ id: 'partial-key', scopes: ['trust:read'] })
-    const thirdResult = await guard.validate(rawKey, async () => v3)
-    // The snapshot still holds v1's fingerprint; v3 matches → ok
+    // Snapshot should be clear
+    expect(guard.snapshotCount).toBe(0)
+
+    // Verify by doing a third burst with the NEW scopes — no conflict because snapshot is clean
+    const thirdResult = await guard.validate(rawKey, async () => v2)
+    // The snapshot now holds v2's fingerprint; v2 matches → ok
     expect(thirdResult.ok).toBe(true)
+    expect(guard.snapshotCount).toBe(1)
   })
 
   it('concurrent callers for a scope-conflict all receive 409 (not a mix of ok and conflict)', async () => {

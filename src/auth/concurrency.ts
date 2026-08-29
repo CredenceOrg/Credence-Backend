@@ -226,8 +226,10 @@ export class AuthConcurrencyGuard {
     const previousFingerprint = this.scopeSnapshots.get(key.id)
 
     if (previousFingerprint !== undefined && previousFingerprint !== currentFingerprint) {
-      // Scope changed since last burst.  Inform the caller and ask it to retry
-      // so it gets a fresh, authoritative scope set.
+      // Scope changed since last burst. Evict the stale snapshot so the next
+      // retry gets a clean baseline, then ask the caller to retry.
+      this.evict(key.id)
+
       return {
         ok: false,
         status: 409,
