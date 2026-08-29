@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import type { StoredApiKey, KeyScope } from "../services/apiKeys.js";
 import { validateApiKey } from "../services/apiKeys.js";
+import { authConcurrencyGuard } from "../auth/concurrency.js";
 import { userRepo } from "../repositories/userRepository.js";
 import { runWithTenant } from "../utils/tenantContext.js";
 
@@ -156,9 +157,34 @@ function mapDbScopesToApiScopes(dbScopes: string[]): ApiScope[] {
  * via `validateApiKey`. Keys are never compared in plaintext and raw key
  * values are never logged.
  *
+ * ## Concurrency and race safety
+ *
+ * Concurrent requests presenting the **same API key** are coalesced by the
+ * `AuthConcurrencyGuard` singleton so that only one hash-comparison + store
+ * look-up executes at a time.  All concurrent callers share the result.
+ *
+ * If a key's scopes are observed to change between two consecutive look-up
+ * bursts (i.e. a scope change races an in-flight validation), the middleware
+ * returns **409 Conflict** with a `Retry-After` header.  The client MUST
+ * retry the request after waiting the advertised number of seconds; the key
+ * itself remains valid.
+ *
+ * If the auth service is temporarily overloaded (too many concurrent in-flight
+ * look-ups), the middleware returns **503 Service Unavailable** with a
+ * `Retry-After` header.
+ *
+ * ## Client retry contract
+ * | Status | Meaning                              | Client action                          |
+ * |--------|--------------------------------------|----------------------------------------|
+ * | 401    | Missing or invalid key               | Do not retry with the same key         |
+ * | 403    | Valid key but insufficient scope     | Do not retry; acquire the required scope |
+ * | 409    | Scope snapshot stale (concurrent change) | Retry after `Retry-After` seconds  |
+ * | 503    | Auth service temporarily overloaded  | Retry after `Retry-After` seconds      |
+ *
  * The middleware:
  * 1. Reads the key from `X-API-Key` or `Authorization: Bearer` headers.
- * 2. Validates the key against the persistent, hashed key store.
+ * 2. Passes the key through `AuthConcurrencyGuard.validate` (which calls
+ *    `validateApiKey` under a per-key singleflight lock).
  * 3. Maps stored scope strings to `ApiScope` enum values.
  * 4. Calls `scopeSatisfies` to check whether the granted scopes cover the
  *    required scope — including legacy ENTERPRISE superset expansion.
@@ -191,19 +217,40 @@ export function requireApiKey(requiredScope: ApiScope) {
       return;
     }
 
-    // Validate against the persistent, hashed key store only.
-    // `validateApiKey` performs a timing-safe SHA-256 hash comparison.
-    const dbKey: StoredApiKey | null = await validateApiKey(rawKey)
+    // Validate via the concurrency guard.
+    // This coalesces concurrent look-ups for the same key and detects scope
+    // conflicts that race in-flight validations.
+    const result = await authConcurrencyGuard.validate(rawKey, validateApiKey);
 
-    if (!dbKey) {
-      res.status(401).json({
-        error: "Unauthorized",
-        message: "Invalid API key",
-      });
+    if (!result.ok) {
+      if (result.retryAfter !== undefined) {
+        res.set("Retry-After", String(result.retryAfter));
+      }
+
+      if (result.status === 409) {
+        res.status(409).json({
+          error: "Conflict",
+          message: result.error,
+          retryAfter: result.retryAfter,
+        });
+      } else if (result.status === 503) {
+        res.status(503).json({
+          error: "Service Unavailable",
+          message: result.error,
+          retryAfter: result.retryAfter,
+        });
+      } else {
+        // 401
+        res.status(401).json({
+          error: "Unauthorized",
+          message: "Invalid API key",
+        });
+      }
       return;
     }
 
-    const grantedScopes = mapDbScopesToApiScopes(dbKey.scopes)
+    const dbKey: StoredApiKey = result.key;
+    const grantedScopes = mapDbScopesToApiScopes(dbKey.scopes);
 
     // Deny-by-default: key must satisfy the required scope
     if (!scopeSatisfies(grantedScopes, requiredScope)) {
@@ -211,22 +258,22 @@ export function requireApiKey(requiredScope: ApiScope) {
         res.status(403).json({
           error: 'Forbidden',
           message: 'Enterprise API key required',
-        })
+        });
       } else {
         res.status(403).json({
           error: 'Forbidden',
           message: `Insufficient scope: '${requiredScope}' is required`,
           requiredScope,
           grantedScopes,
-        })
+        });
       }
-      return
+      return;
     }
 
     // Attach the full database record to the request for downstream handlers.
-    ;(req as AuthenticatedRequest).apiKey = dbKey
-    next()
-  }
+    (req as AuthenticatedRequest).apiKey = dbKey;
+    next();
+  };
 }
 
 /**
@@ -298,17 +345,37 @@ export async function requireUserAuth(
 
   const raw = authHeader.substring(7); // Remove 'Bearer ' prefix
 
-  // Validate the token against the persistent, hashed key store.
-  // `validateApiKey` performs a timing-safe SHA-256 hash comparison.
-  const key = await validateApiKey(raw);
+  // Validate via the concurrency guard (coalesces concurrent look-ups for the
+  // same token and detects scope conflicts that race in-flight validations).
+  const result = await authConcurrencyGuard.validate(raw, validateApiKey);
 
-  if (!key) {
-    res.status(401).json({
-      error: "Unauthorized",
-      message: "Invalid or expired token",
-    });
+  if (!result.ok) {
+    if (result.retryAfter !== undefined) {
+      res.set("Retry-After", String(result.retryAfter));
+    }
+
+    if (result.status === 409) {
+      res.status(409).json({
+        error: "Conflict",
+        message: result.error,
+        retryAfter: result.retryAfter,
+      });
+    } else if (result.status === 503) {
+      res.status(503).json({
+        error: "Service Unavailable",
+        message: result.error,
+        retryAfter: result.retryAfter,
+      });
+    } else {
+      res.status(401).json({
+        error: "Unauthorized",
+        message: "Invalid or expired token",
+      });
+    }
     return;
   }
+
+  const key = result.key;
 
   // Resolve the user record from the database via the key's owner.
   const user = userRepo.findById(key.ownerId);
