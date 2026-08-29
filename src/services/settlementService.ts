@@ -7,6 +7,7 @@ import { executeShadowWrite } from './shadowWrite.js'
 import type { CreatePayoutInput } from '../schemas/payout.js'
 import { ValidationError } from '../lib/errors.js'
 import { runPostCommit } from '../db/transaction.js'
+import { validateSettlementTransition, type SettlementLifecycleStatus } from './settlementTransitions.js'
 
 export class SettlementService {
   constructor(private readonly repository: SettlementsRepository) {}
@@ -54,6 +55,37 @@ export class SettlementService {
    * (serialization failures, deadlocks) with exponential backoff retry.
    */
   async upsertSettlementStatus(input: CreatePayoutInput): Promise<Settlement> {
+    // ── State-transition invariant enforcement ──────────────────────────────
+    // Before writing, look up any existing settlement for this transaction hash
+    // and validate that the requested status transition is legal.
+    if (input.status) {
+      const existing = await this.repository.findByTransactionHash(input.transactionHash)
+      if (existing) {
+        const transition = validateSettlementTransition(
+          existing.status as SettlementLifecycleStatus,
+          input.status as SettlementLifecycleStatus,
+        )
+        if (!transition.success) {
+          throw new ValidationError(
+            `Settlement transition rejected: ${transition.error} ` +
+            `(current: "${existing.status}", requested: "${input.status}", ` +
+            `settlement: "${existing.id}", txHash: "${input.transactionHash}")`
+          )
+        }
+      } else {
+        // New settlement — validate that the initial status is a valid entry state.
+        // Only 'pending' and 'failed' are valid initial states; 'settled' requires
+        // a prior pending record.
+        const targetStatus = input.status as SettlementLifecycleStatus
+        if (targetStatus !== 'pending' && targetStatus !== 'failed') {
+          throw new ValidationError(
+            `Settlement cannot be created with status "${targetStatus}": ` +
+            `initial status must be "pending" or "failed"`
+          )
+        }
+      }
+    }
+
     const repoInput: CreateSettlementInput = {
       bondId: input.bondId,
       amount: input.amount,
