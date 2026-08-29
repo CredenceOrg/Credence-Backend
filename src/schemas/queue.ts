@@ -4,10 +4,38 @@ import { z } from 'zod'
 // Avoids reliance on Zod's `.datetime()` method whose API changed across versions.
 const iso8601Regex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$/
 
-/** Non-negative decimal string (e.g. "500.0000000"). */
+/** Non-negative decimal string (e.g. "500.0000000").
+ *
+ * Bounds:
+ *  - Max 32 characters to cap unbounded input
+ *  - Must match /^\d+(\.\d+)?$/ — no sign, no exponent, no whitespace
+ *  - May not be longer than 20 integer digits and 7 fractional digits
+ *    (aligns with the bonds.amount NUMERIC(20,7) database column)
+ *
+ * Rejected:
+ *  - Negative values (leading '-')
+ *  - Scientific notation ('1e10')
+ *  - Whitespace padding (' 100')
+ *  - Overflow of the integer part (> 20 digits before the decimal point)
+ *  - Overflow of the fractional part (> 7 digits after the decimal point)
+ */
 const decimalAmountSchema = z
   .string()
+  .max(32, 'Amount must be at most 32 characters')
   .regex(/^\d+(\.\d+)?$/, 'Amount must be a non-negative decimal string')
+  .refine(
+    (amount): boolean => {
+      const dot = amount.indexOf('.')
+      const intPart = dot === -1 ? amount : amount.slice(0, dot)
+      const fracPart = dot === -1 ? '' : amount.slice(dot + 1)
+      // Integer part: at most 20 digits; fractional part: at most 7 digits
+      return intPart.length <= 20 && fracPart.length <= 7
+    },
+    {
+      message:
+        'Amount overflows NUMERIC(20,7): integer part must be ≤ 20 digits and fractional part ≤ 7 digits',
+    },
+  )
 
 /**
  * Runtime schema for attestation events received from the Horizon event stream.

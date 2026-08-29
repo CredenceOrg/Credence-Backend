@@ -11,6 +11,10 @@ import {
 } from '../services/health/runtimeState.js'
 import { withdrawalEventSchema } from '../schemas/queue.js'
 import { validateMessage } from './messageValidator.js'
+import {
+  computeNewBondAmount,
+  shouldTakeSnapshot,
+} from '../lib/bondAmountMath.js'
 
 /**
  * Interface for bond withdrawal event data
@@ -398,13 +402,23 @@ export class HorizonWithdrawalListener {
   }
 
   /**
-   * Calculate bond state update based on withdrawal event
+   * Calculate bond state update based on withdrawal event.
+   *
+   * Delegates to `computeNewBondAmount` (src/lib/bondAmountMath.ts) which
+   * uses exact BigInt-scaled arithmetic so that amounts with more than 15
+   * significant digits are never silently truncated by IEEE 754 conversion.
+   *
+   * Invariants enforced before any state change:
+   *   - Both amounts must be non-negative decimal strings (no sign, no exponent).
+   *   - The result is clamped to "0" when withdrawal >= current balance;
+   *     negative balances cannot be produced.
    */
   private calculateBondUpdate(currentBond: any, event: WithdrawalEvent): BondStateUpdate {
-    const currentAmount = parseFloat(currentBond.amount)
-    const withdrawalAmount = parseFloat(event.amount)
-    const newAmount = Math.max(0, currentAmount - withdrawalAmount).toString()
-    const isActive = parseFloat(newAmount) > 0
+    const newAmount = computeNewBondAmount(
+      String(currentBond.amount),
+      String(event.amount),
+    )
+    const isActive = newAmount !== '0'
 
     return {
       bondId: event.bondId,
@@ -413,7 +427,7 @@ export class HorizonWithdrawalListener {
       newAmount,
       isActive,
       updatedAt: new Date(),
-      transactionHash: event.transactionHash
+      transactionHash: event.transactionHash,
     }
   }
 
@@ -429,15 +443,18 @@ export class HorizonWithdrawalListener {
   }
 
   /**
-   * Determine if a score history snapshot should be created
+   * Determine if a score history snapshot should be created.
+   *
+   * Delegates to `shouldTakeSnapshot` (src/lib/bondAmountMath.ts) which uses
+   * exact BigInt division for the 50 % ratio test, eliminating floating-point
+   * midpoint imprecision that affected the previous `parseFloat` implementation.
    */
   private shouldCreateScoreSnapshot(update: BondStateUpdate): boolean {
-    // Create snapshot for full withdrawals or significant partial withdrawals
-    const previousAmount = parseFloat(update.previousAmount || '0')
-    const newAmount = parseFloat(update.newAmount)
-    const withdrawalRatio = (previousAmount - newAmount) / previousAmount
-    
-    return !update.isActive || withdrawalRatio >= 0.5 // 50% or more withdrawn
+    return shouldTakeSnapshot(
+      String(update.previousAmount ?? '0'),
+      String(update.newAmount),
+      update.isActive,
+    )
   }
 
   /**
@@ -447,13 +464,21 @@ export class HorizonWithdrawalListener {
     // In a real implementation, this would calculate the current score
     const currentScore = await this.calculateTrustScore(currentBond.account)
 
+    // Exact comparison: full withdrawal when event.amount >= currentBond.amount.
+    // computeNewBondAmount returns "0" when withdrawal >= current.
+    const newAmount = computeNewBondAmount(
+      String(currentBond.amount),
+      String(event.amount),
+    )
+    const isFullWithdrawal = newAmount === '0'
+
     return {
       address: currentBond.account,
       score: currentScore,
       bondedAmount: currentBond.amount,
       timestamp: new Date(),
-      reason: parseFloat(event.amount) >= parseFloat(currentBond.amount) ? 'withdrawal_full' : 'withdrawal_partial',
-      transactionHash: event.transactionHash
+      reason: isFullWithdrawal ? 'withdrawal_full' : 'withdrawal_partial',
+      transactionHash: event.transactionHash,
     }
   }
 
