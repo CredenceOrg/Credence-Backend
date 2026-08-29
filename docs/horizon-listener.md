@@ -289,6 +289,104 @@ interface ScoreHistorySnapshot {
 }
 ```
 
+## Concurrency and Race Safety (Withdrawal Listener)
+
+`HorizonWithdrawalListener` guarantees that a withdrawal operation is applied
+**at most once** to bond/score state and **never partially**, even across a
+crash, a restart-replay, or an unexpected duplicate delivery of the same
+Horizon operation.
+
+### Invariant
+
+For a given Horizon operation id, exactly one of the following is true after
+the system settles:
+
+1. The operation was never applied and the cursor was not advanced past it
+   (nothing happened yet — it will be retried), or
+2. The operation was applied exactly once, its cursor checkpoint was
+   committed in the same transaction, and it is recorded in
+   `idempotency_keys` so any later re-delivery is a safe no-op.
+
+There is no state in which the mutation committed but the cursor did not (or
+vice versa), and no state in which the same operation is applied twice.
+
+### Design
+
+- **Mutation + checkpoint are one transaction.** Each valid event is
+  processed and its `upsertCursor(...)` call runs inside a single
+  `BEGIN…COMMIT` against one `PoolClient` (see `pollForEvents()` in
+  `src/listeners/horizonWithdrawalEvents.ts`). This mirrors the pattern
+  already used by the bond-creation listener
+  (`horizonBondEvents.ts`) — a crash before `COMMIT` leaves the cursor
+  unmoved, so the next poll re-fetches and retries the same event.
+- **Idempotency guard on top of the transaction.** Before running that
+  transaction, the event is keyed by `bond_withdrawal:<operation id>` and
+  routed through the existing `IdempotentConsumer` /
+  `IdempotencyRepository` (`src/services/idempotentConsumer.ts`). This
+  protects against the one case atomicity alone cannot: the *same* operation
+  id being handed to the handler a second time — whether from overlapping
+  poll windows, a manual replay, or (should it ever be deployed with more
+  than one active instance) two replicas racing on the same stream. A second
+  delivery short-circuits to the cached result without re-running the
+  handler. Concurrent (not just sequential) duplicate calls are also
+  deduped via the consumer's in-memory in-flight map.
+- **Batch stops at the first failure.** `pollForEvents()` processes events
+  in order and stops the batch as soon as one fails (the failed event's
+  transaction rolls back, so nothing partial is committed). The cursor is
+  **not** advanced past the failure, so the next poll cycle (at the
+  configured `pollingInterval`) retries starting from the same event. This
+  is the explicit client/consumer retry contract: retries are automatic,
+  bounded by the polling cadence, and never skip an unprocessed event.
+- **Poison messages are the one deliberate exception.** A schema-invalid
+  event can never pass validation on a retry, so it is routed to the DLQ via
+  `replayService.captureFailure` and the cursor is advanced past it — this
+  is unchanged from the prior behavior and prevents a permanently malformed
+  payload from stalling the stream forever.
+- **Exact decimal arithmetic.** `calculateBondUpdate`, `shouldCreateScoreSnapshot`,
+  and `createScoreSnapshot` now use the BigInt-based helpers in
+  `src/lib/decimalMath.ts` (`subtractDecimals`, `compareDecimals`,
+  `isValidPositiveDecimal`) instead of `parseFloat`. `parseFloat` silently
+  loses precision on Stellar's 7-decimal amounts (e.g.
+  `parseFloat("0.3") - parseFloat("0.1")` is `0.19999999999999998` in IEEE-754
+  double arithmetic); over many withdrawals this drift is exactly the kind of
+  "balance disagrees with the ledger" bug this listener must not have.
+
+### Compatibility
+
+`BondStateUpdate.newAmount` is still produced with the same trimmed shape
+`parseFloat(...).toString()` used to produce (e.g. `"700"`, not
+`"700.0000000"`) via a small string-only trim helper — no response-shape or
+schema change. No migration is required: `idempotency_keys` is an existing
+table already used elsewhere in this codebase (`src/db/repositories/idempotencyRepository.ts`).
+
+### Operational limitations
+
+- **Single active instance assumption.** Like the sibling `horizonBondEvents.ts`
+  stream, this listener does not use the `LeaseManager` /
+  `LeasedHorizonListener` cross-replica fencing mechanism documented above
+  under "Controlled Failover" — that mechanism exists in this codebase but is
+  only wired up for `HorizonListener`. The idempotency guard makes a second
+  concurrent replica *safe* (it cannot double-apply an operation), but it does
+  not make replicas *coordinate* — two replicas would each independently poll
+  and redundantly attempt every event (the loser of each race simply gets a
+  cached/no-op result). Operators should run one active instance of this
+  listener per stream in production; wiring in lease-based fencing is a
+  reasonable future improvement but is out of scope for this fix.
+- **Bond/score persistence is still a placeholder.** `getBondState`,
+  `updateBondState`, and `saveScoreSnapshot` remain mock implementations (as
+  they were before this change) — this fix guarantees that *whatever*
+  persistence exists there is applied atomically with the cursor checkpoint
+  and idempotently with respect to replay, so wiring real persistence in
+  later inherits these guarantees automatically without further changes to
+  the listener's concurrency structure.
+
+### Security assumptions
+
+The idempotency key (`bond_withdrawal:<operation id>`) is derived from
+Horizon's own operation id, which is assigned by the network and not
+attacker-controlled by anything this service trusts less than the rest of
+the ingested event. No new trust boundary is introduced.
+
 ## Error Handling
 
 The listener implements comprehensive error handling:

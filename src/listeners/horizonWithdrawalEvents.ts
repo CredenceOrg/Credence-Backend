@@ -3,7 +3,9 @@ import type { Pool, PoolClient } from 'pg'
 import { Gauge, register } from 'prom-client'
 import { pool as defaultPool } from '../db/pool.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
+import { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
 import { upsertCursor } from '../services/identityService.js'
+import { createIdempotentConsumer, IdempotentConsumer } from '../services/idempotentConsumer.js'
 import {
   recordHorizonListenerHeartbeat,
   setHorizonListenerConfigured,
@@ -61,6 +63,18 @@ export interface ScoreHistorySnapshot {
 
 const STREAM_NAME = 'bond_withdrawal'
 
+/**
+ * Strip insignificant trailing zeros from an exact decimal string (e.g.
+ * "700.0000000" -> "700", "133.3300000" -> "133.33"). Pure string
+ * manipulation — never round-trips through Number — so it preserves the
+ * `subtractDecimals` output's exactness while matching the trimmed shape
+ * `parseFloat(...).toString()` used to produce, for backward compatibility.
+ */
+function trimTrailingZeros(decimal: string): string {
+  if (!decimal.includes('.')) return decimal
+  return decimal.replace(/\.?0+$/, '') || '0'
+}
+
 const cursorLagGauge = (register.getSingleMetric('horizon_listener_cursor_lag_seconds') as Gauge<string> | undefined)
   ?? new Gauge({
     name: 'horizon_listener_cursor_lag_seconds',
@@ -107,6 +121,15 @@ export class HorizonWithdrawalListener {
   private replayService: { captureFailure: (type: string, data: any, reason: string) => Promise<any> }
   private readonly pool: Pool
   private readonly cursorRepo: CursorRepository
+  /**
+   * Guards each withdrawal operation (`STREAM_NAME:event.id`) against being
+   * applied more than once. `event.id` is Horizon's own globally unique
+   * operation id, so this is stable across process restarts and across
+   * however many replicas ever poll this stream — it is the mechanism that
+   * makes a crash-and-replay of an already-committed event a safe no-op
+   * instead of a double-apply.
+   */
+  private readonly idempotency: IdempotentConsumer<unknown, void>
 
   constructor(
     config: HorizonListenerConfig,
@@ -119,6 +142,9 @@ export class HorizonWithdrawalListener {
     this.server = new Horizon.Server(config.horizonUrl)
     this.pool = pool
     this.cursorRepo = new CursorRepository(pool)
+    this.idempotency = createIdempotentConsumer<unknown, void>(new IdempotencyRepository(pool), {
+      actorId: 'horizon-withdrawal-listener',
+    })
     this.lastCursor = config.lastCursor || 'now'
     this.replayService = replayService
     setHorizonListenerConfigured(true)
@@ -209,30 +235,50 @@ export class HorizonWithdrawalListener {
         for (const event of events) {
           const validation = validateMessage(withdrawalEventSchema, event)
           if (!validation.valid) {
+            // Permanently malformed payloads can never pass validation on a
+            // retry, so route to the DLQ and advance past them — otherwise
+            // the next poll would fetch this same poison event forever.
             await this.replayService.captureFailure(
               STREAM_NAME,
               event,
               `[${validation.reasonCode}] ${validation.detail}`,
             )
-          } else {
-            await this.processWithdrawalEvent(event)
+            await this.commitCursor(event.pagingToken)
+            this.lastCursor = event.pagingToken
+            continue
           }
 
-          // Persist cursor in a transaction to ensure atomicity
-          // If cursor write fails, the event will be re-processed on restart.
-          const client: PoolClient = await this.pool.connect()
-          try {
-            await client.query('BEGIN')
-            await upsertCursor({ streamName: STREAM_NAME, pagingToken: event.pagingToken }, client)
-            await client.query('COMMIT')
-          } catch (txErr) {
-            await client.query('ROLLBACK')
-            throw txErr
-          } finally {
-            client.release()
+          // The event mutation and the cursor checkpoint are one durable
+          // unit (mirrors horizonBondEvents.ts): if the process crashes
+          // before COMMIT, the cursor never moved, so the next poll refetches
+          // this same event from Horizon and retries it. The idempotency
+          // guard additionally protects against the same operation id ever
+          // being *applied* twice — whether from overlapping poll windows,
+          // concurrent replicas of this listener, or a manual replay.
+          const outcome = await this.idempotency.process(`${STREAM_NAME}:${event.id}`, async () => {
+            const client: PoolClient = await this.pool.connect()
+            try {
+              await client.query('BEGIN')
+              await this.processWithdrawalEvent(event)
+              await upsertCursor({ streamName: STREAM_NAME, pagingToken: event.pagingToken }, client)
+              await client.query('COMMIT')
+            } catch (txErr) {
+              await client.query('ROLLBACK')
+              throw txErr
+            } finally {
+              client.release()
+            }
+          })
+
+          if (!outcome.success) {
+            // Stop the batch at the first failure and do NOT advance past
+            // it. Nothing from this event was committed (the transaction
+            // rolled back), so the next poll cycle retries it from the same
+            // cursor — a bounded, automatic retry with no partial state and
+            // no silent gap.
+            throw new Error(outcome.error ?? `Failed to process withdrawal event ${event.id}`)
           }
 
-          // Update local cursor only after successful persistence
           this.lastCursor = event.pagingToken
         }
         
@@ -253,6 +299,24 @@ export class HorizonWithdrawalListener {
         () => this.pollForEvents(),
         this.config.pollingInterval || 5000
       )
+    }
+  }
+
+  /**
+   * Persist a cursor checkpoint on its own, for events that are permanently
+   * skipped (poison messages) rather than processed.
+   */
+  private async commitCursor(pagingToken: string): Promise<void> {
+    const client: PoolClient = await this.pool.connect()
+    try {
+      await client.query('BEGIN')
+      await upsertCursor({ streamName: STREAM_NAME, pagingToken }, client)
+      await client.query('COMMIT')
+    } catch (txErr) {
+      await client.query('ROLLBACK')
+      throw txErr
+    } finally {
+      client.release()
     }
   }
 
@@ -382,6 +446,10 @@ export class HorizonWithdrawalListener {
     } catch (error: any) {
       console.error(`Error processing withdrawal event ${event.id}:`, error)
       await this.replayService.captureFailure('withdrawal', event, error.message)
+      // Re-throw so the caller's transaction rolls back and the cursor is
+      // NOT advanced past this event — a transient failure must be retried,
+      // not silently treated as done.
+      throw error
     }
   }
 
