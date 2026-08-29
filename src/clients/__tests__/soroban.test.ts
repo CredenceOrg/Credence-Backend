@@ -768,6 +768,48 @@ describe('SorobanClient - Retry, Timeout, and Circuit Breaker', () => {
     })
   })
 
+  describe('resource and cancellation limits', () => {
+    it('sends the configured event page limit and rejects oversized responses', async () => {
+      const fetchMock = vi.fn().mockResolvedValue(
+        new Response(JSON.stringify({
+          jsonrpc: '2.0',
+          id: 'getContractEvents-1',
+          result: { events: [{ id: '1' }, { id: '2' }], latestCursor: 'next' },
+        }), { status: 200 }),
+      )
+      const client = new SorobanClient({
+        rpcUrl: 'https://soroban-testnet.stellar.org',
+        network: 'testnet',
+        contractId: 'CTEST',
+        maxEventsPerPage: 1,
+        retry: { maxAttempts: 1 },
+      }, { fetchFn: fetchMock })
+
+      await expect(client.getContractEvents()).rejects.toMatchObject({
+        code: 'LIMIT_ERROR',
+        details: { received: 2, limit: 1 },
+      })
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body as string).params.limit).toBe(1)
+    })
+
+    it('rejects a cancelled operation before contacting the provider', async () => {
+      const controller = new AbortController()
+      controller.abort()
+      const fetchMock = vi.fn()
+      const client = new SorobanClient({
+        rpcUrl: 'https://soroban-testnet.stellar.org',
+        network: 'testnet',
+        contractId: 'CTEST',
+        retry: { maxAttempts: 1 },
+      }, { fetchFn: fetchMock, signal: controller.signal })
+
+      await expect(client.getIdentityState('cancelled')).rejects.toMatchObject({
+        code: 'LIMIT_ERROR',
+      })
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+  })
+
   describe('factory function', () => {
     it('creates client successfully', () => {
       const client = createSorobanClient({

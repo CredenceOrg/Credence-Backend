@@ -1,4 +1,5 @@
 import {
+  getBackoffDelayMs,
   type ProviderRetryPolicies,
   type RetryPolicy,
 } from "../lib/retryPolicy.js";
@@ -13,7 +14,7 @@ import {
   TimeoutExceededError,
 } from "../lib/timeoutExecutor.js";
 import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.js";
-import { normalizeTransportError, isAbortError } from "./httpErrors.js";
+import { normalizeTransportError } from "./httpErrors.js";
 import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
 import {
@@ -38,6 +39,8 @@ export interface SorobanClientConfig {
   rpcUrl: string;
   network: SorobanNetwork;
   contractId: string;
+  /** Maximum number of events accepted from one getEvents response. */
+  maxEventsPerPage?: number;
   timeoutMs?: number;
   retry?: Partial<RetryOptions>;
   retryPolicies?: ProviderRetryPolicies;
@@ -95,6 +98,8 @@ interface SorobanRpcResponse<T> {
 
 export interface SorobanClientDependencies {
   fetchFn?: typeof fetch;
+  /** Optional abort signal for cancelling an in-flight RPC operation. */
+  signal?: AbortSignal;
   sleepFn?: (ms: number) => Promise<void>;
   randomFn?: () => number;
   retryObserver?: RetryObserver;
@@ -105,6 +110,7 @@ export interface SorobanClientDependencies {
 export class SorobanClientError extends Error {
   public readonly code:
     | "CONFIG_ERROR"
+    | "LIMIT_ERROR"
     | "NETWORK_ERROR"
     | "TIMEOUT_ERROR"
     | "HTTP_ERROR"
@@ -120,6 +126,7 @@ export class SorobanClientError extends Error {
     message: string;
     code:
       | "CONFIG_ERROR"
+      | "LIMIT_ERROR"
       | "NETWORK_ERROR"
       | "TIMEOUT_ERROR"
       | "HTTP_ERROR"
@@ -153,6 +160,8 @@ export class SorobanClient {
   private readonly rpcUrl: string;
   private readonly network: SorobanNetwork;
   private readonly contractId: string;
+  private readonly maxEventsPerPage: number;
+  private readonly signal?: AbortSignal;
   private readonly timeoutMs: number;
   private readonly retryOptions: ExtendedRetryPolicy;
   private readonly fetchFn: typeof fetch;
@@ -178,6 +187,14 @@ export class SorobanClient {
     this.rpcUrl = config.rpcUrl;
     this.network = config.network;
     this.contractId = config.contractId;
+    this.maxEventsPerPage = config.maxEventsPerPage ?? 100;
+    if (!Number.isInteger(this.maxEventsPerPage) || this.maxEventsPerPage < 1) {
+      throw new SorobanClientError({
+        code: "CONFIG_ERROR",
+        message: "maxEventsPerPage must be a positive integer.",
+      });
+    }
+    this.signal = deps.signal;
     this.timeoutMs = resolveTimeout(
       "soroban",
       createTimeoutConfig("soroban", "SOROBAN_RPC_TIMEOUT", config.timeoutMs),
@@ -256,6 +273,7 @@ export class SorobanClient {
    * live RPC calls. TTL is controlled by SOROBAN_STATE_CACHE_TTL_MS (0 = off).
    */
   async getIdentityState(address: string): Promise<unknown> {
+    this.throwIfCancelled();
     if (!address?.trim()) {
       throw new SorobanClientError({
         code: "CONFIG_ERROR",
@@ -292,6 +310,7 @@ export class SorobanClient {
    * Fetches contract-scoped events and returns the normalized next cursor.
    */
   async getContractEvents(cursor?: string): Promise<ContractEventsPage> {
+    this.throwIfCancelled();
     const result = await this.callRpc<{
       events?: ContractEvent[];
       latestCursor?: string;
@@ -299,13 +318,39 @@ export class SorobanClient {
     }>("getEvents", {
       network: this.network,
       contractIds: [this.contractId],
+      limit: this.maxEventsPerPage,
       ...(cursor ? { cursor } : {}),
     });
 
+    const events = result.events ?? [];
+    if (!Array.isArray(events)) {
+      throw new SorobanClientError({
+        code: "PARSE_ERROR",
+        message: "Soroban RPC getEvents response contains an invalid events list.",
+      });
+    }
+    if (events.length > this.maxEventsPerPage) {
+      throw new SorobanClientError({
+        code: "LIMIT_ERROR",
+        message: `Soroban RPC returned ${events.length} events; the configured limit is ${this.maxEventsPerPage}.`,
+        details: { received: events.length, limit: this.maxEventsPerPage },
+      });
+    }
+
     return {
-      events: result.events ?? [],
+      events,
       cursor: result.latestCursor ?? result.cursor ?? null,
     };
+  }
+
+  private throwIfCancelled(): void {
+    if (this.signal?.aborted) {
+      throw new SorobanClientError({
+        code: "LIMIT_ERROR",
+        message: "Soroban RPC operation was cancelled before the request started.",
+        cause: this.signal.reason,
+      });
+    }
   }
 
   private assertConfig(config: SorobanClientConfig): void {
@@ -391,6 +436,9 @@ export class SorobanClient {
     return executeSorobanOperation(
       method,
       async (signal) => {
+        if (this.signal?.aborted) {
+          throw this.signal.reason ?? new DOMException("The operation was aborted", "AbortError");
+        }
         const response = await this.fetchFn(this.rpcUrl, {
           method: "POST",
           headers: {
