@@ -128,7 +128,7 @@ try {
     failOpen: !isProd,
   };
 }
-const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
+const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig, { includeRoute: true });
 
 let authRateLimitConfig: {
   enabled: boolean;
