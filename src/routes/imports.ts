@@ -330,6 +330,16 @@ export function createImportsRouter(
       const buffer = requireUploadedFile(req, res)
       if (!buffer) return
 
+      const tenantId = getTenantId()
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'InvalidRequest',
+          code: 'MissingTenant',
+          message: 'Tenant context is required for import commits.',
+        })
+        return
+      }
+
       if (isDryRunQuery(req.query.dryRun)) {
         const result = await dryRunImportFile(buffer)
         if (!result.success) {
@@ -340,7 +350,10 @@ export function createImportsRouter(
         return
       }
 
-      const result = await commitImportFile(buffer, importCommitter)
+      const result = await commitImportFile(buffer, importCommitter, undefined, {
+        idempotencyKey: req.get('Idempotency-Key'),
+        tenantId,
+      })
       if (!result.success) {
         sendDryRunError(res, result)
         return
@@ -355,15 +368,12 @@ export function createImportsRouter(
           totalRows: result.totalRows,
           errors: result.errors,
           errorsTruncated: result.errorsTruncated,
+          rowOutcomes: result.rowOutcomes,
         })
         return
       }
 
-      res.status(201).json({
-        committed: true,
-        totalRows: result.totalRows,
-        imported: result.imported,
-      })
+      res.status(result.partial ? 207 : 201).json(result)
     }
   )
 
@@ -377,6 +387,16 @@ export function createImportsRouter(
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
       if (!buffer) return
+
+      const tenantId = getTenantId()
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'InvalidRequest',
+          code: 'MissingTenant',
+          message: 'Tenant context is required for import commits.',
+        })
+        return
+      }
 
       const preset = await presetRepo.findById(req.params.presetId)
       if (!preset) {
@@ -403,7 +423,10 @@ export function createImportsRouter(
         return
       }
 
-      const result = await commitImportFile(buffer, importCommitter, preset.columnMappings)
+      const result = await commitImportFile(buffer, importCommitter, preset.columnMappings, {
+        idempotencyKey: req.get('Idempotency-Key'),
+        tenantId,
+      })
       if (!result.success) {
         sendDryRunError(res, result)
         return
@@ -418,6 +441,7 @@ export function createImportsRouter(
           totalRows: result.totalRows,
           errors: result.errors,
           errorsTruncated: result.errorsTruncated,
+          rowOutcomes: result.rowOutcomes,
           preset: {
             id: preset.id,
             name: preset.name,
@@ -428,10 +452,8 @@ export function createImportsRouter(
         return
       }
 
-      res.status(201).json({
-        committed: true,
-        totalRows: result.totalRows,
-        imported: result.imported,
+      res.status(result.partial ? 207 : 201).json({
+        ...result,
         preset: {
           id: preset.id,
           name: preset.name,
