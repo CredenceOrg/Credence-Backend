@@ -74,6 +74,40 @@ export const SCOPE_SETS: Record<string, ReadonlySet<ApiScope>> = {
 };
 
 /**
+ * Scopes that control cross-tenant operational state: outbox mutation,
+ * admin resource reads/writes, and webhook secret rotation. These are the
+ * "protected operations" a platform operator reaches, not a tenant's own
+ * data.
+ *
+ * A key's stored scope string is NOT sufficient proof of that trust level:
+ * `mapDbScopesToApiScopes` treats the legacy 'full'/'enterprise' alias as an
+ * unconditional superset of every scope, and any authenticated user can
+ * self-issue an integration key (see routes/apiKeys.ts). requireApiKey
+ * therefore re-verifies the key owner's CURRENT role from `userRepo` — the
+ * same trusted server-side source requireAdminRole uses — before granting
+ * access to any of these scopes, regardless of how the scope was satisfied.
+ * This closes the gap for keys issued before this check existed and for an
+ * owner whose role was downgraded after issuance (stale identity).
+ */
+const PRIVILEGED_API_SCOPES: ReadonlySet<ApiScope> = new Set([
+  ApiScope.ADMIN_READ,
+  ApiScope.ADMIN_WRITE,
+  ApiScope.OUTBOX_REINJECT,
+  ApiScope.WEBHOOKS_ADMIN,
+]);
+
+/**
+ * Returns true when `ownerId` currently resolves to an active admin or
+ * super-admin user record. Looked up fresh on every call (no caching) so a
+ * role downgrade takes effect immediately without needing key revocation.
+ */
+function ownerHasAdminRole(ownerId: string): boolean {
+  const owner = userRepo.findById(ownerId);
+  if (!owner || owner.active === false) return false;
+  return owner.role === UserRole.ADMIN || owner.role === UserRole.SUPER_ADMIN;
+}
+
+/**
  * Return true when the granted scope set satisfies the required scope.
  *
  * Rules (in order):
@@ -267,6 +301,19 @@ export function requireApiKey(requiredScope: ApiScope) {
           grantedScopes,
         });
       }
+      return;
+    }
+
+    // Defense in depth: a privileged operational scope additionally requires
+    // that the key's owner is, right now, an active admin/super-admin — not
+    // merely that the stored scope string satisfies scopeSatisfies(). See
+    // PRIVILEGED_API_SCOPES for why the scope string alone isn't trustworthy.
+    if (PRIVILEGED_API_SCOPES.has(requiredScope) && !ownerHasAdminRole(dbKey.ownerId)) {
+      res.status(403).json({
+        error: "Forbidden",
+        message: `Insufficient scope: '${requiredScope}' requires an administrator-owned API key`,
+        requiredScope,
+      });
       return;
     }
 
