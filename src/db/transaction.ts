@@ -1,13 +1,16 @@
 import { Pool, type PoolClient } from 'pg'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
 import { RequestSnapshotsRepository } from './repositories/requestSnapshotsRepository.js'
 import { dbTxnDurationSeconds, dbTxnSavepoints } from '../observability/index.js'
 import { withSpan, DbSpans } from '../tracing/tracer.js'
+import { getTenantId } from '../utils/tenantContext.js'
 
 export const transactionStorage = new AsyncLocalStorage<PoolClient>()
 export const disableRedirectionStorage = new AsyncLocalStorage<boolean>()
 
 export interface TransactionContext {
+  correlationId: string
   postCommitHooks: Array<() => Promise<void>>
   rollbackHooks: Array<() => Promise<void>>
 }
@@ -283,11 +286,6 @@ export class TransactionManager {
       return await fn(activeClient);
     }
 
-    const context: TransactionContext = {
-      postCommitHooks: [],
-      rollbackHooks: [],
-    };
-
     let attempts = 0;
 
     while (true) {
@@ -414,15 +412,4 @@ export function withExtendedTxnBudget(options: { maxDurationMs?: number; maxSave
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Returns the tenant id bound by runWithTenant for the current async context.
- */
-export function getTenantId(): string | undefined {
-  return tenantStorage.getStore();
-}
-
-export function runWithTenant<T>(tenantId: string, fn: () => T): T {
-  return tenantStorage.run(tenantId, fn);
 }

@@ -1,4 +1,6 @@
+import type { Pool } from 'pg'
 import type { Queryable } from './queryable.js'
+import { TransactionManager } from '../transaction.js'
 
 export type SettlementStatus = 'pending' | 'settled' | 'failed'
 
@@ -53,57 +55,64 @@ const mapSettlement = (row: SettlementRow): Settlement => ({
 })
 
 export class SettlementsRepository {
-  constructor(private readonly db: Queryable) {}
+  private readonly txManager?: TransactionManager
+
+  /**
+   * @param db   - A `Queryable` (Pool or PoolClient) for read/write queries.
+   * @param pool - The underlying `Pool`; required for `upsertBatch()` which
+   *               needs an exclusive client and TransactionManager hooks.
+   */
+  constructor(private readonly db: Queryable, private readonly pool?: Pool) {
+    if (pool) {
+      this.txManager = new TransactionManager(pool)
+    }
+  }
 
   async upsert(input: CreateSettlementInput): Promise<UpsertSettlementResult> {
     return this._upsert(this.db, input)
   }
 
   async upsertBatch(inputs: CreateSettlementInput[]): Promise<UpsertSettlementResult[]> {
-    const client = typeof (this.db as any).connect === 'function'
-      ? await (this.db as any).connect()
-      : null
-
-    const targetDb = client ?? this.db
-    const useTx = client !== null
-
-    if (useTx) {
-      await targetDb.query('BEGIN')
+    // If a pool-backed TransactionManager is available, use it so post-commit
+    // hooks (cache invalidation, metrics) fire correctly and rollback hooks
+    // can compensate on partial failure. This also eliminates the manual
+    // BEGIN/COMMIT path that bypassed the hook mechanism.
+    if (this.txManager) {
+      return this.txManager.withTransaction(async (client) => {
+        const results: UpsertSettlementResult[] = []
+        for (const input of inputs) {
+          const res = await this._upsert(client, input)
+          results.push(res)
+        }
+        return results
+      })
     }
 
-    try {
-      const results: UpsertSettlementResult[] = []
-      for (const input of inputs) {
-        const res = await this._upsert(targetDb, input)
-        results.push(res)
-      }
-      if (useTx) {
-        await targetDb.query('COMMIT')
-      }
-      return results
-    } catch (err) {
-      if (useTx) {
-        await targetDb.query('ROLLBACK').catch(() => {})
-      }
-      throw err
-    } finally {
-      if (client) {
-        client.release()
-      }
+    // Fallback: no pool configured, work with whatever db was given.
+    // If db is itself a PoolClient already inside a transaction, this is
+    // a nested call that shares the outer transaction — correct.
+    // If db is a Pool without TransactionManager, we cannot guarantee
+    // atomicity of the batch; callers should supply a pool.
+    const results: UpsertSettlementResult[] = []
+    for (const input of inputs) {
+      const res = await this._upsert(this.db, input)
+      results.push(res)
     }
+    return results
   }
 
   private async _upsert(db: Queryable, input: CreateSettlementInput): Promise<UpsertSettlementResult> {
     const settledAt = input.settledAt ?? new Date()
     const status = input.status ?? 'pending'
 
-    const existing = await db.query<{ id: string }>(
-      `SELECT id FROM settlements WHERE transaction_hash = $1`,
-      [input.transactionHash],
-    )
-    const isDuplicate = existing.rows.length > 0
-
-    const result = await db.query<SettlementRow>(
+    // Atomic upsert: use xmax to detect whether the row was freshly inserted
+    // (xmax = 0) or updated due to an ON CONFLICT hit (xmax > 0).
+    //
+    // The previous two-step SELECT + INSERT pattern was a TOCTOU race:
+    // between the SELECT and the INSERT a concurrent writer could insert the
+    // same transaction_hash, making both writers believe they are the first.
+    // This single-statement form eliminates that race entirely.
+    const result = await db.query<SettlementRow & { xmax: string }>(
       `INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
        VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (transaction_hash)
@@ -112,9 +121,13 @@ export class SettlementsRepository {
          status     = EXCLUDED.status,
          settled_at = EXCLUDED.settled_at,
          updated_at = NOW()
-       RETURNING id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at`,
+       RETURNING id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at,
+                 xmax::text AS xmax`,
       [input.bondId, input.amount, input.transactionHash, settledAt, status],
     )
+
+    // xmax = '0' → fresh insert (no prior conflict row); anything else → updated existing row.
+    const isDuplicate = result.rows[0].xmax !== '0'
 
     return { settlement: mapSettlement(result.rows[0]), isDuplicate }
   }
