@@ -387,6 +387,108 @@ Horizon's own operation id, which is assigned by the network and not
 attacker-controlled by anything this service trusts less than the rest of
 the ingested event. No new trust boundary is introduced.
 
+## State-Transition Invariants (Horizon Ingestion Lifecycle)
+
+`HorizonListener.handleEvent` (the entry point for the `bond` / `slash` /
+`withdrawal` event dispatcher, `src/listeners/horizon.listeners.ts`) now
+enforces a deterministic state-transition invariant on the node/bond
+lifecycle before any write reaches the repository. The transition matrix and
+its decision procedure live in `src/listeners/horizonTransitions.ts` and
+reuse the generic `TransitionMatrix` from `src/lib/stateTransition.ts`.
+
+### Lifecycle states
+
+| State      | Meaning                                                              |
+|------------|----------------------------------------------------------------------|
+| `active`   | Node/bond exists on chain and is live (created by a `bond` event)    |
+| `slashed`  | Node/bond incurred a slash on chain (still on chain, penalized)      |
+| `withdrawn`| Node/bond fully withdrawn on chain (**terminal**)                    |
+
+### Legal transitions
+
+| From        | To          | Trigger                |
+|-------------|-------------|------------------------|
+| `active`    | `slashed`   | `slash` event          |
+| `active`    | `withdrawn` | `withdrawal` event     |
+| `slashed`   | `withdrawn` | `withdrawal` after slash|
+| `withdrawn` | —           | terminal: no outgoing  |
+
+`withdrawn` is terminal: on chain a fully withdrawn bond cannot be slashed or
+re-activated, so `withdrawn → slashed` and `withdrawn → active` are rejected
+rather than silently corrupting local state. Likewise `slashed → active`
+(un-slash) is impossible on chain and is rejected.
+
+### Enforcement and the decision procedure
+
+`handleEvent` performs a **read-validate-write**: for `slash` / `withdrawal`
+it reads the node's current state via the repository contract's
+`getNodeStatus(nodeId)`, validates the requested transition, and only then
+issues the existing `updateNodeStatus(...)` write. The repository contract
+(`HorizonIngestionRepository`) now requires `getNodeStatus`; `src/db/repository.ts`
+provides a stub that returns `null` (refuses to manufacture state).
+
+Because Horizon delivers events **at-least-once** (cursors can replay after a
+crash, a lease hand-off, or a manual re-ingestion), the decision procedure
+(`resolveIngestionTransition`) distinguishes four deterministic outcomes:
+
+1. **`applied`** — a legal state *change*; the caller persists the new state.
+2. **`noop`** — same-state redelivery (`active → active`, `slashed → slashed`,
+   `withdrawn → withdrawn`). This is the expected replay case: accepted with
+   **no write** and no error, so a replay storm can never double-apply or
+   poison the stream.
+3. **`rejected` (`INVALID_STATE_TRANSITION`)** — stale / out-of-order event
+   (e.g. a `slash` for a `withdrawn` bond). A typed
+   `HorizonIngestionTransitionError` is thrown and **nothing is written**.
+4. **`rejected` (`NODE_NOT_INGESTED`)** — a `slash` / `withdrawal` for a node
+   the store has never seen (an ingestion gap where the prior `bond` event
+   was missed). Rejected with a typed error and **no write** — the local
+   store never materializes `slashed` / `withdrawn` state from nothing.
+   Close the gap via reconciliation (`IdentityStateSync`, `replayLedgerRange`)
+   before re-ingesting.
+
+The `bond` event is the only way a node comes into existence: it upserts the
+node into `active` (idempotent create-or-refresh), so repeated `bond`
+redelivery is safe by construction.
+
+### Failure behavior
+
+- Rejected transitions throw `HorizonIngestionTransitionError` with structured
+  fields (`code`, `nodeId`, `eventType`, `current`, `requested`) so callers
+  can route to a DLQ or audit log deterministically.
+- Repository write failures propagate to the caller unchanged; because the
+  validation happens before the write, a failed write leaves the node in its
+  previous state — no partial state is ever observable.
+- In `LeasedHorizonListener.process`, a rejected event propagates the error to
+  the caller (it is neither acknowledged as `'processed'` nor silently
+  dropped); a lost lease still returns `'skipped'` as before.
+
+### Compatibility
+
+This change is **additive**: previously-undefined behavior (writing a
+slash/withdrawal for an unknown node, or applying an illegal state change)
+is now rejected with a structured error. Every legal transition issues the
+exact same repository calls as before, so the public surface of
+`HorizonListener`, `LeasedHorizonListener`, and `LeaseManager` is unchanged.
+The only repository-contract addition is the `getNodeStatus` read.
+
+### Migration / rollback
+
+No schema migration is required. Rolling back means removing the
+`resolveIngestionTransition` call in `HorizonListener.handleEvent` and
+dropping `getNodeStatus` from the repository contract.
+
+### Security / correctness assumptions
+
+- The matrix validates the **logical** lifecycle only. Callers still own
+  authentication, authorization, cursor/idempotency handling, and
+  persistence; the matrix is a guardrail, not a replacement for optimistic
+  concurrency control or operation-id idempotency.
+- `NODE_NOT_INGESTED` rejection prevents an attacker or a misconfigured feed
+  from materializing `slashed` / `withdrawn` records for bonds the local
+  store never saw — phantom state cannot be created out of order.
+- No new trust boundary: node ids and event types come from the same Horizon
+  feed already trusted by the rest of the ingestion pipeline.
+
 ## Error Handling
 
 The listener implements comprehensive error handling:
