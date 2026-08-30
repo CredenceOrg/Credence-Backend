@@ -272,8 +272,20 @@ export function requireApiKey(requiredScope: ApiScope) {
     }
 
     // Attach metadata to request for downstream handlers.
+    let userTenantId: string | undefined;
+
     if (dbKey) {
       ;(req as any).apiKey = dbKey
+      const user = userRepo.findById(dbKey.ownerId);
+      if (user) {
+        userTenantId = user.tenantId;
+        ;(req as any).user = {
+          id: user.id,
+          role: user.role as UserRole,
+          email: user.email,
+          tenantId: user.tenantId,
+        };
+      }
     } else {
       ;(req as any).apiKey = {
         key: apiKey,
@@ -282,8 +294,24 @@ export function requireApiKey(requiredScope: ApiScope) {
           ? ApiScope.ENTERPRISE
           : grantedScopes[0],
       }
+      const userId = API_KEY_TO_USER[apiKey];
+      const mockUser = userId ? MOCK_USERS[userId] : null;
+      if (mockUser) {
+        userTenantId = mockUser.tenantId;
+        ;(req as any).user = {
+          id: mockUser.id,
+          role: mockUser.role as UserRole,
+          email: mockUser.email,
+          tenantId: mockUser.tenantId,
+        };
+      }
     }
-    next()
+    
+    if (userTenantId) {
+      runWithTenant(userTenantId, () => next());
+    } else {
+      next();
+    }
   }
 }
 

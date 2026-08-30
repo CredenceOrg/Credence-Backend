@@ -149,7 +149,15 @@ export function requireApiKey() {
     }
 
     req.apiKeyRecord = apiKey
-    next()
+
+    // Resolve tenant from the user repository
+    const user = (await import('../repositories/userRepository.js')).userRepo.findById(apiKey.ownerId)
+    if (user) {
+      const { runWithTenant } = await import('../utils/tenantContext.js')
+      runWithTenant(user.tenantId, () => next())
+    } else {
+      next()
+    }
   }
 }
 

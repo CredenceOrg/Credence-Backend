@@ -141,8 +141,14 @@ export function createWsSubscriptionServer(
 
       // Validate that subscription identity is within subscriber's tenant
       // This prevents reads across tenant boundaries
-      // TODO: Implement tenant-to-identity validation once identity repository
-      // exposes tenant association. For now, we trust the API key's tenant scope.
+      const identitiesRepo = (await import('../repositories/identities.repository.js')).IdentitiesRepository;
+      const identityRepo = new identitiesRepo((pool as any).db || pool /* fallback */, { skipTenantCheck: true });
+      const identityRecord = identityRepo.findByAddress(identity);
+      
+      if (!identityRecord || (identityRecord.tenant_id && identityRecord.tenant_id !== tenantId)) {
+        socket.destroy();
+        return;
+      }
 
       // Accept the connection
       wss.handleUpgrade(request, socket, head, (ws: WebSocket) => {
