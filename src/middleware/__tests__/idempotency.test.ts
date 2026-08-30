@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach, beforeAll, vi } from 'vitest';
-import express, { type Express } from 'express';
+import express, { type Express, type Request } from 'express';
 import { newDb, type IMemoryDb } from 'pg-mem';
 import { Pool } from 'pg';
 import { IdempotencyRepository } from '../../db/repositories/idempotencyRepository.js';
-import { idempotencyMiddleware, computeBoundKeyHash } from '../idempotency.js';
+import { idempotencyMiddleware, computeBoundKeyHash, extractActorId } from '../idempotency.js';
 import { ErrorCode } from '../../lib/errors.js';
 
 // Helper to simulate request without supertest
@@ -369,6 +369,174 @@ describe('Idempotency Middleware (In-Memory)', () => {
       expect(stored?.ttlSeconds).toBe(3600);
     });
   });
+
+  describe('raw credential binding (provisional actor)', () => {
+    it('binds the key to the raw x-api-key credential, not a downstream-decided identity', async () => {
+      // A single key+payload presented under a different raw credential must
+      // NOT replay the first actor's cached response. It must be rejected and
+      // leave no committed state for a third (owning) credential to trip over.
+      const headersA = {
+        'idempotency-key': 'cred-key',
+        'x-api-key': 'cr_aaaaaaaaaaaaaaaa',
+      };
+      const headersB = {
+        'idempotency-key': 'cred-key',
+        'x-api-key': 'cr_bbbbbbbbbbbbbbbb',
+      };
+      const headersBackToA = {
+        'idempotency-key': 'cred-key',
+        'x-api-key': 'cr_aaaaaaaaaaaaaaaa',
+      };
+      const payload = { data: 'credential-bound' };
+
+      const res1 = await request(app, 'POST', BASE, headersA, payload);
+      expect(res1.status).toBe(201);
+
+      // Different raw credential + same key + same payload => 409 mismatch.
+      const res2 = await request(app, 'POST', BASE, headersB, payload);
+      expect(res2.status).toBe(409);
+      expect((res2.body as any).code).toBe(ErrorCode.IDEMPOTENCY_KEY_MISMATCH);
+
+      // Original credential retries => safe replay (single committed effect).
+      const res3 = await request(app, 'POST', BASE, headersBackToA, payload);
+      expect(res3.status).toBe(201);
+      expect((res3.body as any).callCount).toBe(1);
+    });
+
+    it('does not admit an unauthenticated actor onto an authenticated idempotency record', async () => {
+      const authedHeaders = {
+        'idempotency-key': 'anon-vs-authed',
+        'x-api-key': 'cr_cccccccccccccccc',
+      };
+      const payload = { data: 'bound-actor' };
+
+      const authed = await request(app, 'POST', BASE, authedHeaders, payload);
+      expect(authed.status).toBe(201);
+
+      // Same key but no credential at all => different (anonymous) actor => 409,
+      // so an unauthenticated caller cannot retrieve a credentialed response.
+      const anon = await request(app, 'POST', BASE, { 'idempotency-key': 'anon-vs-authed' }, payload);
+      expect(anon.status).toBe(409);
+      expect((anon.body as any).code).toBe(ErrorCode.IDEMPOTENCY_KEY_MISMATCH);
+    });
+  });
+
+  describe('rejected and failed operations leave no cached state', () => {
+    it('does not cache 401 responses — a retry re-executes the operation', async () => {
+      const authBase = '/test-auth-reject';
+      let attempts = 0;
+
+      app.post(authBase, idempotencyMiddleware(idempotencyRepo), (req, res) => {
+        attempts++;
+        res.status(401).json({ error: 'unauthorized', attempts });
+      });
+
+      const headers = { 'idempotency-key': 'no-cache-401' };
+      const payload = { data: 'x' };
+
+      const res1 = await request(app, 'POST', authBase, headers, payload);
+      const res2 = await request(app, 'POST', authBase, headers, payload);
+
+      expect(res1.status).toBe(401);
+      expect(res2.status).toBe(401);
+      expect((res1.body as any).attempts).toBe(1);
+      expect((res2.body as any).attempts).toBe(2);
+    });
+
+    it('does not cache 403 responses — a retry re-executes the operation', async () => {
+      const authBase = '/test-forbid';
+      let attempts = 0;
+
+      app.post(authBase, idempotencyMiddleware(idempotencyRepo), (req, res) => {
+        attempts++;
+        res.status(403).json({ error: 'forbidden', attempts });
+      });
+
+      const res1 = await request(app, 'POST', authBase, { 'idempotency-key': 'no-cache-403' }, { data: 'x' });
+      const res2 = await request(app, 'POST', authBase, { 'idempotency-key': 'no-cache-403' }, { data: 'x' });
+
+      expect((res1.body as any).attempts).toBe(1);
+      expect((res2.body as any).attempts).toBe(2);
+    });
+
+    it('does not cache 5xx — a retry re-executes the operation (timeout/transient failure case)', async () => {
+      const failingBase = '/test-timeout-retry';
+      let attempts = 0;
+
+      app.post(failingBase, idempotencyMiddleware(idempotencyRepo), (_req, res) => {
+        attempts++;
+        res.status(503).json({ error: 'upstream timeout', attempts });
+      });
+
+      const headers = { 'idempotency-key': 'timeout-retry' };
+
+      const res1 = await request(app, 'POST', failingBase, headers, { data: 'y' });
+      const res2 = await request(app, 'POST', failingBase, headers, { data: 'y' });
+
+      expect((res1.body as any).attempts).toBe(1);
+      expect((res2.body as any).attempts).toBe(2);
+    });
+  });
+
+  describe('single committed effect under duplicate / reordered / conflicting keys', () => {
+    it('a conflicting idempotency key leaves no record so a corrective retry commits exactly once', async () => {
+      // Conflicting credential tries to submit the same key first.
+      const appConflicting = express();
+      appConflicting.use(express.json());
+      appConflicting.use((req: any, _res, next) => { req.apiKey = { id: 'actor-B' }; next(); });
+      appConflicting.post(BASE, idempotencyMiddleware(idempotencyRepo), (_req, res) => {
+        res.status(201).json({ success: true, committed: 999 });
+      });
+
+      const good = express();
+      good.use(express.json());
+      good.use((req: any, _res, next) => { req.apiKey = { id: 'actor-A' }; next(); });
+      let committed = 0;
+      good.post(BASE, idempotencyMiddleware(idempotencyRepo), (req: any, res) => {
+        committed++;
+        res.status(201).json({ success: true, committed });
+      });
+
+      // actor-B claims the key with its own payload.
+      const resB = await request(appConflicting, 'POST', BASE, { 'idempotency-key': 'corrective-key' }, { data: 'b' });
+      expect(resB.status).toBe(201);
+      expect((resB.body as any).committed).toBe(999);
+
+      // actor-A retries with the same key but a different payload => mismatch,
+      // and crucially the conflicting (actor-B) record is untouched.
+      const resA = await request(good, 'POST', BASE, { 'idempotency-key': 'corrective-key' }, { data: 'b' });
+      expect(resA.status).toBe(409);
+
+      // actor-A submits under a fresh key => executes and commits exactly once.
+      const resA2 = await request(good, 'POST', BASE, { 'idempotency-key': 'corrective-key-2' }, { data: 'a' });
+      expect(resA2.status).toBe(201);
+      expect((resA2.body as any).committed).toBe(1);
+    });
+
+    it('a conflict response is not persisted, so the same key can later be bound to a legitimate effect', async () => {
+      const legit = express();
+      legit.use(express.json());
+      legit.use((req: any, _res, next) => { req.apiKey = { id: 'legit-actor' }; next(); });
+      let runs = 0;
+      legit.post(BASE, idempotencyMiddleware(idempotencyRepo), (_req, res) => {
+        runs++;
+        res.status(201).json({ success: true, runs });
+      });
+
+      const first = await request(legit, 'POST', BASE, { 'idempotency-key': 'reclaim-key' }, { data: 'v1' });
+      expect(first.status).toBe(201);
+      expect((first.body as any).runs).toBe(1);
+
+      // Same key with a different payload => 409; the original record is retained.
+      const conf = await request(legit, 'POST', BASE, { 'idempotency-key': 'reclaim-key' }, { data: 'v2' });
+      expect(conf.status).toBe(409);
+
+      // Replaying the ORIGINAL payload still returns the cached response (one effect).
+      const replay = await request(legit, 'POST', BASE, { 'idempotency-key': 'reclaim-key' }, { data: 'v1' });
+      expect(replay.status).toBe(201);
+      expect((replay.body as any).runs).toBe(1);
+    });
+  });
 });
 
 describe('computeBoundKeyHash', () => {
@@ -395,8 +563,51 @@ describe('computeBoundKeyHash', () => {
 
   it('produces 64-character hex string', () => {
     const hash = computeBoundKeyHash('actor', 'payload');
-    
+
     expect(hash).toHaveLength(64);
     expect(/^[0-9a-f]+$/.test(hash)).toBe(true);
+  });
+});
+
+describe('extractActorId', () => {
+  function reqWith(headers: Record<string, string>): Request {
+    const req: any = { headers };
+    return req as Request;
+  }
+
+  it('binds to a raw x-api-key hash before any resolved apiKey identity', () => {
+    const req = reqWith({ 'x-api-key': 'cr_secret-material' });
+    (req as any).apiKey = { id: 'resolved-key-id' };
+    expect(extractActorId(req)).toMatch(/^raw-key:[0-9a-f]{64}$/);
+    expect(extractActorId(req)).not.toBe('resolved-key-id');
+  });
+
+  it('binds to a raw bearer token hash when no x-api-key is present', () => {
+    const req = reqWith({ authorization: 'Bearer abcdef123456' });
+    (req as any).user = { id: 'user-1' };
+    expect(extractActorId(req)).toMatch(/^raw-token:[0-9a-f]{64}$/);
+    expect(extractActorId(req)).not.toBe('user-1');
+  });
+
+  it('is deterministic for the same credential material', () => {
+    const a = reqWith({ 'x-api-key': 'cr_stable-material' });
+    const b = reqWith({ 'x-api-key': 'cr_stable-material' });
+    expect(extractActorId(a)).toBe(extractActorId(b));
+  });
+
+  it('differs across distinct credential material', () => {
+    const a = reqWith({ 'x-api-key': 'cr_material-one' });
+    const b = reqWith({ 'x-api-key': 'cr_material-two' });
+    expect(extractActorId(a)).not.toBe(extractActorId(b));
+  });
+
+  it('falls back to resolved apiKey identity when no raw credential is present', () => {
+    const req = reqWith({});
+    (req as any).apiKey = { id: 'resolved-key-id' };
+    expect(extractActorId(req)).toBe('resolved-key-id');
+  });
+
+  it('falls back to anonymous when nothing is present', () => {
+    expect(extractActorId(reqWith({}))).toBe('anonymous');
   });
 });

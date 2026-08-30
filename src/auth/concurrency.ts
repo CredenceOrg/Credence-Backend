@@ -196,19 +196,47 @@ export class AuthConcurrencyGuard {
     // Use the raw key string as the singleflight deduplication key.
     // It is never stored or logged; it serves only as a map key within
     // the process for the duration of the in-flight call.
-    let key: StoredApiKey | null
+    //
+    // ── Scope-change detection runs INSIDE the singleflight ────────────────
+    // The naive DB look-up and the scope-conflict verdict are coalesced so
+    // that every caller waiting on the same key during a burst shares the
+    // exact same decision.  If the detection ran per-caller after coalescing,
+    // the first waiter would evict the stale snapshot and the remaining
+    // waiters in the same burst would observe a clean baseline and be
+    // authorized with a just-changed scope set — a scope-confusion window.
+    // Performing the decision once per burst closes that gap: either the
+    // whole burst is rejected with 409, or the whole burst is authorized with
+    // a consistent scope set.
     try {
-      key = await this.sf.do(rawKey, () => lookup(rawKey))
+      return await this.sf.do(rawKey, async () => {
+        let key: StoredApiKey | null
+        try {
+          key = await lookup(rawKey)
+        } catch (err) {
+          // Propagate unexpected errors from the lookup as 401 so that no
+          // partial or stale state escapes to the caller.
+          return { ok: false, status: 401, error: 'Authentication lookup failed' } as AuthValidateResult
+        }
+        return this.decideForBurst(key)
+      })
     } catch (err) {
-      // Propagate unexpected errors from the lookup as 401 so that no
-      // partial or stale state escapes to the caller.
+      // The singleflight only rejects when the wrapped callback throws; our
+      // callback never throws (it returns a discriminated result) so this is a
+      // defensive backstop against programmer error in `decideForBurst`.
       return {
         ok: false,
         status: 401,
         error: 'Authentication lookup failed',
       }
     }
+  }
 
+  /**
+   * Decide the per-burst auth verdict for a looked-up key, mutating the scope
+   * snapshot exactly once per coalesced burst.  Extracted so it can run inside
+   * the singleflight where all waiters share the result.
+   */
+  private decideForBurst(key: StoredApiKey | null): AuthValidateResult {
     if (!key) {
       return {
         ok: false,
@@ -217,11 +245,10 @@ export class AuthConcurrencyGuard {
       }
     }
 
-    // ── Scope-change detection ─────────────────────────────────────────────
     // Compare the scope fingerprint returned by this look-up against the one
     // stored from the previous burst for the same key ID.  A mismatch means a
     // scope change landed between two requests that were coalesced into the
-    // same singleflight batch — the second caller may hold a stale scope set.
+    // same singleflight batch — the caller may hold a stale scope set.
     const currentFingerprint = scopeFingerprint(key.scopes)
     const previousFingerprint = this.scopeSnapshots.get(key.id)
 
