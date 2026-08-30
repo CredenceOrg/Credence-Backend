@@ -256,6 +256,19 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+  OUTBOX_RETRY_MAX_ATTEMPTS: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  OUTBOX_RETRY_INITIAL_DELAY_MS: z
+    .string()
+    .default('200')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  QUARANTINE_PROCESSOR_CRON: z
+    .string()
+    .default('*/1 * * * *'),
 
   // Outbox worker leadership lease (advisory-lock based)
   OUTBOX_LEADER_LEASE_ENABLED: z

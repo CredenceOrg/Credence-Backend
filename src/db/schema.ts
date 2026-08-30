@@ -180,6 +180,7 @@ const CREATE_TABLE_STATEMENTS = [
     request_hash TEXT NOT NULL,
     response_code INTEGER NOT NULL,
     response_body JSONB NOT NULL,
+    response_headers JSONB,
     ttl_seconds INTEGER NOT NULL DEFAULT 86400,
     expires_at TIMESTAMPTZ NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()

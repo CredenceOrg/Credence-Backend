@@ -177,6 +177,7 @@ export function idempotencyMiddleware(
             requestHash: payloadHash,
             responseCode: res.statusCode,
             responseBody: body,
+            responseHeaders: res.getHeaders(),
             ttlSeconds,
             expiresInSeconds: ttlSeconds,
           }).catch((err) => console.error(`[Idempotency] Failed to save key ${key}:`, err))
