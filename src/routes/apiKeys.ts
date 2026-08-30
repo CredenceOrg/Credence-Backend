@@ -56,6 +56,18 @@ export function createApiKeyRouter(
         throw new ValidationError(`Invalid tier. Allowed values: ${VALID_TIERS.join(', ')}`)
       }
 
+      // 'full' is the legacy alias for ApiScope.ENTERPRISE (see middleware/auth.ts),
+      // which requireApiKey treats as a superset of every granular scope — including
+      // admin:read, admin:write, outbox:reinject, and webhooks:admin. Self-service
+      // issuance must not let an ordinary user mint a key with that reach; only an
+      // authenticated admin identity may request it. Rejected here, before any key
+      // is created, so no elevated credential is ever persisted for a denied request.
+      if (rawScope === 'full' && user!.role !== UserRole.ADMIN && user!.role !== UserRole.SUPER_ADMIN) {
+        throw new ForbiddenError(
+          "The 'full' API key scope grants administrator-equivalent access and can only be self-issued by an admin account.",
+        )
+      }
+
       const result = await rotationService.issueKey(
         user!.id,
         user!.email,

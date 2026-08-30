@@ -1,1 +1,23 @@
-import type { Queryable } from './queryable.js'\nimport { getTenantId } from '../../utils/tenantContext.js'\n\nexport interface BaseRepositoryOptions {\n  /** @deprecated no longer supported */\n  skipTenantCheck?: boolean\n}\n\nexport abstract class BaseRepository {\n  protected readonly db: Queryable\n  protected readonly skipTenantCheck: boolean\n\n  constructor(db: Queryable, _options: BaseRepositoryOptions = {}) {\n    this.db = db\n    this.skipTenantCheck = _options.skipTenantCheck ?? false\n  }\n\n  protected assertTenant(): string {\n    const t = getTenantId()\n    if (!t) throw new Error('Missing tenant context')\n    return t\n  }\n}
+import type { Queryable } from './queryable.js'
+import { getTenantId } from '../../utils/tenantContext.js'
+
+export interface BaseRepositoryOptions {
+  /** @deprecated no longer supported */
+  skipTenantCheck?: boolean
+}
+
+export abstract class BaseRepository {
+  protected readonly db: Queryable
+  protected readonly skipTenantCheck: boolean
+
+  constructor(db: Queryable, _options: BaseRepositoryOptions = {}) {
+    this.db = db
+    this.skipTenantCheck = _options.skipTenantCheck ?? false
+  }
+
+  protected assertTenant(): string {
+    const t = getTenantId()
+    if (!t) throw new Error('Missing tenant context')
+    return t
+  }
+}

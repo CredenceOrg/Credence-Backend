@@ -279,6 +279,49 @@ describe('OutboxRepository quarantine handling', () => {
     expect(marked.rows[0].reinjected_by).toBe('operator')
     expect(marked.rows[0].reinjected_at).not.toBeNull()
   })
+
+  it('a repeated reinject of an already-reinjected quarantine row is a no-op and leaves no duplicate event', async () => {
+    const quarantine = await pool.query(
+      `INSERT INTO outbox_quarantine (
+        original_event_id, aggregate_type, aggregate_id, event_type, payload,
+        reason, error_message, retry_count, max_retries
+      )
+      VALUES (11, 'bond', 'bond-2', 'bond.created', '{bad-json', 'malformed_json', 'bad', 0, 5)
+      RETURNING id`
+    )
+    const quarantineId = BigInt(quarantine.rows[0].id)
+
+    const firstId = await repo.reinjectQuarantined(pool, quarantineId, { id: 'bond-2' }, 'operator-1')
+    expect(firstId).not.toBeNull()
+
+    // Retry with a different actor and a different payload — simulates a client
+    // retrying after a timeout, or a second operator racing the same action.
+    const secondId = await repo.reinjectQuarantined(pool, quarantineId, { id: 'tampered' }, 'operator-2')
+    expect(secondId).toBeNull()
+
+    const outboxRows = await pool.query(
+      'SELECT id, payload FROM event_outbox WHERE aggregate_type = $1 AND aggregate_id = $2',
+      ['bond', 'bond-2']
+    )
+    expect(outboxRows.rows).toHaveLength(1)
+    expect(JSON.parse(outboxRows.rows[0].payload)).toEqual({ id: 'bond-2' })
+
+    const marked = await pool.query('SELECT reinjected_by FROM outbox_quarantine WHERE id = $1', [
+      quarantineId.toString(),
+    ])
+    // First successful actor is preserved; the retry did not overwrite attribution.
+    expect(marked.rows[0].reinjected_by).toBe('operator-1')
+  })
+
+  it('reinjecting an unknown quarantine id mutates nothing and returns null', async () => {
+    const before = await pool.query('SELECT COUNT(*)::int AS count FROM event_outbox')
+
+    const result = await repo.reinjectQuarantined(pool, BigInt(999999), { id: 'nope' }, 'operator')
+
+    expect(result).toBeNull()
+    const after = await pool.query('SELECT COUNT(*)::int AS count FROM event_outbox')
+    expect(after.rows[0].count).toBe(before.rows[0].count)
+  })
 })
 
 describe('OutboxPublisher lease-aware sharding', () => {

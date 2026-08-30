@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import request from 'supertest'
 import express from 'express'
 import apiKeysRouter from './apiKeys.js'
-import { generateApiKey, _setUseInMemory, _resetStore, ApiKeyScope } from '../services/apiKeys.js'
+import { generateApiKey, listApiKeys, _setUseInMemory, _resetStore, ApiKeyScope } from '../services/apiKeys.js'
 import { createApiKeyRouter } from './apiKeys.js'
 import { auditLogService, AuditAction } from '../services/audit/index.js'
 import { userRepo } from '../repositories/userRepository.js'
@@ -279,5 +279,95 @@ describe('Integration API Key Rotation Routes', () => {
       keyId: 'missing-key',
       reason: 'key_not_found',
     })
+  })
+})
+
+describe('POST /api/integrations/keys — self-service scope escalation boundary', () => {
+  let app: express.Express
+  let userKey: string
+  let adminKey: string
+
+  beforeEach(async () => {
+    _resetStore()
+    _setUseInMemory(true)
+    userRepo._reset()
+    await auditLogService.clearLogs()
+
+    userRepo.upsert({
+      id: 'plain-user',
+      role: 'user',
+      email: 'plain@example.com',
+      tenantId: 'tenant-issue',
+      active: true,
+    })
+    userRepo.upsert({
+      id: 'admin-user',
+      role: 'admin',
+      email: 'admin@example.com',
+      tenantId: 'tenant-issue',
+      active: true,
+    })
+
+    userKey = generateApiKey('plain-user', ['trust:read'], 'free').key
+    adminKey = generateApiKey('admin-user', ['trust:read'], 'free').key
+
+    app = express()
+    app.use(express.json())
+    app.use('/api/integrations/keys', createApiKeyRouter())
+  })
+
+  afterEach(() => {
+    _resetStore()
+    userRepo._reset()
+  })
+
+  it("rejects a non-admin user requesting the 'full' scope and mints no key", async () => {
+    const response = await request(app)
+      .post('/api/integrations/keys')
+      .set('Authorization', `Bearer ${userKey}`)
+      .send({ scope: 'full' })
+
+    expect(response.status).toBe(403)
+
+    const keys = await listApiKeys('plain-user')
+    // Only the seed 'trust:read' key from beforeEach exists — nothing new was created.
+    expect(keys).toHaveLength(1)
+    expect(keys[0].scopes).toEqual(['trust:read'])
+  })
+
+  it("allows an admin to self-issue a 'full' scope key", async () => {
+    const response = await request(app)
+      .post('/api/integrations/keys')
+      .set('Authorization', `Bearer ${adminKey}`)
+      .send({ scope: 'full' })
+
+    expect(response.status).toBe(201)
+    expect(response.body.data.scope).toBe('full')
+
+    const keys = await listApiKeys('admin-user')
+    expect(keys).toHaveLength(2)
+  })
+
+  it('allows a non-admin user to self-issue the default read-scoped key (no regression)', async () => {
+    const response = await request(app)
+      .post('/api/integrations/keys')
+      .set('Authorization', `Bearer ${userKey}`)
+      .send({})
+
+    expect(response.status).toBe(201)
+    expect(response.body.data.scope).toBe('read')
+  })
+
+  it('rejects the escalation attempt on every retry, leaving no partial state', async () => {
+    for (let i = 0; i < 3; i++) {
+      const response = await request(app)
+        .post('/api/integrations/keys')
+        .set('Authorization', `Bearer ${userKey}`)
+        .send({ scope: 'full' })
+      expect(response.status).toBe(403)
+    }
+
+    const keys = await listApiKeys('plain-user')
+    expect(keys).toHaveLength(1)
   })
 })
