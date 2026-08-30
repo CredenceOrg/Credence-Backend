@@ -9,6 +9,13 @@ import type { Pool, PoolClient } from 'pg'
 import { upsertIdentity, upsertBond, upsertCursor } from '../services/identityService.js'
 import { pool as defaultPool } from '../db/pool.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
+import { HorizonEventLedger } from '../db/repositories/horizonEventRepository.js'
+import {
+  computeStateHash,
+  stateFromBondEvent,
+  extractLedgerSeq,
+  type BondCreationEventPayload,
+} from '../services/horizonParity.js'
 import { register, Gauge } from 'prom-client'
 import { BoundedBackoff } from '../utils/backoff.js'
 import { getHorizonMetrics } from '../observability/horizonMetrics.js'
@@ -43,6 +50,13 @@ const lastCheckpointGauge = new Gauge({
  *
  * Invalid payloads are quarantined to the DLQ via `DlqRouter` and the
  * cursor is NOT advanced past them, so they can be inspected and replayed.
+ *
+ * Every committed transition writes a versioned, complete record to the
+ * `horizon_events` ledger (`eventLedger`) inside the SAME transaction as
+ * the identity/bond mutation and cursor checkpoint.  A record therefore
+ * only ever exists for a committed transition, keyed by the Horizon
+ * operation id (correlation identifier) and carrying a deterministic hash
+ * of the resulting identity state for parity reconciliation (issue #1266).
  */
 export function subscribeBondCreationEvents(
   dlqRouter: DlqRouter,
@@ -51,6 +65,7 @@ export function subscribeBondCreationEvents(
     bond: { id: string; address: string; amount: string; duration: string | null };
   }) => void,
   pool: Pool = defaultPool,
+  eventLedger: HorizonEventLedger = new HorizonEventLedger(pool),
 ): BondCreationHandle {
   const cursorRepo = new CursorRepository(pool);
   const backoff = new BoundedBackoff({ baseMs: 500, maxMs: 30_000 });
@@ -82,15 +97,30 @@ export function subscribeBondCreationEvents(
                 return;
               }
               const event = parseBondEvent(validation.data);
-              // The event mutation and checkpoint are one durable unit. If a
-              // process crashes before COMMIT, the next owner replays the
-              // event from the previous cursor; it can never acknowledge an
-              // event whose state was only partially persisted.
+              // The event mutation, the versioned ledger record, and the
+              // checkpoint are ONE durable unit. If a process crashes before
+              // COMMIT, the next owner replays the event from the previous
+              // cursor; it can never acknowledge an event whose state was only
+              // partially persisted, and it can never leave a ledger record
+              // for a transition that was not committed (issue #1266).
+              const eventPayload = event as unknown as BondCreationEventPayload
+              const ledgerInput = {
+                streamName: STREAM_NAME,
+                eventId: validation.data.id,
+                pagingToken: newCursor,
+                ledgerSeq: extractLedgerSeq(newCursor),
+                eventType: 'create_bond',
+                payload: event as unknown as Record<string, unknown>,
+                stateHash: computeStateHash(stateFromBondEvent(eventPayload)),
+              };
               const client: PoolClient = await pool.connect();
               try {
                 await client.query('BEGIN');
                 await upsertIdentity(event.identity, client);
                 await upsertBond(event.bond, client);
+                // Idempotent: at-least-once replays of the same operation id
+                // are no-ops, so repeated delivery never duplicates records.
+                await eventLedger.record(ledgerInput, client);
                 await upsertCursor({ streamName: STREAM_NAME, pagingToken: newCursor }, client);
                 await client.query('COMMIT');
               } catch (transactionError) {

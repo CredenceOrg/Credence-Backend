@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 import { CursorRepository } from "../../db/repositories/cursorRepository.js";
 import { DlqRouter, type DlqSink } from "../messageValidator.js";
+import { computeStateHash, stateFromBondEvent, extractLedgerSeq } from "../../services/horizonParity.js";
 
 const poolMocks = vi.hoisted(() => {
   const mockClientQuery = vi.fn()
@@ -11,13 +12,44 @@ const poolMocks = vi.hoisted(() => {
   return { mockClientQuery, mockClientRelease, mockClient, mockPoolConnect, mockPoolQuery }
 })
 
-vi.mock("prom-client", () => ({
-  register: {},
-  Gauge: vi.fn().mockImplementation(function() { return { set: vi.fn() }; }),
-}));
+vi.mock("prom-client", () => {
+  // Provide a default export and the metric classes pulled in by modules that
+  // `import client from "prom-client"` (e.g. observability/latencyMetrics via
+  // the transaction/outbox graph), so the mocked module satisfies both the
+  // named and default import styles used across the codebase.
+  const makeMetric = vi.fn(function(this: any) {
+    return {
+      set: vi.fn(),
+      inc: vi.fn(),
+      dec: vi.fn(),
+      observe: vi.fn(),
+      labels: vi.fn().mockReturnValue({ set: vi.fn(), inc: vi.fn(), observe: vi.fn() }),
+      reset: vi.fn(),
+    }
+  });
+  const makeRegistry = vi.fn(function(this: any) {
+    return { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) }
+  });
+  const registry = { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) };
+  const client = {
+    register: registry,
+    Registry: makeRegistry,
+    Gauge: makeMetric,
+    Counter: makeMetric,
+    Histogram: makeMetric,
+    Summary: makeMetric,
+    collectDefaultMetrics: vi.fn(),
+    exponentialBuckets: vi.fn().mockReturnValue([]),
+  };
+  return { ...client, default: client };
+});
 
 vi.mock("../../db/pool.js", () => ({
   pool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
+  workerPool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
+  apiPreparedStatementCache: new Map(),
+  workerPreparedStatementCache: new Map(),
+  replicaPreparedStatementCache: new Map(),
 }))
 
 vi.mock("../../services/identityService.js", () => ({
@@ -31,6 +63,14 @@ vi.mock("../../observability/horizonMetrics.js", () => ({
     reconnectTotal: { inc: vi.fn() },
     streamUp: { set: vi.fn() },
   }),
+}));
+
+// The listener load graph transitively pulls reputationService (via the
+// transaction/cache-invalidation edge introduced on the rebased base), which
+// would otherwise import middleware/metrics and the full observability +
+// pool setup. Mock it so the module graph loads cleanly in isolation.
+vi.mock("../../services/reputationService.js", () => ({
+  invalidateTrustScoreCache: vi.fn().mockResolvedValue(undefined),
 }));
 
 let capturedHandlers: { onmessage?: any; onerror?: any } = {};
@@ -76,6 +116,172 @@ function makeRouter(): DlqRouter {
   return new DlqRouter(sink);
 }
 
+function makeSpyRouter(): { router: DlqRouter; captureFailure: ReturnType<typeof vi.fn> } {
+  const captureFailure = vi.fn().mockResolvedValue(undefined);
+  return { router: new DlqRouter({ captureFailure }), captureFailure };
+}
+
+/**
+ * `subscribeBondCreationEvents` opens its stream asynchronously (it first
+ * loads the saved cursor), so wait a few ticks before invoking captured
+ * handlers to avoid racing the stream setup.
+ */
+async function flushStreamSetup(): Promise<void> {
+  await new Promise((resolve) => process.nextTick(resolve));
+  await new Promise((resolve) => process.nextTick(resolve));
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+/** Extract the ledger INSERT call (params included) from a mocked client. */
+function ledgerInsertCalls(query: ReturnType<typeof vi.fn>) {
+  return query.mock.calls.filter(([sql]) =>
+    String(sql).includes("INSERT INTO horizon_events")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Issue #1266 — events and audit parity: the ledger record is written inside
+// the SAME transaction as the state mutation and cursor checkpoint, so a
+// record only ever exists for a committed transition, and a failed
+// transition leaves no partial state and no record.
+// ---------------------------------------------------------------------------
+describe("subscribeBondCreationEvents — event ledger parity", () => {
+  const makeBondOp = (overrides: Record<string, unknown> = {}) => ({
+    type: "create_bond",
+    id: "op-ledger-1",
+    paging_token: "1000",
+    source_account: "GABC",
+    amount: "100",
+    duration: "365",
+    ...overrides,
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedHandlers = {};
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+    capturedHandlers = {};
+    streamCallCount = 0;
+    lastCursorVal = undefined;
+  });
+
+  it("writes a versioned, complete record with correlation identifiers inside the transaction", async () => {
+    const { router } = makeSpyRouter();
+    const onEvent = vi.fn();
+    const h = subscribeBondCreationEvents(router, onEvent);
+    await flushStreamSetup();
+
+    await capturedHandlers.onmessage?.(makeBondOp());
+
+    const inserts = ledgerInsertCalls(poolMocks.mockClientQuery);
+    expect(inserts).toHaveLength(1);
+    const [, params] = inserts[0] as [string, unknown[]];
+    const [streamName, eventId, pagingToken, ledgerSeq, eventType, payload, stateHash] = params as string[];
+
+    expect(streamName).toBe("bond_creation");
+    expect(eventId).toBe("op-ledger-1");
+    expect(pagingToken).toBe("1000");
+    expect(ledgerSeq).toBe(extractLedgerSeq("1000"));
+    expect(eventType).toBe("create_bond");
+    expect(JSON.parse(payload)).toEqual({
+      identity: { id: "GABC" },
+      bond: { id: "op-ledger-1", address: "GABC", amount: "100", duration: "365" },
+    });
+    expect(stateHash).toBe(
+      computeStateHash(
+        stateFromBondEvent({
+          identity: { id: "GABC" },
+          bond: { id: "op-ledger-1", address: "GABC", amount: "100", duration: "365" },
+        })
+      )
+    );
+
+    // The record is written between BEGIN and COMMIT — same durable unit as
+    // the identity/bond mutation and the cursor checkpoint.
+    const sqls = poolMocks.mockClientQuery.mock.calls.map(([sql]) => String(sql));
+    const beginIdx = sqls.findIndex((s) => s === "BEGIN");
+    const commitIdx = sqls.findIndex((s) => s === "COMMIT");
+    const insertIdx = sqls.findIndex((s) => s.includes("INSERT INTO horizon_events"));
+    expect(beginIdx).toBeGreaterThanOrEqual(0);
+    expect(commitIdx).toBeGreaterThan(beginIdx);
+    expect(insertIdx).toBeGreaterThan(beginIdx);
+    expect(insertIdx).toBeLessThan(commitIdx);
+
+    // Caller-visible behaviour preserved.
+    expect(onEvent).toHaveBeenCalledTimes(1);
+    h.stop();
+  });
+
+  it("rolls back and routes to the DLQ when the ledger write fails — no partial state", async () => {
+    const { router, captureFailure } = makeSpyRouter();
+    const onEvent = vi.fn();
+    const h = subscribeBondCreationEvents(router, onEvent);
+    await flushStreamSetup();
+
+    let calls: unknown[][] = [];
+    poolMocks.mockClientQuery.mockImplementation((sql: string) => {
+      calls.push([sql]);
+      if (String(sql).includes("INSERT INTO horizon_events")) {
+        return Promise.reject(new Error("ledger unavailable"));
+      }
+      return Promise.resolve({ rows: [], rowCount: 0 });
+    });
+
+    try {
+      await capturedHandlers.onmessage?.(makeBondOp());
+    } finally {
+      poolMocks.mockClientQuery.mockReset();
+    }
+
+    const sqls = calls.map(([sql]) => String(sql));
+    expect(sqls).toContain("ROLLBACK");
+    expect(sqls).not.toContain("COMMIT");
+
+    // The failed transition was quarantined and never surfaced as committed.
+    expect(captureFailure).toHaveBeenCalledWith(
+      "bond_creation",
+      expect.objectContaining({ id: "op-ledger-1" }),
+      expect.stringContaining("PROCESSING_ERROR"),
+    );
+    expect(onEvent).not.toHaveBeenCalled();
+    h.stop();
+  });
+
+  it("re-delivers the same operation id without duplicating the ledger record (idempotent replay)", async () => {
+    const { router } = makeSpyRouter();
+    const h = subscribeBondCreationEvents(router, vi.fn());
+    await flushStreamSetup();
+
+    await capturedHandlers.onmessage?.(makeBondOp());
+    await capturedHandlers.onmessage?.(makeBondOp({ paging_token: "1000" }));
+
+    // Both deliveries attempt the idempotent INSERT keyed on (stream, event_id);
+    // the repository's ON CONFLICT DO NOTHING guarantees a single row.
+    const inserts = ledgerInsertCalls(poolMocks.mockClientQuery);
+    expect(inserts).toHaveLength(2);
+    const eventIds = inserts.map(([, params]) => (params as string[])[1]);
+    expect(eventIds).toEqual(["op-ledger-1", "op-ledger-1"]);
+    h.stop();
+  });
+
+  it("rejects invalid payloads without state writes or ledger records", async () => {
+    const { router, captureFailure } = makeSpyRouter();
+    const h = subscribeBondCreationEvents(router, vi.fn());
+    await flushStreamSetup();
+
+    await capturedHandlers.onmessage?.(makeBondOp({ amount: "-5" }));
+
+    expect(captureFailure).toHaveBeenCalledTimes(1);
+    expect(captureFailure.mock.calls[0][2]).toContain("SCHEMA_VALIDATION_FAILED");
+    expect(ledgerInsertCalls(poolMocks.mockClientQuery)).toHaveLength(0);
+    expect(poolMocks.mockClientQuery.mock.calls.some(([sql]) => String(sql) === "BEGIN")).toBe(false);
+    h.stop();
+  });
+});
+
 describe("subscribeBondCreationEvents", () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -84,14 +290,16 @@ describe("subscribeBondCreationEvents", () => {
     lastCursorVal = undefined;
   });
 
-  it("opens exactly ONE stream on subscribe", () => {
+  it("opens exactly ONE stream on subscribe", async () => {
     const h = subscribeBondCreationEvents(makeRouter());
+    await flushStreamSetup();
     expect(streamCallCount).toBe(1);
     h.stop();
   });
 
-  it("does NOT open a second stream — no duplicate", () => {
+  it("does NOT open a second stream — no duplicate", async () => {
     const h = subscribeBondCreationEvents(makeRouter());
+    await flushStreamSetup();
     expect(streamCallCount).toBe(1);
     h.stop();
   });
@@ -110,8 +318,9 @@ describe("subscribeBondCreationEvents", () => {
   it("invokes onEvent for create_bond operations", async () => {
     const onEvent = vi.fn();
     const h = subscribeBondCreationEvents(makeRouter(), onEvent);
+    await flushStreamSetup();
     await capturedHandlers.onmessage?.({
-      type: "create_bond", id: "op1", paging_token: "tok1",
+      type: "create_bond", id: "op1", paging_token: "1001",
       source_account: "GABC", amount: "100", duration: "365",
     });
     expect(onEvent).toHaveBeenCalledTimes(1);
@@ -125,8 +334,9 @@ describe("subscribeBondCreationEvents", () => {
   it("does not invoke onEvent for non create_bond operations", async () => {
     const onEvent = vi.fn();
     const h = subscribeBondCreationEvents(makeRouter(), onEvent);
+    await flushStreamSetup();
     await capturedHandlers.onmessage?.({
-      type: "payment", id: "op2", paging_token: "tok2",
+      type: "payment", id: "op2", paging_token: "1002",
       source_account: "GXYZ", amount: "50",
     });
     expect(onEvent).not.toHaveBeenCalled();
@@ -135,6 +345,7 @@ describe("subscribeBondCreationEvents", () => {
 
   it("stop() prevents further reconnects after error", async () => {
     const h = subscribeBondCreationEvents(makeRouter());
+    await flushStreamSetup();
     h.stop();
     const countBefore = streamCallCount;
     await capturedHandlers.onerror?.(new Error("test"));
@@ -144,6 +355,7 @@ describe("subscribeBondCreationEvents", () => {
   describe("Reconnect with bounded exponential backoff", () => {
     it("onerror triggers reconnect with backoff", async () => {
       const h = subscribeBondCreationEvents(makeRouter());
+      await flushStreamSetup();
       expect(streamCallCount).toBe(1);
       
       // Trigger error - should attempt reconnect via backoff
@@ -165,6 +377,7 @@ describe("subscribeBondCreationEvents", () => {
       const incSpy = vi.spyOn(metrics.reconnectTotal, "inc");
       
       const h = subscribeBondCreationEvents(makeRouter());
+      await flushStreamSetup();
       
       // Trigger an error
       await capturedHandlers.onerror?.(new Error("test error"));
@@ -179,6 +392,7 @@ describe("subscribeBondCreationEvents", () => {
       const setSpy = vi.spyOn(metrics.streamUp, "set");
       
       const h = subscribeBondCreationEvents(makeRouter());
+      await flushStreamSetup();
       
       // Clear the spy to focus on error handling
       setSpy.mockClear();
@@ -196,6 +410,7 @@ describe("subscribeBondCreationEvents", () => {
       const setSpy = vi.spyOn(metrics.streamUp, "set");
       
       const h = subscribeBondCreationEvents(makeRouter());
+      await flushStreamSetup();
       
       // Clear previous calls
       setSpy.mockClear();
@@ -204,29 +419,34 @@ describe("subscribeBondCreationEvents", () => {
       await capturedHandlers.onmessage?.({
         type: "create_bond",
         id: "op1",
-        paging_token: "tok1",
+        paging_token: "1001",
         source_account: "GABC",
         amount: "100",
         duration: "365",
       });
       
-      // Should be called (set to 1 initially in startStream)
-      // We're verifying no stream up/down issues during successful processing
-      expect(setSpy).toHaveBeenCalled();
+      // Successful processing must never mark the stream down — the stream
+      // stays up (set to 1 at start) through event handling.
+      expect(setSpy).not.toHaveBeenCalledWith({ stream: STREAM_NAME }, 0);
       h.stop();
     });
 
     it("stop() cancels pending reconnect timer", async () => {
       const h = subscribeBondCreationEvents(makeRouter());
-      
-      // Trigger an error to start backoff
+      await flushStreamSetup();
+
+      // Trigger an error to start the backoff wait.
       const errorPromise = capturedHandlers.onerror?.(new Error("test error"));
-      
-      // Immediately stop
+      // Let the handler reach backoff.wait() (which schedules the reconnect timer).
+      await new Promise((resolve) => process.nextTick(resolve));
+
+      // Stop cancels the pending wait; the listener swallows the { stopped }
+      // rejection inside its onerror handler and must NOT open a new stream.
       h.stop();
-      
-      // The error promise should be rejected with stopped
-      await expect(errorPromise).rejects.toMatchObject({ stopped: true });
+      await errorPromise;
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      expect(streamCallCount).toBe(1);
     });
   });
 
@@ -234,12 +454,13 @@ describe("subscribeBondCreationEvents", () => {
     it("backoff resets after successful message processing", async () => {
       const onEvent = vi.fn();
       const h = subscribeBondCreationEvents(makeRouter(), onEvent);
+      await flushStreamSetup();
       
       // Send a successful create_bond message
       await capturedHandlers.onmessage?.({
         type: "create_bond",
         id: "op1",
-        paging_token: "tok1",
+        paging_token: "1001",
         source_account: "GABC",
         amount: "100",
         duration: "365",
