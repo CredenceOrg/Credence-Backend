@@ -201,3 +201,66 @@ export async function upsertCursor(
     [input.streamName, input.pagingToken]
   )
 }
+
+/**
+ * Forward-only (monotonic) cursor checkpoint.
+ *
+ * Same durable checkpoint as `upsertCursor`, but it can never move the stored
+ * paging token backwards: the stored token is only replaced when the new
+ * token is strictly larger (numeric compare). Out-of-order or replayed
+ * deliveries therefore converge on the furthest checkpoint instead of
+ * regressing it and forcing re-delivery of an already-processed range.
+ *
+ * A stored `'now'` token (no real checkpoint yet) is always replaceable by a
+ * numeric token. When the stored token is already at or beyond the requested
+ * one, no row is written and `null` is returned.
+ *
+ * @returns The persisted paging token, or `null` when the cursor was not
+ *          advanced (a later token is already checkpointed).
+ */
+export async function upsertCursorMonotonic(
+  input: CursorUpsertInput,
+  client?: PoolClient,
+): Promise<string | null> {
+  if (!/^\d+$/.test(input.pagingToken) && input.pagingToken !== 'now') {
+    throw new Error(
+      `Invalid paging_token format: ${input.pagingToken}. ` +
+      `Expected numeric string or 'now'.`
+    )
+  }
+
+  const db = client ?? pool
+
+  // Try to advance an existing checkpoint first (only forward).
+  const updated = await db.query(
+    `UPDATE horizon_cursors
+        SET paging_token = $2,
+            last_checkpoint = NOW(),
+            updated_at = NOW()
+      WHERE stream_name = $1
+        AND (paging_token = 'now'
+             OR (paging_token <> 'now'
+                 AND $2 <> 'now'
+                 AND $2::numeric > paging_token::numeric))`,
+    [input.streamName, input.pagingToken]
+  )
+  if ((updated.rowCount ?? 0) > 0) {
+    return input.pagingToken
+  }
+
+  // No checkpoint yet (or a concurrent owner advanced past us): insert only
+  // when the stream has no row at all. A conflict here means the stream is
+  // already checkpointed at an equal-or-later token, which is exactly the
+  // converged state we want — nothing to do.
+  const inserted = await db.query(
+    `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
+     VALUES ($1, $2, NOW(), NOW())
+     ON CONFLICT (stream_name) DO NOTHING`,
+    [input.streamName, input.pagingToken]
+  )
+  if ((inserted.rowCount ?? 0) > 0) {
+    return input.pagingToken
+  }
+
+  return null
+}

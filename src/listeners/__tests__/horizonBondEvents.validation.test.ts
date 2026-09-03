@@ -70,17 +70,20 @@ vi.mock('../../db/pool.js', () => ({
 }))
 
 // Mock identityService functions using vi.hoisted to avoid hoisting issues
-const { mockUpsertIdentity, mockUpsertBond, mockUpsertCursor } = vi.hoisted(() => ({
+const { mockUpsertIdentity, mockUpsertBond, mockUpsertCursor, mockUpsertCursorMonotonic } = vi.hoisted(() => ({
   mockUpsertIdentity: vi.fn().mockResolvedValue({}),
   mockUpsertBond: vi.fn().mockResolvedValue({}),
   mockUpsertCursor: vi.fn().mockResolvedValue({}),
+  mockUpsertCursorMonotonic: vi.fn().mockResolvedValue(null),
 }))
 
 // Correct the path: from the test file (src/listeners/__tests__) to src/services is ../../services
 vi.mock('../../services/identityService.js', () => ({
   upsertIdentity: mockUpsertIdentity,
   upsertBond: mockUpsertBond,
-  upsertCursor: mockUpsertCursor
+  upsertCursor: mockUpsertCursor,
+  // Forward-only checkpoint used by the replay/idempotency ingestion boundary.
+  upsertCursorMonotonic: mockUpsertCursorMonotonic
 }))
 
 // Import after mocking
@@ -151,10 +154,11 @@ describe('subscribeBondCreationEvents validation', () => {
       expect(sink.captured).toHaveLength(0)
       // Should advance cursor and process event
       expect(mockOnEvent).toHaveBeenCalled()
-      // Should call upsertIdentity, upsertBond, and upsertCursor
+      // Should call upsertIdentity, upsertBond, and the forward-only
+      // checkpoint used by the replay/idempotency ingestion boundary
       expect(mockUpsertIdentity).toHaveBeenCalled()
       expect(mockUpsertBond).toHaveBeenCalled()
-      expect(mockUpsertCursor).toHaveBeenCalled()
+      expect(mockUpsertCursorMonotonic).toHaveBeenCalled()
     })
 
     it('should process valid bond creation with null duration', async () => {

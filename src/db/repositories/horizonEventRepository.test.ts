@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import { newDb, type IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
-import { HorizonEventLedger, type HorizonEventRecordInput } from './horizonEventRepository.js'
+import {
+  HorizonEventLedger,
+  HorizonEventConflictError,
+  canonicalEventPayload,
+  type HorizonEventRecordInput,
+} from './horizonEventRepository.js'
 
 const DDL = `
   CREATE TABLE horizon_events (
@@ -129,5 +134,133 @@ describe('HorizonEventLedger', () => {
     expect(params[0]).toBe('bond_creation')
     expect(params[1]).toBe('op-1')
     expect(params[2]).toBe('100')
+  })
+})
+
+describe('HorizonEventLedger.claim — durable request identity and conflicting reuse (#1261)', () => {
+  let db: IMemoryDb
+  let pool: Pool
+  let ledger: HorizonEventLedger
+
+  beforeEach(async () => {
+    db = newDb()
+    const pgMock = db.adapters.createPg()
+    pool = new pgMock.Pool() as unknown as Pool
+    await pool.query(DDL)
+    ledger = new HorizonEventLedger(pool)
+  })
+
+  it('inserts a fresh operation id exactly once (first processing)', async () => {
+    expect(await ledger.claim(input())).toBe('inserted')
+    expect(await ledger.count('bond_creation')).toBe(1)
+  })
+
+  it('reports a deterministic duplicate for an identical replay of the same operation', async () => {
+    await ledger.claim(input())
+    // Identical payload, identical key — the retry must be a no-op, never a
+    // second insert, never an error.
+    expect(await ledger.claim(input())).toBe('duplicate')
+    expect(await ledger.count('bond_creation')).toBe(1)
+  })
+
+  it('rejects conflicting reuse: same operation id, materially different payload', async () => {
+    await ledger.claim(input())
+
+    // Same key (op-1) but a different amount: a materially different operation
+    // claiming an already-committed request key. Must be rejected
+    // deterministically, and the committed record must remain untouched.
+    const conflicting = input({
+      payload: {
+        identity: { id: 'GADDR' },
+        bond: { id: 'op-1', address: 'GADDR', amount: '999999999', duration: '365' },
+      },
+      stateHash: 'tampered',
+    })
+    await expect(ledger.claim(conflicting)).rejects.toBeInstanceOf(HorizonEventConflictError)
+    await expect(ledger.claim(conflicting)).rejects.toMatchObject({
+      code: 'EVENT_ID_CONFLICT',
+      eventId: 'op-1',
+      streamName: 'bond_creation',
+    })
+
+    const committed = await ledger.findByStreamAndEvent('bond_creation', 'op-1')
+    expect(committed?.payload).toEqual(input().payload)
+    expect(committed?.stateHash).toBe('abc123')
+    expect(await ledger.count('bond_creation')).toBe(1)
+  })
+
+  it('treats key-order-only payload differences as the same operation', async () => {
+    await ledger.claim(input())
+    const reordered = input({
+      payload: {
+        bond: { id: 'op-1', address: 'GADDR', duration: '365', amount: '1000' },
+        identity: { id: 'GADDR' },
+      },
+    })
+    expect(await ledger.claim(reordered)).toBe('duplicate')
+  })
+
+  it('scopes claims per stream: the same event id is independent across streams', async () => {
+    expect(await ledger.claim(input())).toBe('inserted')
+    expect(await ledger.claim(input({ streamName: 'attestation' }))).toBe('inserted')
+    expect(await ledger.count()).toBe(2)
+  })
+
+  it('issues the idempotent INSERT through a caller-provided client (joins the transaction)', async () => {
+    const clientQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 })
+    const client = { query: clientQuery } as unknown as Pool
+
+    // No committed row (the SELECT finds none) → the claim must reach the
+    // idempotent INSERT on the caller's client, never on the pool.
+    const outcome = await ledger.claim(input(), client as never)
+    expect(outcome).toBe('inserted')
+
+    const sqls = clientQuery.mock.calls.map(([sql]) => String(sql))
+    const insertSql = sqls.find((sql) => sql.includes('INSERT INTO horizon_events'))
+    expect(insertSql).toBeDefined()
+    expect(insertSql).toContain('ON CONFLICT (stream_name, event_id) DO NOTHING')
+  })
+
+  it('decides duplicate/conflict from the committed record without issuing an INSERT', async () => {
+    await ledger.claim(input())
+
+    const client = await pool.connect()
+    try {
+      const querySpy = vi.spyOn(client, 'query')
+
+      // Identical payload → duplicate, resolved by read only — the write path
+      // must not be touched for an already-committed operation.
+      expect(await ledger.claim(input(), client)).toBe('duplicate')
+
+      const conflicting = input({
+        payload: {
+          identity: { id: 'GADDR' },
+          bond: { id: 'op-1', address: 'GADDR', amount: '42', duration: '365' },
+        },
+      })
+      await expect(ledger.claim(conflicting, client)).rejects.toMatchObject({
+        code: 'EVENT_ID_CONFLICT',
+      })
+
+      const sqls = querySpy.mock.calls.map(([sql]) => String(sql))
+      expect(sqls.some((sql) => sql.includes('INSERT INTO horizon_events'))).toBe(false)
+      expect(await ledger.count('bond_creation')).toBe(1)
+    } finally {
+      client.release()
+    }
+  })
+})
+
+describe('canonicalEventPayload', () => {
+  it('is stable regardless of key insertion order', () => {
+    const a = canonicalEventPayload({ identity: { id: 'X' }, bond: { amount: '1' } })
+    const b = canonicalEventPayload({ bond: { amount: '1' }, identity: { id: 'X' } })
+    expect(a).toBe(b)
+  })
+
+  it('differs when any semantic value differs', () => {
+    expect(canonicalEventPayload({ amount: '100' })).not.toBe(
+      canonicalEventPayload({ amount: '101' })
+    )
   })
 })
