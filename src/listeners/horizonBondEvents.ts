@@ -5,21 +5,18 @@
  */
 
 import { Horizon } from '@stellar/stellar-sdk'
-import type { Pool, PoolClient } from 'pg'
-import { upsertIdentity, upsertBond, upsertCursor } from '../services/identityService.js'
+import type { Pool } from 'pg'
 import { pool as defaultPool } from '../db/pool.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
 import { HorizonEventLedger } from '../db/repositories/horizonEventRepository.js'
-import {
-  computeStateHash,
-  stateFromBondEvent,
-  extractLedgerSeq,
-  type BondCreationEventPayload,
-} from '../services/horizonParity.js'
 import { register, Gauge } from 'prom-client'
 import { BoundedBackoff } from '../utils/backoff.js'
 import { getHorizonMetrics } from '../observability/horizonMetrics.js'
 import { bondOperationSchema, DlqRouter, DlqReasonCode, validateAndRoute } from './messageValidator.js'
+import {
+  applyBondCreationEvent,
+  type BondCreationIngestionEvent,
+} from './horizonBondIngestion.js'
 
 export interface BondCreationHandle {
   stop: () => void;
@@ -57,6 +54,14 @@ const lastCheckpointGauge = new Gauge({
  * only ever exists for a committed transition, keyed by the Horizon
  * operation id (correlation identifier) and carrying a deterministic hash
  * of the resulting identity state for parity reconciliation (issue #1266).
+ *
+ * Replay/idempotency (issue #1261): each event is processed through
+ * `applyBondCreationEvent`, which binds the operation to its durable
+ * `(stream_name, operation_id)` ledger key and deterministically returns
+ * one of `applied` / `replayed` — or rejects stale and conflicting-key
+ * deliveries without any state write. `onEvent` fires only for newly
+ * `applied` events, so a duplicate delivery can never surface a second
+ * business effect.
  */
 export function subscribeBondCreationEvents(
   dlqRouter: DlqRouter,
@@ -97,43 +102,29 @@ export function subscribeBondCreationEvents(
                 return;
               }
               const event = parseBondEvent(validation.data);
-              // The event mutation, the versioned ledger record, and the
-              // checkpoint are ONE durable unit. If a process crashes before
-              // COMMIT, the next owner replays the event from the previous
-              // cursor; it can never acknowledge an event whose state was only
-              // partially persisted, and it can never leave a ledger record
-              // for a transition that was not committed (issue #1266).
-              const eventPayload = event as unknown as BondCreationEventPayload
-              const ledgerInput = {
-                streamName: STREAM_NAME,
-                eventId: validation.data.id,
+              const ingestionEvent: BondCreationIngestionEvent = {
+                operationId: validation.data.id,
                 pagingToken: newCursor,
-                ledgerSeq: extractLedgerSeq(newCursor),
-                eventType: 'create_bond',
-                payload: event as unknown as Record<string, unknown>,
-                stateHash: computeStateHash(stateFromBondEvent(eventPayload)),
+                ...event,
               };
-              const client: PoolClient = await pool.connect();
-              try {
-                await client.query('BEGIN');
-                await upsertIdentity(event.identity, client);
-                await upsertBond(event.bond, client);
-                // Idempotent: at-least-once replays of the same operation id
-                // are no-ops, so repeated delivery never duplicates records.
-                await eventLedger.record(ledgerInput, client);
-                await upsertCursor({ streamName: STREAM_NAME, pagingToken: newCursor }, client);
-                await client.query('COMMIT');
-              } catch (transactionError) {
-                await client.query('ROLLBACK');
-                throw transactionError;
-              } finally {
-                client.release();
-              }
+              // The event mutation, the versioned ledger record, and the
+              // checkpoint are ONE durable unit handled by the ingestion
+              // boundary (issue #1261): a process crash before COMMIT rolls
+              // everything back so the next owner replays the event from the
+              // previous cursor; a duplicate/conflicting/stale delivery is
+              // resolved deterministically without a second business effect;
+              // a ledger record only ever exists for a committed transition.
+              const outcome = await applyBondCreationEvent({
+                pool,
+                event: ingestionEvent,
+                ledger: eventLedger,
+                streamName: STREAM_NAME,
+              });
               cursor = newCursor;
               updateMetrics(cursorRepo);
-              if (onEvent) onEvent(event);
               backoff.reset();
-              console.log(`[${STREAM_NAME}] Processed event ${op.id}, cursor: ${newCursor}`);
+              if (outcome === 'applied' && onEvent) onEvent(event);
+              console.log(`[${STREAM_NAME}] ${outcome === 'applied' ? 'Processed' : 'Replayed'} event ${op.id}, cursor: ${newCursor}`);
             }
           } catch (err) {
             await dlqRouter.route(

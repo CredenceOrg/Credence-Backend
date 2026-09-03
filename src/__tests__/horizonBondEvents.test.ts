@@ -46,10 +46,11 @@ vi.mock('../services/identityService', () => ({
   upsertIdentity: vi.fn().mockResolvedValue(undefined),
   upsertBond: vi.fn().mockResolvedValue(undefined),
   upsertCursor: vi.fn().mockResolvedValue(undefined),
+  upsertCursorMonotonic: vi.fn().mockResolvedValue(null),
 }))
 
 import { subscribeBondCreationEvents } from '../listeners/horizonBondEvents.js'
-import { upsertBond, upsertIdentity, upsertCursor } from '../services/identityService.js'
+import { upsertBond, upsertIdentity, upsertCursorMonotonic } from '../services/identityService.js'
 
 async function flushMicrotasks(): Promise<void> {
   await new Promise(resolve => resolve(undefined))
@@ -97,7 +98,10 @@ describe('Horizon Bond Creation Listener', () => {
 
     expect(upsertIdentity).toHaveBeenCalledWith({ id: 'GABC...' }, mocks.mockClient)
     expect(upsertBond).toHaveBeenCalledWith({ id: 'bond123', address: 'GABC...', amount: '1000', duration: '365' }, mocks.mockClient)
-    expect(upsertCursor).toHaveBeenCalledWith({ streamName: 'bond_creation', pagingToken: 'token1' }, mocks.mockClient)
+    expect(upsertCursorMonotonic).toHaveBeenCalledWith(
+      { streamName: 'bond_creation', pagingToken: 'token1' },
+      mocks.mockClient
+    )
     expect(mocks.mockClientQuery).toHaveBeenCalledWith('BEGIN')
     expect(mocks.mockClientQuery).toHaveBeenCalledWith('COMMIT')
     expect(mocks.mockClientRelease).toHaveBeenCalledOnce()
@@ -119,11 +123,17 @@ describe('Horizon Bond Creation Listener', () => {
 
     expect(upsertIdentity).not.toHaveBeenCalled()
     expect(upsertBond).not.toHaveBeenCalled()
-    expect(upsertCursor).not.toHaveBeenCalled()
+    expect(upsertCursorMonotonic).not.toHaveBeenCalled()
     expect(onEvent).not.toHaveBeenCalled()
   })
 
-  it('handles duplicate create_bond events consistently', async () => {
+  it('handles duplicate create_bond events consistently (each delivery is committed atomically)', async () => {
+    // Note: duplicate *detection* happens at the ledger boundary (UNIQUE
+    // (stream, event_id) + payload fingerprint) which a stateless mock pool
+    // cannot emulate. This test proves each delivery is processed atomically
+    // without erroring; the real no-second-effect guarantee is covered by the
+    // pg-mem ingestion boundary tests in
+    // src/listeners/__tests__/horizonBondEvents.replay.test.ts.
     subscribeBondCreationEvents(makeRouter(), vi.fn())
 
     const event = {
@@ -140,7 +150,7 @@ describe('Horizon Bond Creation Listener', () => {
 
     expect(upsertIdentity).toHaveBeenCalledTimes(2)
     expect(upsertBond).toHaveBeenCalledTimes(2)
-    expect(upsertCursor).toHaveBeenCalledTimes(2)
+    expect(upsertCursorMonotonic).toHaveBeenCalledTimes(2)
   })
 
   it('rolls back transaction on failure and does not advance cursor', async () => {
@@ -162,7 +172,7 @@ describe('Horizon Bond Creation Listener', () => {
 
     expect(mocks.mockClientQuery).toHaveBeenCalledWith('ROLLBACK')
     expect(mocks.mockClientRelease).toHaveBeenCalledOnce()
-    expect(upsertCursor).not.toHaveBeenCalled()
+    expect(upsertCursorMonotonic).not.toHaveBeenCalled()
     expect(onEvent).not.toHaveBeenCalled()
   })
 })

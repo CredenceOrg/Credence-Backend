@@ -56,6 +56,8 @@ vi.mock("../../services/identityService.js", () => ({
   upsertIdentity: vi.fn().mockResolvedValue(undefined),
   upsertBond: vi.fn().mockResolvedValue(undefined),
   upsertCursor: vi.fn().mockResolvedValue(undefined),
+  // Forward-only checkpoint used by the replay/idempotency ingestion boundary.
+  upsertCursorMonotonic: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("../../observability/horizonMetrics.js", () => ({
