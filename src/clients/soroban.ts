@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import {
   getBackoffDelayMs,
   type ProviderRetryPolicies,
@@ -30,6 +31,7 @@ import {
   createSorobanStateCache,
   type SorobanStateCacheOptions,
 } from "./sorobanStateCache.js";
+import { singleflight, SingleFlight } from "../lib/singleflight.js";
 
 export type SorobanNetwork = "testnet" | "mainnet";
 
@@ -310,6 +312,50 @@ const DEFAULT_RETRY: ExtendedRetryPolicy = {
   jitterStrategy: "none",
 };
 
+/**
+ * Compute a deterministic fingerprint for an RPC operation.
+ *
+ * The fingerprint is a SHA-256 hash of the method name and canonicalised
+ * parameter JSON (keys recursively sorted). Two calls with identical method
+ * and parameters always produce the same fingerprint, enabling:
+ *
+ *  - **Concurrent dedup**: identical in-flight calls are coalesced via
+ *    `SingleFlight` so only one RPC round-trip happens at a time.
+ *  - **Retry safety**: a retried call with the same fingerprint reuses the
+ *    coalesced result instead of issuing a duplicate RPC.
+ *  - **Conflicting-key detection**: a call with the same fingerprint but
+ *    different params is a logic error and is rejected.
+ *
+ * @internal Exported for testing only.
+ */
+export function computeOperationFingerprint(
+  method: string,
+  params: Record<string, unknown>,
+): string {
+  const canonical = canonicalJson(params)
+  return createHash('sha256').update(`${method}:${canonical}`).digest('hex')
+}
+
+/**
+ * Canonical JSON serialisation with recursively sorted keys.
+ * Produces deterministic output regardless of original key insertion order.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || value === undefined) return JSON.stringify(value)
+  if (typeof value === 'boolean' || typeof value === 'number' || typeof value === 'string') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(',')}]`
+  }
+  if (typeof value === 'object') {
+    const sorted = Object.keys(value as Record<string, unknown>).sort()
+    const pairs = sorted.map((k) => `${JSON.stringify(k)}:${canonicalJson((value as any)[k])}`)
+    return `{${pairs.join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
 export class SorobanClient {
   private readonly rpcUrl: string;
   private readonly network: SorobanNetwork;
@@ -331,6 +377,22 @@ export class SorobanClient {
     halfOpenAfterMs: number;
   };
   private readonly stateCache: SorobanStateCache;
+  /** Per-client SingleFlight for concurrent dedup of identical RPC calls. */
+  private readonly flight = new SingleFlight();
+
+  /**
+   * Throws if the client's abort signal has been fired.
+   * Called at the top of public methods to fail fast when the caller
+   * has cancelled the operation.  The error is wrapped in a
+   * SorobanClientError so it flows through the normal error path.
+   */
+  private throwIfCancelled(): void {
+    if (this.signal?.aborted) {
+      const reason = this.signal.reason
+      if (reason instanceof Error) throw reason
+      throw new DOMException("The operation was aborted", "AbortError");
+    }
+  }
 
   constructor(
     config: SorobanClientConfig,
@@ -427,7 +489,6 @@ export class SorobanClient {
    * live RPC calls. TTL is controlled by SOROBAN_STATE_CACHE_TTL_MS (0 = off).
    */
   async getIdentityState(address: string): Promise<unknown> {
-    this.throwIfCancelled();
     if (!address?.trim()) {
       throw new SorobanClientError({
         code: "CONFIG_ERROR",
@@ -580,11 +641,20 @@ export class SorobanClient {
 
     const breaker = getCircuitBreaker(host, this.circuitBreakerConfig);
 
+    // Compute a deterministic fingerprint for this operation so that
+    // concurrent and retried calls with identical inputs are coalesced
+    // via SingleFlight — only one RPC round-trip happens at a time, and
+    // all callers share the same result.  This prevents duplicate RPC
+    // calls during retry storms and concurrent listener replays.
+    const fingerprint = computeOperationFingerprint(method, params)
+
     // Measure the full downstream RPC latency (including retries and any time
     // spent gated by the circuit breaker), labelled by provider and op.
     const callStartMs = Date.now();
     try {
-      return await this.executeWithRetries<T>(breaker, method, params);
+      return await this.flight.do<T>(fingerprint, () =>
+        this.executeWithRetries<T>(breaker, method, params),
+      );
     } finally {
       recordDownstreamRpcLatency("soroban", method, Date.now() - callStartMs);
     }

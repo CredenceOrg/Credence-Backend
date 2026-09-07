@@ -21,6 +21,76 @@ import { BoundedBackoff } from '../utils/backoff.js'
 import { getHorizonMetrics } from '../observability/horizonMetrics.js'
 import { bondOperationSchema, DlqRouter, DlqReasonCode, validateAndRoute } from './messageValidator.js'
 
+/**
+ * Thrown when the same event ID arrives with a materially different payload
+ * than the previously-recorded event.  This signals a conflicting reuse of
+ * the durable request key and must be rejected deterministically — the
+ * original event's state remains correct.
+ *
+ * @see resolveConflictingEvent
+ */
+export class ConflictingEventError extends Error {
+  public readonly code = 'CONFLICTING_EVENT'
+  public readonly eventId: string
+  public readonly streamName: string
+  public readonly existingPayload: Record<string, unknown>
+  public readonly incomingPayload: Record<string, unknown>
+
+  constructor(params: {
+    eventId: string
+    streamName: string
+    existingPayload: Record<string, unknown>
+    incomingPayload: Record<string, unknown>
+  }) {
+    super(
+      `Conflicting event: ${params.streamName}:${params.eventId} has already been recorded with a different payload. ` +
+      `The incoming event is rejected to preserve the original committed state.`,
+    )
+    this.name = 'ConflictingEventError'
+    this.eventId = params.eventId
+    this.streamName = params.streamName
+    this.existingPayload = params.existingPayload
+    this.incomingPayload = params.incomingPayload
+  }
+}
+
+/**
+ * Determine whether an already-recorded event conflicts with an incoming
+ * event that carries the same event ID.
+ *
+ * Two events are **conflicting** when they share an event ID but have
+ * materially different payloads.  Insignificant differences (e.g. extra
+ * metadata fields added by the provider) are tolerated; only core field
+ * differences (identity id, bond id, bond amount, bond duration) are
+ * compared.
+ *
+ * @returns `null` when the events are identical or when no existing record
+ *   is found; a `ConflictingEventError` when a material conflict is detected.
+ */
+export function resolveConflictingEvent(
+  streamName: string,
+  eventId: string,
+  existingPayload: Record<string, unknown>,
+  incomingPayload: Record<string, unknown>,
+): ConflictingEventError | null {
+  const coreFields = ['source_account', 'id', 'amount', 'duration'] as const
+  for (const field of coreFields) {
+    if (
+      field in existingPayload &&
+      field in incomingPayload &&
+      String((existingPayload as any)[field]) !== String((incomingPayload as any)[field])
+    ) {
+      return new ConflictingEventError({
+        eventId,
+        streamName,
+        existingPayload,
+        incomingPayload,
+      })
+    }
+  }
+  return null
+}
+
 export interface BondCreationHandle {
   stop: () => void;
 }
@@ -116,10 +186,46 @@ export function subscribeBondCreationEvents(
               const client: PoolClient = await pool.connect();
               try {
                 await client.query('BEGIN');
+
+                // Check for a previously-recorded event with the same ID.
+                // If one exists, verify the payloads match (conflicting-key
+                // detection) and, if identical, skip the business logic
+                // entirely — a replay is a safe no-op.
+                const existingRecord = await eventLedger.findByStreamAndEvent(
+                  STREAM_NAME,
+                  validation.data.id,
+                );
+                if (existingRecord) {
+                  const conflict = resolveConflictingEvent(
+                    STREAM_NAME,
+                    validation.data.id,
+                    existingRecord.payload,
+                    event as unknown as Record<string, unknown>,
+                  );
+                  if (conflict) {
+                    // Conflicting event: same ID, materially different
+                    // payload.  Reject deterministically — the original
+                    // event's state must not be overwritten.
+                    await client.query('ROLLBACK');
+                    throw conflict;
+                  }
+                  // Identical replay: skip business logic but still
+                  // advance the cursor so the stream makes progress.
+                  await upsertCursor({ streamName: STREAM_NAME, pagingToken: newCursor }, client);
+                  await client.query('COMMIT');
+                  cursor = newCursor;
+                  updateMetrics(cursorRepo);
+                  console.log(`[${STREAM_NAME}] Replay of event ${op.id} (identical payload), cursor: ${newCursor}`);
+                  backoff.reset();
+                  return;
+                }
+
+                // First time seeing this event: apply business logic and
+                // record atomically.  `eventLedger.record()` uses
+                // ON CONFLICT DO NOTHING, so a concurrent insert (from a
+                // second listener replica) is a harmless no-op.
                 await upsertIdentity(event.identity, client);
                 await upsertBond(event.bond, client);
-                // Idempotent: at-least-once replays of the same operation id
-                // are no-ops, so repeated delivery never duplicates records.
                 await eventLedger.record(ledgerInput, client);
                 await upsertCursor({ streamName: STREAM_NAME, pagingToken: newCursor }, client);
                 await client.query('COMMIT');

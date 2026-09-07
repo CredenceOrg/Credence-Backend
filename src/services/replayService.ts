@@ -4,6 +4,9 @@ import { cache } from '../cache/redis.js'
 import { invalidateCache } from '../cache/invalidation.js'
 import { Horizon } from '@stellar/stellar-sdk'
 import { bondOperationSchema, bondWithdrawalOperationSchema, validateMessage } from '../listeners/messageValidator.js'
+import { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
+import { IdempotentConsumer } from './idempotentConsumer.js'
+import { pool } from '../db/pool.js'
 
 const FAILED_EVENT_CACHE_TTL = 300 // 5 minutes
 
@@ -16,10 +19,22 @@ export interface ReplayHandler {
  */
 export class ReplayService {
   private handlers = new Map<string, ReplayHandler>()
+  /**
+   * Database-backed idempotent consumer that prevents the same ledger event
+   * from being applied twice during a `replayLedgerRange` run.  Each event
+   * is keyed by `replay_range:${fromLedger}:${toLedger}:${eventId}` so that
+   * a crash-and-restart of the replay safely skips already-applied events.
+   */
+  private readonly replayIdempotency: IdempotentConsumer<void, void>
 
   constructor(
     private readonly repository: FailedInboundEventsRepository
-  ) {}
+  ) {
+    this.replayIdempotency = new IdempotentConsumer<void, void>(
+      new IdempotencyRepository(pool),
+      { actorId: 'replay-service', expiresInSeconds: 86400 },
+    )
+  }
 
   /**
    * Register a handler for a specific event type.
@@ -180,59 +195,70 @@ export class ReplayService {
         const res = await server.operations().forLedger(seq).limit(200).call()
         for (const op of res.records) {
           const anyOp: any = op
+          // Each event replay is wrapped in an IdempotentConsumer keyed by
+          // `replay_range:${fromLedger}:${toLedger}:${eventId}`.  If a prior
+          // replay of the same event within this range already committed, the
+          // handler is skipped — preventing duplicate business effects when
+          // the range replay is re-run after a crash.
+          const replayKey = `replay_range:${fromLedger}:${toLedger}:${anyOp.id}`
           try {
-            // Map operation types to registered handler keys
-            if (anyOp.type === 'create_bond' && this.handlers.has('bond_creation')) {
-              const validation = validateMessage(bondOperationSchema, anyOp)
-              if (!validation.valid) {
-                errors++
-                await this.captureFailure('bond_creation', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
-                continue
+            const outcome = await this.replayIdempotency.process(replayKey, async () => {
+              // Map operation types to registered handler keys
+              if (anyOp.type === 'create_bond' && this.handlers.has('bond_creation')) {
+                const validation = validateMessage(bondOperationSchema, anyOp)
+                if (!validation.valid) {
+                  await this.captureFailure('bond_creation', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                  throw new Error(`Validation failed for bond_creation event ${anyOp.id}: ${validation.detail}`)
+                }
+                const parsed = {
+                  identity: { id: validation.data.source_account },
+                  bond: { id: validation.data.id, address: validation.data.source_account, amount: validation.data.amount, duration: validation.data.duration ?? null },
+                }
+                await this.handlers.get('bond_creation')!.handle(parsed)
+                return
               }
-              const parsed = {
-                identity: { id: validation.data.source_account },
-                bond: { id: validation.data.id, address: validation.data.source_account, amount: validation.data.amount, duration: validation.data.duration ?? null },
-              }
-              await this.handlers.get('bond_creation')!.handle(parsed)
-              processed++
-              continue
-            }
 
-            if (anyOp.type === 'payment' && this.handlers.has('withdrawal')) {
-              const payment = anyOp
-              const validation = validateMessage(bondWithdrawalOperationSchema, anyOp)
-              if (!validation.valid) {
-                errors++
-                await this.captureFailure('withdrawal', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
-                continue
+              if (anyOp.type === 'payment' && this.handlers.has('withdrawal')) {
+                const payment = anyOp
+                const validation = validateMessage(bondWithdrawalOperationSchema, anyOp)
+                if (!validation.valid) {
+                  await this.captureFailure('withdrawal', anyOp, `[${validation.reasonCode}] ${validation.detail}`)
+                  throw new Error(`Validation failed for withdrawal event ${anyOp.id}: ${validation.detail}`)
+                }
+                const parsed = {
+                  id: validation.data.id,
+                  pagingToken: anyOp.paging_token,
+                  type: anyOp.type,
+                  createdAt: new Date(anyOp.created_at),
+                  bondId: `${payment.from || payment.source_account}-${anyOp.transaction_hash}`,
+                  account: payment.from || payment.source_account,
+                  amount: validation.data.amount,
+                  assetType: payment.asset_type,
+                  assetCode: payment.asset_code,
+                  assetIssuer: payment.asset_issuer,
+                  transactionHash: anyOp.transaction_hash || '',
+                  operationIndex: Number.parseInt(anyOp.id.split('-').pop() ?? '0', 10) || 0,
+                }
+                await this.handlers.get('withdrawal')!.handle(parsed)
+                return
               }
-              const parsed = {
-                id: validation.data.id,
-                pagingToken: anyOp.paging_token,
-                type: anyOp.type,
-                createdAt: new Date(anyOp.created_at),
-                bondId: `${payment.from || payment.source_account}-${anyOp.transaction_hash}`,
-                account: payment.from || payment.source_account,
-                amount: validation.data.amount,
-                assetType: payment.asset_type,
-                assetCode: payment.asset_code,
-                assetIssuer: payment.asset_issuer,
-                transactionHash: anyOp.transaction_hash || '',
-                operationIndex: Number.parseInt(anyOp.id.split('-').pop() ?? '0', 10) || 0,
+
+              // Best-effort attestation mapping
+              if ((anyOp.type && anyOp.type.toString().toLowerCase().includes('attest')) && this.handlers.has('attestation')) {
+                await this.handlers.get('attestation')!.handle(anyOp)
+                return
               }
-              await this.handlers.get('withdrawal')!.handle(parsed)
-              processed++
-              continue
-            }
 
-            // Best-effort attestation mapping
-            if ((anyOp.type && anyOp.type.toString().toLowerCase().includes('attest')) && this.handlers.has('attestation')) {
-              await this.handlers.get('attestation')!.handle(anyOp)
-              processed++
-              continue
-            }
+              // Unknown/unsupported op - skip without error
+            })
 
-            // Unknown/unsupported op - skip
+            if (outcome.success) {
+              processed++
+            } else {
+              // Handler threw — the idempotency record was deleted, so a
+              // retry of this range will re-attempt this event.
+              errors++
+            }
           } catch (err: any) {
             errors++
             await this.captureFailure('replay_range_op_failure', { ledger: seq, op }, err?.message || 'handler failure')
