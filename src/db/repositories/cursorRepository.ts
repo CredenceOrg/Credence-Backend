@@ -1,4 +1,5 @@
-import { randomUUID } from 'crypto'
+import { createHash } from 'crypto'
+
 import type { Pool, PoolClient } from 'pg'
 
 /**
@@ -18,6 +19,24 @@ export interface HorizonCursor {
 export interface UpsertCursorInput {
   streamName: string
   pagingToken: string
+}
+
+/**
+ * Options for retry behaviour on transient database failures.
+ */
+export interface CursorRetryOptions {
+  /** Maximum number of attempts (including the first). Defaults to 3. */
+  maxAttempts?: number
+  /** Base delay in milliseconds between attempts. Defaults to 50. */
+  baseDelayMs?: number
+  /** Maximum delay in milliseconds between attempts. Defaults to 500. */
+  maxDelayMs?: number
+}
+
+const DEFAULT_RETRY: Required<CursorRetryOptions> = {
+  maxAttempts: 3,
+  baseDelayMs: 50,
+  maxDelayMs: 500,
 }
 
 /**
@@ -42,6 +61,87 @@ export class CursorRepository {
     }
   }
 
+  /**
+   * Determines whether an error is safe to retry.
+   * Only transient connection/serialization errors are retried; validation
+   * and constraint errors are surfaced immediately to avoid masking bugs.
+   */
+  private isRetryableError(err: unknown): boolean {
+    if (!err || typeof err !== 'object') return false
+    const code = (err as { code?: string }).code
+    if (!code) return false
+    // Postgres transient error classes:
+    // 40001 serialization_failure, 40P01 deadlock_detected,
+    // 08000/08003/08006 connection exceptions, 53300 too_many_connections,
+    // 57P03 cannot_connect_now.
+    return (
+      code === '40001' ||
+      code === '40P01' ||
+      code === '08000' ||
+      code === '08003' ||
+      code === '08006' ||
+      code === '53300' ||
+      code === '57P03'
+    )
+  }
+
+  /**
+   * Runs `fn` with bounded exponential backoff for transient failures.
+   * The final error is always rethrown so callers observe the real cause.
+   */
+  private async withRetry<T>(
+    fn: () => Promise<T>,
+    options?: CursorRetryOptions
+  ): Promise<T> {
+    const { maxAttempts, baseDelayMs, maxDelayMs } = {
+      ...DEFAULT_RETRY,
+      ...(options ?? {}),
+    }
+    let lastError: unknown
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn()
+      } catch (err) {
+        lastError = err
+        if (attempt >= maxAttempts || !this.isRetryableError(err)) {
+          throw err
+        }
+        const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs)
+        await new Promise((resolve) => setTimeout(resolve, delay))
+      }
+    }
+    // Unreachable, but keeps TypeScript satisfied.
+    throw lastError
+  }
+
+  /**
+   * Validates a stream name. Stream names must be non-empty and reasonably
+   * bounded to prevent accidental unbounded keys or injection attempts.
+   */
+  private assertValidStreamName(streamName: string): void {
+    if (typeof streamName !== 'string' || streamName.length === 0) {
+      throw new Error('Invalid streamName: must be a non-empty string')
+    }
+    if (streamName.length > 255) {
+      throw new Error('Invalid streamName: exceeds maximum length of 255')
+    }
+  }
+
+  /**
+   * Redacts a paging token for logging so secrets/identifiers are not leaked.
+   */
+  private redactToken(token: string): string {
+    if (token.length <= 4) return '***'
+    return `***${token.slice(-4)}`
+  }
+
+  /**
+   * Stable fingerprint of a stream name for structured logging.
+   */
+  private streamFingerprint(streamName: string): string {
+    return createHash('sha256').update(streamName).digest('hex').slice(0, 12)
+  }
+
   // -------------------------------------------------------------------------
   // Queries
   // -------------------------------------------------------------------------
@@ -51,6 +151,7 @@ export class CursorRepository {
    * @param streamName - The unique stream identifier (e.g., 'bond_creation')
    */
   async findByStreamName(streamName: string): Promise<HorizonCursor | null> {
+    this.assertValidStreamName(streamName)
     const { rows } = await this.db.query(
       `SELECT stream_name, paging_token, last_checkpoint, created_at, updated_at
        FROM horizon_cursors
@@ -88,6 +189,7 @@ export class CursorRepository {
    * @throws Error if paging_token format is invalid
    */
   async upsert(input: UpsertCursorInput): Promise<HorizonCursor> {
+    this.assertValidStreamName(input.streamName)
     // Validate paging_token format (Horizon tokens are numeric strings or 'now')
     if (!this.isValidPagingToken(input.pagingToken)) {
       throw new Error(
@@ -95,22 +197,28 @@ export class CursorRepository {
         `Expected numeric string or 'now'.`
       )
     }
-    if (!input.streamName || input.streamName.trim().length === 0) {
-      throw new Error('Invalid stream_name: must be a non-empty string.')
-    }
 
-    const { rows } = await this.db.query(
-      `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
-       VALUES ($1, $2, NOW(), NOW())
-       ON CONFLICT (stream_name)
-       DO UPDATE SET 
-         paging_token = EXCLUDED.paging_token,
-         last_checkpoint = NOW(),
-         updated_at = NOW()
-       RETURNING stream_name, paging_token, last_checkpoint, created_at, updated_at`,
-      [input.streamName, input.pagingToken]
-    )
-    return this.map(rows[0])
+    return this.withRetry(async () => {
+      const { rows } = await this.db.query(
+        `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
+         VALUES ($1, $2, NOW(), NOW())
+         ON CONFLICT (stream_name)
+         DO UPDATE SET 
+           paging_token = EXCLUDED.paging_token,
+           last_checkpoint = NOW(),
+           updated_at = NOW()
+         RETURNING stream_name, paging_token, last_checkpoint, created_at, updated_at`,
+        [input.streamName, input.pagingToken]
+      )
+      if (!rows.length) {
+        throw new Error(
+          `Cursor upsert returned no row for stream fingerprint ${this.streamFingerprint(
+            input.streamName
+          )}`
+        )
+      }
+      return this.map(rows[0])
+    })
   }
 
   /**
@@ -120,6 +228,7 @@ export class CursorRepository {
    * @param streamName - The stream identifier to delete
    */
   async delete(streamName: string): Promise<boolean> {
+    this.assertValidStreamName(streamName)
     const { rowCount } = await this.db.query(
       `DELETE FROM horizon_cursors WHERE stream_name = $1`,
       [streamName]
@@ -163,17 +272,13 @@ export class CursorRepository {
    * @returns Lag in seconds, or null if cursor not found
    */
   async getCursorLag(streamName: string): Promise<number | null> {
+    this.assertValidStreamName(streamName)
     const cursor = await this.findByStreamName(streamName)
     if (!cursor) {
       return null
     }
     const now = new Date()
     const lagMs = now.getTime() - cursor.lastCheckpoint.getTime()
-    if (lagMs < 0) {
-      return 0
-    }
     return Math.floor(lagMs / 1000)
   }
 }
-// randomUUID imported for future idempotency keys; retained for test scaffolding
-void randomUUID
