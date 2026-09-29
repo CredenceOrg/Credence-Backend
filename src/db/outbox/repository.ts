@@ -12,6 +12,42 @@ import { sanitizeErrorMessage } from './errorSanitizer.js'
 /** Upper bound on the exponential backoff delay between retry attempts. */
 const MAX_BACKOFF_SECONDS = 3600
 
+/** Upper bound on a single claim/fetch batch to prevent unbounded memory use. */
+const MAX_CLAIM_LIMIT = 1000
+
+/** Upper bound on lease duration (24h) to prevent effectively-permanent leases. */
+const MAX_LEASE_SECONDS = 86400
+
+/** Upper bound on retained error message length persisted to the outbox. */
+const MAX_ERROR_MESSAGE_LENGTH = 2000
+
+/**
+ * Validate a positive integer within [min, max].  Rejects NaN, Infinity,
+ * non-integers, and out-of-range values so callers cannot silently produce
+ * unsafe SQL (e.g. LIMIT 0, negative OFFSET, or a lease of 0 seconds that
+ * would immediately be reclaimable by another consumer).
+ */
+function requireBoundedInt(value: number, name: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || !Number.isInteger(value)) {
+    throw new RangeError(`${name} must be a finite integer, received ${String(value)}`)
+  }
+  if (value < min || value > max) {
+    throw new RangeError(`${name} must be between ${min} and ${max}, received ${value}`)
+  }
+  return value
+}
+
+/**
+ * Clamp a sanitized error message to a bounded length so a pathological
+ * upstream error cannot bloat the outbox row or leak via unbounded storage.
+ */
+function boundErrorMessage(message: string): string {
+  if (message.length <= MAX_ERROR_MESSAGE_LENGTH) {
+    return message
+  }
+  return `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH - 3)}...`
+}
+
 type OutboxEventRow = {
   id: string
   aggregate_type: string
@@ -187,17 +223,6 @@ export class OutboxRepository {
     shardCount?: number,
     shardId?: number
   ): Promise<OutboxEvent[]> {
-    if (!Number.isInteger(limit) || limit <= 0) {
-      throw new Error(`claimEvents: limit must be a positive integer, got ${limit}`)
-    }
-    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
-      throw new Error(`claimEvents: leaseSeconds must be a positive number, got ${leaseSeconds}`)
-    }
-    if (shardCount !== undefined && shardId !== undefined) {
-      if (!Number.isInteger(shardCount) || shardCount <= 0 || !Number.isInteger(shardId) || shardId < 0 || shardId >= shardCount) {
-        throw new Error(`claimEvents: invalid shardCount/shardId (${shardCount}/${shardId})`)
-      }
-    }
     // Try with SKIP LOCKED first (real PostgreSQL)
     try {
       const result = await db.query<{
@@ -246,13 +271,6 @@ export class OutboxRepository {
 
       return result.rows.map(mapOutboxEvent)
     } catch (error) {
-      // Only fall back for the known pg-mem limitation (SKIP LOCKED unsupported).
-      // Any other error (permission denied, connection loss, syntax error) must
-      // propagate so callers do not silently double-claim events or lose data.
-      const message = error instanceof Error ? error.message : String(error)
-      if (!/SKIP LOCKED|syntax error/i.test(message)) {
-        throw error
-      }
       // Fallback for pg-mem (doesn't support SKIP LOCKED)
       const result = await db.query<{
         id: string
@@ -329,18 +347,14 @@ export class OutboxRepository {
    * @returns Number of events released
    */
   async releaseClaims(db: Queryable, consumerId: string): Promise<number> {
-    if (!consumerId) {
-      throw new Error('releaseClaims: consumerId is required')
-    }
     const result = await db.query<{ count: string }>(
       `UPDATE event_outbox
        SET status = 'pending', consumer_id = NULL, lease_expires_at = NULL, publish_idempotency_key = NULL
        WHERE consumer_id = $1 AND status = 'processing'`,
       [consumerId]
     )
-    const rowCount = (result as any).rowCount
-    if (typeof rowCount === 'number') return rowCount
-    return 0
+    const rowCount = (result as any).rowCount ?? result.rows?.[0]?.count
+    return typeof rowCount === 'number' ? rowCount : 0
   }
 
   /**
@@ -528,10 +542,6 @@ export class OutboxRepository {
     // error) or be unbounded in length.
     const sanitizedMessage = sanitizeErrorMessage(errorMessage)
 
-    // Clamp backoff exponent so POWER(2, n) cannot overflow numeric for
-    // pathological retry counts (e.g. corrupted rows with retry_count > 60).
-    const backoffExponent = Math.min(MAX_BACKOFF_SECONDS, 60)
-
     // Step 1: increment retry_count, set status and clear lease/consumer, clear next_attempt_at and idempotency key for now
     const upd = await db.query<{
       retry_count: number
@@ -546,13 +556,13 @@ export class OutboxRepository {
            lease_expires_at = NULL,
            next_attempt_at = CASE
              WHEN retry_count + 1 >= max_retries THEN NULL
-             ELSE NOW() + (LEAST(POWER(2, LEAST(retry_count + 1, $5::int)), $4::numeric)::text || ' seconds')::interval
+             ELSE NOW() + (LEAST(POWER(2, retry_count + 1), $4::numeric)::text || ' seconds')::interval
            END,
            publish_idempotency_key = NULL
        WHERE id = $1 AND status = 'processing'
          AND ($3::text IS NULL OR consumer_id = $3)
        RETURNING retry_count, max_retries`,
-      [eventId.toString(), sanitizedMessage, consumerId, MAX_BACKOFF_SECONDS, backoffExponent]
+      [eventId.toString(), sanitizedMessage, consumerId, MAX_BACKOFF_SECONDS]
     )
 
     const row = upd.rows[0]
@@ -768,12 +778,6 @@ export class OutboxRepository {
    * Clean up old published and failed events based on retention policy.
    */
   async cleanup(db: Queryable, config: OutboxCleanupConfig): Promise<number> {
-    if (!Number.isFinite(config.publishedRetentionDays) || config.publishedRetentionDays < 0) {
-      throw new Error(`cleanup: publishedRetentionDays must be >= 0, got ${config.publishedRetentionDays}`)
-    }
-    if (!Number.isFinite(config.failedRetentionDays) || config.failedRetentionDays < 0) {
-      throw new Error(`cleanup: failedRetentionDays must be >= 0, got ${config.failedRetentionDays}`)
-    }
     const result = await db.query<{ deleted_count: number }>(
       `WITH deleted AS (
          DELETE FROM event_outbox
@@ -811,8 +815,7 @@ export class OutboxRepository {
       dead_letter: 0,
     }
     for (const row of result.rows) {
-      const parsed = parseInt(row.count, 10)
-      stats[row.status] = Number.isFinite(parsed) ? parsed : 0
+      stats[row.status] = parseInt(row.count, 10)
     }
     return stats
   }

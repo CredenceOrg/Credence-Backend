@@ -1,5 +1,3 @@
-import { createHash } from 'crypto'
-
 import type { Pool, PoolClient } from 'pg'
 
 /**
@@ -22,33 +20,21 @@ export interface UpsertCursorInput {
 }
 
 /**
- * Options for retry behaviour on transient database failures.
- */
-export interface CursorRetryOptions {
-  /** Maximum number of attempts (including the first). Defaults to 3. */
-  maxAttempts?: number
-  /** Base delay in milliseconds between attempts. Defaults to 50. */
-  baseDelayMs?: number
-  /** Maximum delay in milliseconds between attempts. Defaults to 500. */
-  maxDelayMs?: number
-}
-
-const DEFAULT_RETRY: Required<CursorRetryOptions> = {
-  maxAttempts: 3,
-  baseDelayMs: 50,
-  maxDelayMs: 500,
-}
-
-/**
  * Repository for the `horizon_cursors` table.
  * Provides durable checkpoint storage for Horizon event streams.
+ *
+ * Invariants:
+ * - `stream_name` is the primary key; upsert is atomic and idempotent.
+ * - `paging_token` is always a non-empty numeric string or the literal 'now'.
+ * - `updated_at` monotonically increases on every write (never goes backwards).
+ * - All queries use parameterized statements to prevent SQL injection.
  */
 export class CursorRepository {
   constructor(private readonly db: Pool | PoolClient) {}
 
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Helpers
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 
   /** Maps a raw postgres row (snake_case) to the HorizonCursor domain type. */
   private map(row: Record<string, unknown>): HorizonCursor {
@@ -62,96 +48,53 @@ export class CursorRepository {
   }
 
   /**
-   * Determines whether an error is safe to retry.
-   * Only transient connection/serialization errors are retried; validation
-   * and constraint errors are surfaced immediately to avoid masking bugs.
+   * Validates a stream name.
+   *
+   * A non-empty string of at most 255 characters. This bound prevents unbounded
+   * input from reaching the database and keeps the primary key deterministic.
    */
-  private isRetryableError(err: unknown): boolean {
-    if (!err || typeof err !== 'object') return false
-    const code = (err as { code?: string }).code
-    if (!code) return false
-    // Postgres transient error classes:
-    // 40001 serialization_failure, 40P01 deadlock_detected,
-    // 08000/08003/08006 connection exceptions, 53300 too_many_connections,
-    // 57P03 cannot_connect_now.
-    return (
-      code === '40001' ||
-      code === '40P01' ||
-      code === '08000' ||
-      code === '08003' ||
-      code === '08006' ||
-      code === '53300' ||
-      code === '57P03'
-    )
+  private isValidStreamName(streamName: unknown): streamName is string {
+    return typeof streamName === 'string' && streamName.length > 0 && streamName.length <= 255
   }
 
   /**
-   * Runs `fn` with bounded exponential backoff for transient failures.
-   * The final error is always rethrown so callers observe the real cause.
+   * Validates paging_token format.
+   * Horizon paging tokens are either:
+   * - 'now' (special cursor for current time)
+   * - Numeric strings (e.g., '12345678901234')
+   *
+   * Boundary conditions:
+   * - Empty strings are rejected.
+   * - Leading zeros are allowed but not required.
+   * - Overly long tokens are rejected to avoid unbounded storage.
+   *
+   * @param token - The paging token to validate
+   * @returns true if valid, false otherwise
    */
-  private async withRetry<T>(
-    fn: () => Promise<T>,
-    options?: CursorRetryOptions
-  ): Promise<T> {
-    const { maxAttempts, baseDelayMs, maxDelayMs } = {
-      ...DEFAULT_RETRY,
-      ...(options ?? {}),
+  private isValidPagingToken(token: unknown): token is string {
+    if (typeof token !== 'string') {
+      return false
     }
-    let lastError: unknown
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        return await fn()
-      } catch (err) {
-        lastError = err
-        if (attempt >= maxAttempts || !this.isRetryableError(err)) {
-          throw err
-        }
-        const delay = Math.min(baseDelayMs * 2 ** (attempt - 1), maxDelayMs)
-        await new Promise((resolve) => setTimeout(resolve, delay))
-      }
+    if (token === 'now') {
+      return true
     }
-    // Unreachable, but keeps TypeScript satisfied.
-    throw lastError
+    // Horizon paging tokens are numeric strings. Bound length to avoid
+    // unreasonably large values being persisted.
+    return /^\d+$/.test(token) && token.length <= 64
   }
 
-  /**
-   * Validates a stream name. Stream names must be non-empty and reasonably
-   * bounded to prevent accidental unbounded keys or injection attempts.
-   */
-  private assertValidStreamName(streamName: string): void {
-    if (typeof streamName !== 'string' || streamName.length === 0) {
-      throw new Error('Invalid streamName: must be a non-empty string')
-    }
-    if (streamName.length > 255) {
-      throw new Error('Invalid streamName: exceeds maximum length of 255')
-    }
-  }
-
-  /**
-   * Redacts a paging token for logging so secrets/identifiers are not leaked.
-   */
-  private redactToken(token: string): string {
-    if (token.length <= 4) return '***'
-    return `***${token.slice(-4)}`
-  }
-
-  /**
-   * Stable fingerprint of a stream name for structured logging.
-   */
-  private streamFingerprint(streamName: string): string {
-    return createHash('sha256').update(streamName).digest('hex').slice(0, 12)
-  }
-
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Queries
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 
   /**
    * Returns the cursor for the given stream name, or `null` if not found.
    * @param streamName - The unique stream identifier (e.g., 'bond_creation')
    */
   async findByStreamName(streamName: string): Promise<HorizonCursor | null> {
-    this.assertValidStreamName(streamName)
+    if (!this.isValidStreamName(streamName)) {
+      throw new Error('Invalid streamName: must be a non-empty string of at most 255 characters')
+    }
     const { rows } = await this.db.query(
       `SELECT stream_name, paging_token, last_checkpoint, created_at, updated_at
        FROM horizon_cursors
@@ -173,62 +116,62 @@ export class CursorRepository {
     return rows.map(this.map.bind(this))
   }
 
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Mutations
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 
   /**
    * Upserts a cursor checkpoint for the given stream.
    * - If the stream already exists, updates paging_token and last_checkpoint.
    * - If it does not exist, inserts a new row.
-   * 
-   * Security: Validates paging_token format before persisting.
-   * 
+   *
+   * The upsert is atomic (`ON CONFLICT`) and is safe under concurrent
+   * execution. A later write will always win because `NOW()` is evaluated
+   * at execution time and the conflict target is the primary key.
+   *
+   * Security: Validates stream name and paging_token format before persisting.
+   *
    * @param input - Stream name and paging token to checkpoint
    * @returns The upserted cursor record
-   * @throws Error if paging_token format is invalid
+   * @throws Error if streamName or paging_token format is invalid
    */
   async upsert(input: UpsertCursorInput): Promise<HorizonCursor> {
-    this.assertValidStreamName(input.streamName)
+    if (!this.isValidStreamName(input?.streamName)) {
+      throw new Error('Invalid streamName: must be a non-empty string of at most 255 characters')
+    }
+
     // Validate paging_token format (Horizon tokens are numeric strings or 'now')
-    if (!this.isValidPagingToken(input.pagingToken)) {
+    if (!this.isValidPagingToken(input?.pagingToken)) {
       throw new Error(
-        `Invalid paging_token format: ${input.pagingToken}. ` +
-        `Expected numeric string or 'now'.`
+        `Invalid paging_token format: ${String(input?.pagingToken)}. ` +
+          `Expected numeric string or 'now'.`
       )
     }
 
-    return this.withRetry(async () => {
-      const { rows } = await this.db.query(
-        `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
-         VALUES ($1, $2, NOW(), NOW())
-         ON CONFLICT (stream_name)
-         DO UPDATE SET 
-           paging_token = EXCLUDED.paging_token,
-           last_checkpoint = NOW(),
-           updated_at = NOW()
-         RETURNING stream_name, paging_token, last_checkpoint, created_at, updated_at`,
-        [input.streamName, input.pagingToken]
-      )
-      if (!rows.length) {
-        throw new Error(
-          `Cursor upsert returned no row for stream fingerprint ${this.streamFingerprint(
-            input.streamName
-          )}`
-        )
-      }
-      return this.map(rows[0])
-    })
+    const { rows } = await this.db.query(
+      `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
+       VALUES ($1, $2, NOW(), NOW())
+       ON CONFLICT (stream_name)
+       DO UPDATE SEL 
+         paging_token = EXCLUDED.paging_token,
+         last_checkpoint = NOW(),
+         updated_at = NOW()
+       RETURNING stream_name, paging_token, last_checkpoint, created_at, updated_at`,
+      [input.streamName, input.pagingToken]
+    )
+    return this.map(rows[0])
   }
 
   /**
    * Deletes the cursor for the given stream name.
    * Returns `true` if a row was deleted, `false` if not found.
-   * 
+   *
    * @param streamName - The stream identifier to delete
    */
   async delete(streamName: string): Promise<boolean> {
-    this.assertValidStreamName(streamName)
+    if (!this.isValidStreamName(streamName)) {
+      throw new Error('Invalid streamName: must be a non-empty string of at most 255 characters')
+    }
     const { rowCount } = await this.db.query(
       `DELETE FROM horizon_cursors WHERE stream_name = $1`,
       [streamName]
@@ -236,49 +179,33 @@ export class CursorRepository {
     return (rowCount ?? 0) > 0
   }
 
-  // -------------------------------------------------------------------------
-  // Validation
-  // -------------------------------------------------------------------------
-
-  /**
-   * Validates paging_token format.
-   * Horizon paging tokens are either:
-   * - 'now' (special cursor for current time)
-   * - Numeric strings (e.g., '12345678901234')
-   * 
-   * @param token - The paging token to validate
-   * @returns true if valid, false otherwise
-   */
-  private isValidPagingToken(token: string): boolean {
-    if (typeof token !== 'string' || token.length === 0) {
-      return false
-    }
-    if (token === 'now') {
-      return true
-    }
-    // Horizon paging tokens are numeric strings
-    return /^\d+$/.test(token)
-  }
-
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
   // Metrics
-  // -------------------------------------------------------------------------
+  // --------------------------------------------------------------------------
 
   /**
    * Calculate cursor lag in seconds for a given stream.
    * Returns the time elapsed since the last checkpoint.
-   * 
+   *
+   * The result is clamped at 0 to avoid negative lag when the checkpoint
+   * timestamp is ahead of the local clock (clock skew or future timestamp).
+   *
    * @param streamName - The stream identifier
    * @returns Lag in seconds, or null if cursor not found
    */
   async getCursorLag(streamName: string): Promise<number | null> {
-    this.assertValidStreamName(streamName)
     const cursor = await this.findByStreamName(streamName)
     if (!cursor) {
       return null
     }
-    const now = new Date()
-    const lagMs = now.getTime() - cursor.lastCheckpoint.getTime()
+    const now = Date.now()
+    const last = cursor.lastCheckpoint instanceof Date
+      ? cursor.lastCheckpoint.getTime()
+      : new Date(cursor.lastCheckpoint as unknown as string).getTime()
+    if (Number.isNaN(last)) {
+      return null
+    }
+    const lagMs = Math.max(0, now - last)
     return Math.floor(lagMs / 1000)
   }
 }
