@@ -176,7 +176,10 @@ async function _validateApiKeyDirect(rawKey: string): Promise<StoredApiKey | nul
   } else {
     const apiKey = await repository.findByHashAndPrefix(hashed, prefix)
     if (apiKey) {
-      await repository.updateLastUsedAt(apiKey.id)
+      // The usage record is owner-scoped, so the owner must be carried through
+      // from the resolved key. Omitting it would leave `owner_id = NULL` in the
+      // UPDATE and silently match no rows.
+      await repository.updateLastUsedAt(apiKey.id, apiKey.ownerId)
       apiKey.lastUsedAt = new Date()
     }
     return apiKey
@@ -186,16 +189,25 @@ async function _validateApiKeyDirect(rawKey: string): Promise<StoredApiKey | nul
 /**
  * Revoke an API key by ID.
  *
+ * @param id       Opaque key ID to revoke.
+ * @param ownerId  Optional owner to scope the revocation to. Pass it whenever
+ *                 the authenticated owner is known: the store then refuses to
+ *                 touch a key owned by anybody else. Omit it only when the
+ *                 caller has already resolved and authorised the key's owner
+ *                 upstream (admin tooling, the rotation service) — that keeps
+ *                 the legacy id-only behaviour for existing callers.
  * @returns true if the key was found and deactivated, false if not found
+ *          (or not owned by `ownerId`)
  */
-export async function revokeApiKey(id: string): Promise<boolean> {
+export async function revokeApiKey(id: string, ownerId?: string): Promise<boolean> {
   if (useInMemory) {
     const key = inMemoryStore.get(id)
     if (!key) return false
+    if (ownerId !== undefined && key.ownerId !== ownerId) return false
     key.active = false
     return true
   } else {
-    return await repository.revokeApiKey(id)
+    return await repository.revokeApiKey(id, ownerId)
   }
 }
 
