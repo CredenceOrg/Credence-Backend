@@ -1,3 +1,4 @@
+
 /**
  * Example: Wallet Operations with RBAC Policy Engine
  *
@@ -14,6 +15,8 @@ import {
   PolicyDecision,
 } from "../services/rbac/policyEngine.js";
 import { AuthenticatedUser } from "../types/rbac.js";
+
+export const MAX_WALLET_BALANCE = "1000000000000000000000000000000000000";
 
 // ============================================================================
 // Setup
@@ -98,6 +101,18 @@ function configurePolicies() {
 class SecureWalletService {
   constructor(private readonly walletRepo: WalletsRepository) {}
 
+  private assertAmount(amount: string, field = "amount"): void {
+    if (typeof amount !== "string" || amount.trim() === "") {
+      throw new Error(`Invalid ${field}: must be a non-empty string`);
+    }
+    if (!/^\d+(\.\d+)?$/.test(amount.trim())) {
+      throw new Error(`Invalid ${field}: must be a non-negative decimal`);
+    }
+    if (Number(amount) <= 0) {
+      throw new Error(`Invalid ${field}: must be greater than zero`);
+    }
+  }
+
   /**
    * Create a new wallet (authenticated users only).
    */
@@ -112,6 +127,10 @@ class SecureWalletService {
       "create:wallet",
       `wallet:${address}`,
     );
+
+    if (!address || typeof address !== "string" || address.trim() === "") {
+      throw new Error("Invalid address: must be a non-empty string");
+    }
 
     if (authCheck.decision === PolicyDecision.DENY) {
       throw new Error(`Access denied: ${authCheck.reason.message}`);
@@ -134,6 +153,8 @@ class SecureWalletService {
     if (authCheck.decision === PolicyDecision.DENY) {
       throw new Error(`Access denied: ${authCheck.reason.message}`);
     }
+
+    this.assertAmount(amount);
 
     const wallet = await this.walletRepo.findByAddress(walletAddress);
     if (!wallet) {
@@ -159,6 +180,8 @@ class SecureWalletService {
       throw new Error(`Access denied: ${authCheck.reason.message}`);
     }
 
+    this.assertAmount(amount);
+
     const wallet = await this.walletRepo.findByAddress(walletAddress);
     if (!wallet) {
       throw new Error(`Wallet ${walletAddress} not found`);
@@ -181,6 +204,10 @@ class SecureWalletService {
 
     if (authCheck.decision === PolicyDecision.DENY) {
       throw new Error(`Access denied: ${authCheck.reason.message}`);
+    }
+
+    if (!walletAddress || typeof walletAddress !== "string") {
+      throw new Error("Invalid wallet address");
     }
 
     const wallet = await this.walletRepo.findByAddress(walletAddress);
@@ -214,6 +241,8 @@ class SecureWalletService {
     return this.walletRepo.delete(wallet.id);
   }
 }
+
+export { SecureWalletService };
 
 // ============================================================================
 // Example Usage
@@ -370,4 +399,4 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   runExample().catch(console.error);
 }
 
-export { SecureWalletService, configurePolicies };
+export { configurePolicies };
