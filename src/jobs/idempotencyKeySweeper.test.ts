@@ -122,7 +122,7 @@ describe('IdempotencyKeySweeper', () => {
     })
 
     it('should prevent concurrent runs', async () => {
-      const mockQuery = vi.fn().mockImplementation(() => 
+      const mockQuery = vi.fn().mockImplementation(() =>
         new Promise(resolve => setTimeout(() => resolve({ rows: [{ count: '0' }] }), 100))
       )
       mockDb = { query: mockQuery } as unknown as Queryable
@@ -163,7 +163,7 @@ describe('IdempotencyKeySweeper', () => {
       // Advance one interval to exercise the immediate run plus one scheduled
       // tick. (runAllTimersAsync would never terminate against a recurring
       // setInterval.)
-      await vi.advanceTimersByTimeAsync(1000)
+      await vi.advanceTimesByTimeAsync(1000)
 
       expect(mockQuery).toHaveBeenCalled()
       expect(logger).toHaveBeenCalledWith(
@@ -221,7 +221,7 @@ describe('IdempotencyKeySweeper', () => {
       const storage = new Map(seed.map((row) => [row.key, row.expiresAt]))
 
       const isExpired = (sql: string, expiresAt: Date, now: Date): boolean => {
-        const operator = sql.match(/expires_at\s*(<=|<)\s*NOW\(\)/)?.[1]
+        const operator = sql.match(/expires_at\s*(<=|<)\s*NOW(\)/)?.[1]
         if (!operator) throw new Error(`Could not find expiry comparison in query: ${sql}`)
         return operator === '<=' ? expiresAt <= now : expiresAt < now
       }
@@ -315,7 +315,7 @@ describe('IdempotencyKeySweeper', () => {
 
   describe('isRunning', () => {
     it('should return true during run', async () => {
-      const mockQuery = vi.fn().mockImplementation(() => 
+      const mockQuery = vi.fn().mockImplementation(() =>
         new Promise(resolve => setTimeout(() => resolve({ rows: [{ count: '0' }] }), 50))
       )
       mockDb = { query: mockQuery } as unknown as Queryable
@@ -332,16 +332,109 @@ describe('IdempotencyKeySweeper', () => {
       await runPromise
     })
   })
-})
 
-describe('sweepExpiredIdempotencyKeys', () => {
-  it('should run a single cleanup cycle', async () => {
-    const mockQuery = vi.fn().mockResolvedValue({ rows: [{ count: '5' }] })
-    const mockDb = { query: mockQuery } as unknown as Queryable
+  describe('error and recovery handling', () => {
+    it('rethrows and clears the running flag when the count query fails', async () => {
+      const mockQuery = vi.fn().mockRejectedValue(new Error('db down'))
+      mockDb = { query: mockQuery } as unknown as Queryable
 
-    const result = await sweepExpiredIdempotencyKeys(mockDb, { dryRun: true })
+      const sweeper = new IdempotencyKeySweeper(mockDb, { logger })
 
-    expect(result.expiredCount).toBe(5)
-    expect(result.dryRun).toBe(true)
+      await expect(sweeper.run()).rejects.toThrow('db down')
+      // The running flag must be cleared so a later run can proceed.
+      expect(sweeper.isRunning()).toBe(false)
+    })
+
+    it('recovers and can run again after a transient count failure', async () => {
+      const mockQuery = vi.fn()
+        .mockRejectedValueOnce(new Error('transient'))
+        .mockResolvedValueOnce({ rows: [{ count: '5' }] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 5 })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const sweeper = new IdempotencyKeySweeper(mockDb, { logger })
+
+      await expect(sweeper.run()).rejects.toThrow('transient')
+      expect(sweeper.isRunning()).toBe(false)
+
+      const result = await sweeper.run()
+      expect(result.expiredCount).toBe(5)
+      expect(result.deletedCount).toBe(5)
+    })
+
+    it('propagates a delete failure and does not report a partial deletion as complete', async () => {
+      const mockQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ count: '10' }] })
+        .mockRejectedValueOnce(new Error('delete failed'))
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const sweeper = new IdempotencyKeySweeper(mockDb, { logger })
+
+      await expect(sweeper.run()).rejects.toThrow('delete failed')
+      expect(sweeper.isRunning()).toBe(false)
+    })
+
+    it('stops the loop when a batch returns fewer rows than batchSize', async () => {
+      const mockQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ count: '10000' }] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 9999 })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const sweeper = new IdempotencyKeySweeper(mockDb, { batchSize: 10000, logger })
+      const result = await sweeper.run()
+
+      expect(result.deletedCount).toBe(9999)
+      expect(mockQuery).toHaveBeenCalledTimes(2)
+    })
+
+    it('handles a count response with no rows as zero', async () => {
+      const mockQuery = vi.fn().mockResolvedValue({ rows: [] })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const sweeper = new IdempotencyKeySweeper(mockDb, { logger })
+      const result = await sweeper.run()
+
+      expect(result.expiredCount).toBe(0)
+      expect(result.deletedCount).toBe(0)
+    })
+
+    it('stops the loop when a batch returns zero rows even if count is non-zero', async () => {
+      const mockQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ count: '5' }] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const sweeper = new IdempotencyKeySweeper(mockDb, { logger })
+      const result = await sweeper.run()
+
+      expect(result.expiredCount).toBe(5)
+      expect(result.deletedCount).toBe(0)
+      expect(mockQuery).toHaveBeenCalledTimes(2)
+    })
+  })
+
+  describe('sweepExpiredIdempotencyKeys', () => {
+    it('delegates to a new sweeper and returns its result', async () => {
+      const mockQuery = vi.fn()
+        .mockResolvedValueOnce({ rows: [{ count: '3' }] })
+        .mockResolvedValueOnce({ rows: [], rowCount: 3 })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const result = await sweepExpiredIdempotencyKeys(mockDb, { logger })
+
+      expect(result.expiredCount).toBe(3)
+      expect(result.deletedCount).toBe(3)
+    })
+
+    it('respects dry-run via the helper', async () => {
+      const mockQuery = vi.fn().mockResolvedValue({ rows: [{ count: '7' }] })
+      mockDb = { query: mockQuery } as unknown as Queryable
+
+      const result = await sweepExpiredIdempotencyKeys(mockDb, { dryRun: true, logger })
+
+      expect(result.expiredCount).toBe(7)
+      expect(result.deletedCount).toBe(0)
+      expect(mockQuery).toHaveBeenCalledTimes(1)
+    })
   })
 })
