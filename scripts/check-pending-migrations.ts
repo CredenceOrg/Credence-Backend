@@ -3,13 +3,13 @@
 import { dryRunMigration } from "../src/migrations/runner.js";
 import { exit } from "process";
 
-async function main() {
+export async function main(): Promise<number> {
   if (!process.env.DATABASE_URL) {
     console.warn(
       "\n⚠️  DATABASE_URL not set — skipping pending migration check.",
     );
     console.warn("   Set DATABASE_URL to enable migration checks.");
-    exit(0);
+    return 0;
   }
 
   try {
@@ -21,19 +21,19 @@ async function main() {
     if (!result.success) {
       if (
         result.error?.includes("ECONNREFUSED") ||
-        result.error?.includes("database")?.toLowerCase()
+        result.error?.toLowerCase().includes("database")
       ) {
         console.warn(
           "\n⚠️  Could not connect to database — skipping migration check.",
         );
-        exit(0);
+        return 0;
       }
       console.warn(`\n⚠️  Migration check warning: ${result.error}`);
-      exit(0);
+      return 0;
     }
 
     if (result.applied.length === 0) {
-      exit(0);
+      return 0;
     }
 
     console.warn("");
@@ -48,13 +48,17 @@ async function main() {
       "⚠️  ───────────────────────────────────────────────────────────────",
     );
     console.warn("");
-    exit(0);
-  } catch {
+    return 0;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     console.warn(
       "\n⚠️  Could not check migrations — skipping. Ensure DATABASE_URL is set.",
     );
-    exit(0);
+    console.warn(`   Details: ${message}`);
+    return 0;
   }
 }
 
-main();
+if (import.meta.url === `file://${process.argv[1]}`) {
+  main().then((code) => exit(code));
+}
