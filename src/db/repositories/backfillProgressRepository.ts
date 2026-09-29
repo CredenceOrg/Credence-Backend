@@ -48,9 +48,46 @@ const JOB_NAME_PATTERN = /^[a-zA-Z0-9_.:/-]{1,128}$/
 /** Cursor values must be printable and bounded to avoid abuse. */
 const MAX_CURSOR_LENGTH = 1024
 
+/** Lifecycle statuses accepted by the DB CHECK constraint. */
+const VALID_STATUSES: readonly BackfillProgressStatus[] = [
+  'pending',
+  'running',
+  'completed',
+  'failed',
+]
+
+/** last_error column bound: prevents unbounded error blobs from exhausting storage. */
+const MAX_ERROR_LENGTH = 2000
+
 /**
  * Repository for the `backfill_progress` table.
  * Provides durable checkpoint storage so backfills resume after process restarts.
+ *
+ * Invariants (enforced + tested in backfillProgressRepository.boundary.test.ts):
+ * - jobName is a non-empty string of 1-128 chars matching [a-zA-Z0-9_.:/-].
+ *   Non-string inputs are rejected (RegExp.test would otherwise coerce e.g.
+ *   `123` or `null` to a passing string). Rejects SQL-injection payloads.
+ * - cursorValue is a string of 0-1024 chars; empty string is the valid initial
+ *   watermark. NUL/control chars (U+0000-U+0008, U+000B, U+000C, U+000E-U+001F)
+ *   are rejected; \t \n \r are allowed as opaque cursor bytes.
+ * - rowsProcessed/totalRows are non-negative safe integers; totalRows may be
+ *   null (unknown). NaN/Infinity/floats/negatives are rejected.
+ * - status is always one of pending|running|completed|failed (DB CHECK +
+ *   fail-fast repo validation). Unknown statuses are rejected before SQL.
+ * - metadata must be a plain JSON object (or null/undefined meaning
+ *   "default"/"preserve"). Arrays/primitives are rejected to avoid silent
+ *   data loss: map() coerces stored non-objects to {}, so accepting them on
+ *   write would succeed yet read back as {}.
+ * - checkpoint() is partial-update safe: total_rows and metadata are preserved
+ *   when omitted (COALESCE/CASE), so retries and stale writers cannot null out
+ *   progress. last_error is cleared on checkpoint/markRunning/markCompleted.
+ * - markFailed() truncates last_error to 2000 chars and preserves the last
+ *   committed cursor/rows so resume never loses acknowledged work.
+ * - All writes are single-statement atomic upserts (ON CONFLICT DO UPDATE);
+ *   concurrent writers converge to a single row per job_name with no duplicates.
+ * - All methods are idempotent and safe to retry: upsert/checkpoint overwrite
+ *   deterministically, find/delete are read-only, and error messages never
+ *   include metadata contents (only jobName/field + reason for diagnosability).
  */
 export class BackfillProgressRepository {
   constructor(private readonly db: Pool | PoolClient) {}
@@ -113,7 +150,9 @@ export class BackfillProgressRepository {
     }
 
     const status = input.status ?? 'pending'
+    this.assertValidStatus(status)
     const metadata = input.metadata ?? {}
+    this.assertValidMetadata(metadata, 'metadata')
 
     const { rows } = await this.db.query(
       `INSERT INTO backfill_progress (
@@ -156,6 +195,9 @@ export class BackfillProgressRepository {
     if (options.totalRows != null) {
       this.assertNonNegative(options.totalRows, 'totalRows')
     }
+    if (options.metadata != null) {
+      this.assertValidMetadata(options.metadata, 'metadata')
+    }
 
     const existing = await this.findByJobName(jobName)
     return this.upsert({
@@ -178,6 +220,9 @@ export class BackfillProgressRepository {
     this.assertNonNegative(input.rowsProcessed, 'rowsProcessed')
     if (input.totalRows != null) {
       this.assertNonNegative(input.totalRows, 'totalRows')
+    }
+    if (input.metadata != null) {
+      this.assertValidMetadata(input.metadata, 'metadata')
     }
 
     const { rows } = await this.db.query(
@@ -250,7 +295,9 @@ export class BackfillProgressRepository {
       throw new Error(`Cannot fail unknown backfill job: ${jobName}`)
     }
 
-    const safeError = error.slice(0, 2000)
+    // Coerce defensively so non-string throwables cannot cause a secondary
+    // TypeError on .slice; string inputs behave identically to before.
+    const safeError = String(error).slice(0, MAX_ERROR_LENGTH)
     return this.upsert({
       jobName,
       cursorValue: existing.cursorValue,
@@ -275,9 +322,9 @@ export class BackfillProgressRepository {
   }
 
   private assertValidJobName(jobName: string): void {
-    if (!JOB_NAME_PATTERN.test(jobName)) {
+    if (typeof jobName !== 'string' || !JOB_NAME_PATTERN.test(jobName)) {
       throw new Error(
-        `Invalid backfill job_name: ${jobName}. ` +
+        `Invalid backfill job_name: ${String(jobName)}. ` +
           `Expected 1-128 chars matching [a-zA-Z0-9_.:/-].`,
       )
     }
@@ -301,6 +348,25 @@ export class BackfillProgressRepository {
   private assertNonNegative(value: number, field: string): void {
     if (!Number.isFinite(value) || value < 0 || !Number.isInteger(value)) {
       throw new Error(`${field} must be a non-negative integer`)
+    }
+  }
+
+  private assertValidStatus(status: string): void {
+    if (!(VALID_STATUSES as readonly string[]).includes(status)) {
+      throw new Error(
+        `Invalid backfill status: ${String(status)}. ` +
+          `Expected one of ${VALID_STATUSES.join(' | ')}.`,
+      )
+    }
+  }
+
+  private assertValidMetadata(value: unknown, field: string): void {
+    if (
+      value == null ||
+      typeof value !== 'object' ||
+      Array.isArray(value)
+    ) {
+      throw new Error(`${field} must be a plain JSON object`)
     }
   }
 }

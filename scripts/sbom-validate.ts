@@ -11,6 +11,23 @@
  * a compromised or accidentally-introduced (transitive) dependency can enter
  * the production graph with no machine-readable inventory and no gate that
  * fails closed. This check makes the supply-chain inventory a build gate.
+ *
+ * Invariants (enforced + tested in scripts/sbom-validate.test.ts):
+ * - validateSbom() is pure, deterministic, and side-effect free: same input
+ *   always yields the same typed result; it never throws, never reads I/O,
+ *   and never mutates its argument. Safe to retry and safe for concurrent use.
+ * - Boundary: 0 components => EMPTY_COMPONENTS (fail-closed); >=1 components
+ *   with a valid CycloneDX marker => ok. Duplicate component entries are
+ *   counted (not deduplicated) so the gate is deterministic for duplicate inputs.
+ * - Validation is fail-closed: null/undefined/primitives/arrays, missing or
+ *   wrong bomFormat, empty specVersion, non-array components, or components
+ *   with missing/empty names => SCHEMA_MISMATCH. Unknown extra fields are
+ *   ignored (forward-compatible with newer CycloneDX fields).
+ * - validateSbomFile() never throws for missing/unreadable/invalid files;
+ *   all such states map to INVALID_JSON with a diagnosable message containing
+ *   only the path + OS/parse reason — never the file contents (no secret leak).
+ * - runCli() is a thin wrapper: exit 0 + stdout on success, exit 1 + stderr
+ *   on failure; default path "sbom.json" when no argv is given.
  */
 import { readFileSync } from "node:fs";
 import { basename } from "node:path";
