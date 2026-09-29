@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import crypto from 'crypto'
 import { newDb } from 'pg-mem'
 import type { IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
@@ -9,6 +10,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
     const db = newDb()
 
     // Register % operator
+    // Register % operator
     db.public.registerOperator({
         operator: '%',
         left: db.public.getType('integer'),
@@ -17,6 +19,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
         implementation: (a: number, b: number) => a % b
     })
 
+    // Register md5 function
     // Register md5 function
     db.public.registerFunction({
         name: 'md5',
@@ -29,6 +32,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
     })
 
     // Register substr function
+    // Register substr function
     db.public.registerFunction({
         name: 'substr',
         args: [db.public.getType('text'), db.public.getType('integer'), db.public.getType('integer')],
@@ -39,6 +43,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
         }
     })
 
+    // Register hash_md5_id_to_int function
     // Register hash_md5_id_to_int function
     db.public.registerFunction({
         name: 'hash_md5_id_to_int',
@@ -51,6 +56,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
         }
     })
 
+    // Intercept query and rewrite cast syntax to use the registered function
     // Intercept query and rewrite cast syntax to use the registered function
     let interceptor: any
     const subscribe = () => {
@@ -80,6 +86,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
     } as Parameters<typeof db.public.registerFunction>[0])
 
     // pg-mem does not implement POWER by default; register a JS-backed implementation
+    // pg-mem does not implement POWER by default; register a JS-backed implementation
     db.public.registerFunction({
         name: 'power',
         returns: 'numeric',
@@ -89,6 +96,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
     const adapter = db.adapters.createPg()
     const pool = new adapter.Pool() as unknown as Pool
 
+    // Create the outbox table directly (avoid DO $$ blocks which require plpgsql in pg-mem)
     // Create the outbox table directly (avoid DO $$ blocks which require plpgsql in pg-mem)
     await pool.query(`
         CREATE TABLE IF NOT EXISTS event_outbox (
@@ -123,6 +131,7 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
 }
 
 describe('Outbox bounded retries and backoff', () => {
+describe('Outbox bounded retries and backoff', () => {
     let pool: Pool
     let repo: OutboxRepository
 
@@ -136,6 +145,7 @@ describe('Outbox bounded retries and backoff', () => {
         await pool.query('DELETE FROM event_outbox')
     })
 
+    it('transitions to dead_letter exactly at max retries', async () => {
     it('transitions to dead_letter exactly at max retries', async () => {
         const insert = await pool.query(
                 `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
@@ -154,6 +164,7 @@ describe('Outbox bounded retries and backoff', () => {
         expect(check.rows[0].processed_at).not.toBeNull()
     })
 
+    it('claimEvents skips not-yet-due events (next_attempt_at) and only returns due ones', async () => {
     it('claimEvents skips not-yet-due events (next_attempt_at) and only returns due ones', async () => {
         // due in future
         await pool.query(
@@ -175,6 +186,7 @@ describe('Outbox bounded retries and backoff', () => {
         expect(events[0].id).toBe(BigInt(due.rows[0].id))
     })
 
+    it('preserves ordering while skipping a backed-off older event', async () => {
     it('preserves ordering while skipping a backed-off older event', async () => {
         // t1 older but backed off
         const t1 = await pool.query(
@@ -204,6 +216,7 @@ describe('Outbox bounded retries and backoff', () => {
     })
 
     it('caps the backoff delay at 3600s even when 2^retryCount would be far larger', async () => {
+    it('caps the backoff delay at 3600s even when 2^retryCount would be far larger', async () => {
         const insert = await pool.query(
               `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
           VALUES ($1,$2,$3,$4,$5,$6,$7,'consumer',NOW()) RETURNING id`,
@@ -224,6 +237,7 @@ describe('Outbox bounded retries and backoff', () => {
     })
 
     it('sanitizes the error message before persisting it (truncation + secret redaction)', async () => {
+    it('sanitizes the error message before persisting it (truncation + secret redaction)', async () => {
         const insert = await pool.query(
               `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
           VALUES ($1,$2,$3,$4,$5,$6,$7,'consumer',NOW()) RETURNING id`,
@@ -241,6 +255,7 @@ describe('Outbox bounded retries and backoff', () => {
 })
 
 describe('Outbox lifecycle transition invariants', () => {
+describe('Outbox lifecycle transition invariants', () => {
     let pool: Pool
     let repo: OutboxRepository
 
@@ -254,6 +269,7 @@ describe('Outbox lifecycle transition invariants', () => {
         await pool.end()
     })
 
+    it('allows each legal edge and rejects stale, repeated, skipped, and out-of-order edges', async () => {
     it('allows each legal edge and rejects stale, repeated, skipped, and out-of-order edges', async () => {
         await pool.query(
             `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, max_retries)
@@ -296,6 +312,7 @@ describe('Outbox lifecycle transition invariants', () => {
         await expect(repo.markFailed(pool, BigInt(terminal.rows[0].id), 'out of order', 'owner-a')).rejects.toThrow('cannot transition')
     })
 
+    it('rejects a stale owner without changing the processing row', async () => {
     it('rejects a stale owner without changing the processing row', async () => {
         await pool.query(
             `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id)
