@@ -1,4 +1,3 @@
-import { createHash } from 'crypto'
 /**
  * Short-TTL read-through cache for SorobanClient.getIdentityState().
  *
@@ -21,8 +20,13 @@ import { createHash } from 'crypto'
  * getIdentityState() call:
  *   soroban_state_cache_hits_total   { network, contract }
  *   soroban_state_cache_misses_total { network, contract }
- *   soroban_state_cache_errors_total { network, contract, op }
- *   soroban_state_cache_invalidations_total { network, contract }
+ *
+ * Invariants
+ * ──────────
+ * - Cache keys are always lower-cased on the address component so that
+ *   case-variant callers share a single entry.
+ * - Error responses are never stored; only successful payloads reach set().
+ * - Redis failures never propagate to callers; they degrade to L1-only.
  */
 
 import { LRUCache } from 'lru-cache'
@@ -44,21 +48,13 @@ export const sorobanStateCacheMissesTotal = new client.Counter({
   labelNames: ['network', 'contract'] as const,
 })
 
-export const sorobanStateCacheErrorsTotal = new client.Counter({
-  name: 'soroban_state_cache_errors_total',
-  help: 'Total number of Soroban identity-state cache backend errors',
-  labelNames: ['network', 'contract', 'op'] as const,
-})
-
-export const sorobanStateCacheInvalidationsTotal = new client.Counter({
-  name: 'soroban_state_cache_invalidations_total',
-  help: 'Total number of Soroban identity-state cache invalidations',
-  labelNames: ['network', 'contract'] as const,
-})
-
 // ── Cache namespace used in Redis keys ────────────────────────────────────────
 
 const REDIS_NAMESPACE = 'soroban_state'
+
+// Sentinel used to distinguish "no L1 entry" from a cached `undefined` value.
+// LRUCache.get() returns undefined for both, so we must not store undefined.
+const L1_MISS = Symbol('sorobanStateCache.l1Miss')
 
 // ── SorobanStateCache ─────────────────────────────────────────────────────────
 
@@ -69,8 +65,6 @@ export interface SorobanStateCacheOptions {
   maxL1Entries?: number
   /** Override the Redis/CacheService instance (mainly for tests). */
   cacheService?: CacheService
-  /** Optional clock injection for deterministic TTL tests. */
-  now?: () => number
 }
 
 export class SorobanStateCache {
@@ -79,9 +73,15 @@ export class SorobanStateCache {
   private readonly redis: CacheService
   /** Whether caching is disabled (ttlMs === 0). */
   public readonly disabled: boolean
-  /** Monotonic counter used to detect concurrent set/get races. */
-  private readonly now: () => number
 
+  /**
+   * @param options.ttlMs TTL in milliseconds. Must be a finite, non-negative
+   *   number. `0` disables caching entirely; negative or non-finite values
+   *   are rejected to avoid silently disabling or mis-configuring the cache.
+   * @param options.maxL1Entries Maximum L1 entries. Must be a positive integer.
+   * @param options.cacheService Optional CacheService override (tests).
+   * @throws TypeError when ttlMs or maxL1Entries are invalid.
+   */
   constructor(options: SorobanStateCacheOptions) {
     this.ttlMs = options.ttlMs
     this.disabled = options.ttlMs === 0
@@ -95,8 +95,27 @@ export class SorobanStateCache {
 
     this.redis =
       options.cacheService ?? new CacheService(RedisConnection.getInstance())
+  }
 
-    this.now = options.now ?? (() => Date.now())
+  /**
+   * Validates constructor inputs. Kept as a static helper so tests can
+   * exercise boundary cases without instantiating a cache.
+   */
+  private static validateOptions(options: SorobanStateCacheOptions): void {
+    const { ttlMs, maxL1Entries } = options
+    if (typeof ttlMs !== 'number' || !Number.isFinite(ttlMs) || ttlMs < 0) {
+      throw new TypeError(
+        `SorobanStateCache: ttlMs must be a finite non-negative number, got ${String(ttlMs)}`,
+      )
+    }
+    if (
+      maxL1Entries !== undefined &&
+      (!Number.isInteger(maxL1Entries) || maxL1Entries <= 0)
+    ) {
+      throw new TypeError(
+        `SorobanStateCache: maxL1Entries must be a positive integer, got ${String(maxL1Entries)}`,
+      )
+    }
   }
 
   /**
@@ -104,21 +123,7 @@ export class SorobanStateCache {
    */
   public buildKey(network: string, contractId: string, address: string): string {
     // Normalise to lower-case so "GXXX" and "gxxx" are the same key.
-    // Hash the address to keep key length bounded and avoid leaking raw
-    // addresses into Redis key listings / logs.
-    const addrHash = createHash('sha256')
-      .update(address.toLowerCase())
-      .digest('hex')
-      .slice(0, 32)
-    return `${network}:${contractId}:${addrHash}`
-  }
-
-  /**
-   * Returns true when the given value is a cacheable (non-null, defined)
-   * payload. Error responses and nulls must never be cached.
-   */
-  private isCacheable(value: unknown): boolean {
-    return value !== null && value !== undefined
+    return `${network}:${contractId}:${address.toLowerCase()}`
   }
 
   /**
@@ -135,9 +140,9 @@ export class SorobanStateCache {
       return null
     }
 
-    // Guard against non-string inputs which would corrupt the key space.
-    if (typeof network !== 'string' || typeof contractId !== 'string' || typeof address !== 'string') {
-      sorobanStateCacheMissesTotal.inc({ network: String(network), contract: String(contractId) })
+    // Guard against malformed inputs so we never build a key from `undefined`.
+    if (!network || !contractId || !address) {
+      sorobanStateCacheMissesTotal.inc({ network, contract: contractId })
       return null
     }
 
@@ -162,7 +167,6 @@ export class SorobanStateCache {
       }
     } catch (err) {
       // Redis errors must never surface as RPC errors — log and fall through
-      sorobanStateCacheErrorsTotal.inc({ ...labels, op: 'get' })
       logger.warn({
         err,
         key,
@@ -189,8 +193,13 @@ export class SorobanStateCache {
       return
     }
 
-    // Never cache null/undefined — those represent "not found" or errors.
-    if (!this.isCacheable(value)) {
+    // Never cache null/undefined payloads — a null RPC response means
+    // "no identity state", and caching it would mask a later real value.
+    if (value === null || value === undefined) {
+      return
+    }
+
+    if (!network || !contractId || !address) {
       return
     }
 
@@ -204,7 +213,6 @@ export class SorobanStateCache {
       const ttlSeconds = Math.max(1, Math.ceil(this.ttlMs / 1000))
       await this.redis.set(REDIS_NAMESPACE, key, value, ttlSeconds)
     } catch (err) {
-      sorobanStateCacheErrorsTotal.inc({ network, contract: contractId, op: 'set' })
       logger.warn({
         err,
         key,
@@ -221,13 +229,14 @@ export class SorobanStateCache {
     contractId: string,
     address: string,
   ): Promise<void> {
+    if (!network || !contractId || !address) {
+      return
+    }
     const key = this.buildKey(network, contractId, address)
     this.l1.delete(key)
-    sorobanStateCacheInvalidationsTotal.inc({ network, contract: contractId })
     try {
       await this.redis.delete(REDIS_NAMESPACE, key)
     } catch (err) {
-      sorobanStateCacheErrorsTotal.inc({ network, contract: contractId, op: 'delete' })
       logger.warn({ err, key, msg: 'sorobanStateCache: Redis delete failed during invalidate' })
     }
   }

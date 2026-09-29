@@ -1,3 +1,4 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   getBackoffDelayMs,
   type ProviderRetryPolicies,
@@ -8,6 +9,7 @@ import {
   resolveExtendedProviderRetryPolicy,
   type ExtendedRetryPolicy,
 } from "./retryExecutor.js";
+import { SorobanStateCache } from "./sorobanStateCache.js";
 import {
   executeSorobanOperation,
   createMetricsAdapter,
@@ -17,6 +19,7 @@ import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.j
 import { normalizeTransportError } from "./httpErrors.js";
 import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
+import { createSorobanClient } from "./soroban.js";
 import {
   noopRetryObserver,
   type RetryObserver,
@@ -331,15 +334,6 @@ export class SorobanClient {
     halfOpenAfterMs: number;
   };
   private readonly stateCache: SorobanStateCache;
-  /**
-   * In-flight identity-state reads keyed by `network:contractId:address`.
-   *
-   * Coalesces concurrent cache misses onto a single RPC call so a burst of
-   * callers cannot stampede the provider, and so every caller observes the
-   * same resolved value (deterministic under concurrency). Entries are
-   * removed in a `finally` block, so a rejected read never poisons the map.
-   */
-  private readonly inFlightIdentityReads = new Map<string, Promise<unknown>>();
 
   constructor(
     config: SorobanClientConfig,
@@ -445,59 +439,16 @@ export class SorobanClient {
     }
 
     // ── Cache read (never blocked by the circuit breaker) ──────────────────
-    // Cache reads are best-effort: a cache-layer failure must never fail the
-    // request or mask a live value, so we degrade to a cache miss and fall
-    // through to the RPC path.
-    let cached: unknown = null;
-    try {
-      cached = await this.stateCache.get(
-        this.network,
-        this.contractId,
-        address,
-      );
-    } catch (error) {
-      logger.warn("soroban.state_cache.get_failed", {
-        network: this.network,
-        contractId: this.contractId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-      cached = null;
-    }
+    const cached = await this.stateCache.get(
+      this.network,
+      this.contractId,
+      address,
+    );
     if (cached !== null) {
       return cached;
     }
 
-    // ── Cache miss: coalesce concurrent readers, then go through the ───────
-    // ── circuit breaker + retry stack ──────────────────────────────────────
-    const key = `${this.network}:${this.contractId}:${address}`;
-    const existing = this.inFlightIdentityReads.get(key);
-    if (existing !== undefined) {
-      return existing;
-    }
-
-    const read = this.loadIdentityState(address);
-    this.inFlightIdentityReads.set(key, read);
-    try {
-      return await read;
-    } finally {
-      // Only clear the slot if it still points at this read; a later read for
-      // the same key must not be evicted by an earlier one settling late.
-      if (this.inFlightIdentityReads.get(key) === read) {
-        this.inFlightIdentityReads.delete(key);
-      }
-    }
-  }
-
-  /**
-   * Performs the live identity-state read (cache miss path) and populates the
-   * read-through cache on success.
-   *
-   * Cache writes are best-effort: a write failure is logged and swallowed so
-   * a successfully fetched value is still returned to the caller. This keeps
-   * the cache a pure optimization and guarantees no user-visible data loss
-   * when the cache backend is degraded.
-   */
-  private async loadIdentityState(address: string): Promise<unknown> {
+    // ── Cache miss: go through the circuit breaker + retry stack ───────────
     const result = await this.callRpc<unknown>("getContractData", {
       contractId: this.contractId,
       network: this.network,
@@ -506,20 +457,7 @@ export class SorobanClient {
 
     // Only cache successful (non-null) responses.
     if (result !== null && result !== undefined) {
-      try {
-        await this.stateCache.set(
-          this.network,
-          this.contractId,
-          address,
-          result,
-        );
-      } catch (error) {
-        logger.warn("soroban.state_cache.set_failed", {
-          network: this.network,
-          contractId: this.contractId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+      await this.stateCache.set(this.network, this.contractId, address, result);
     }
 
     return result;
