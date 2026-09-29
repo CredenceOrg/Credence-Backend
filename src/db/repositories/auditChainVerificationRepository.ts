@@ -116,7 +116,19 @@ export class PostgresAuditChainVerificationRepository implements AuditChainVerif
       throw new Error('Missing tenant context')
     }
     await this.db.query(
-      `\n      UPDATE audit_chain_verification_status\n      SET\n        last_verified_height = 0,\n        verified_at = NULL,\n        status = 'never_run',\n        first_break_seq = NULL,\n        violation_count = 0,\n        rows_checked = 0,\n        updated_at = NOW()\n      WHERE id = $1\n      `,\n      [tenantId],
+      `
+      UPDATE audit_chain_verification_status
+      SET
+        last_verified_height = 0,
+        verified_at = NULL,
+        status = 'never_run',
+        first_break_seq = NULL,
+        violation_count = 0,
+        rows_checked = 0,
+        updated_at = NOW()
+      WHERE id = $1
+      `,
+      [tenantId],
     )
   }
 }
