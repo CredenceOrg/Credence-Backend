@@ -10,9 +10,12 @@ import { withReplica } from '../../src/db/pool.js'
 
 // Prevent tests from opening real database connections.
 vi.mock('../../src/db/pool.js', () => ({
-  pool: {},
-  replicaPool: {},
-  workerPool: {},
+  pool: { on: vi.fn() },
+  replicaPool: { on: vi.fn() },
+  workerPool: { on: vi.fn() },
+  apiPreparedStatementCache: new Map(),
+  workerPreparedStatementCache: new Map(),
+  replicaPreparedStatementCache: new Map(),
   withReplica: vi.fn(async (fn: (client: unknown) => Promise<unknown>) => fn({})),
 }))
 

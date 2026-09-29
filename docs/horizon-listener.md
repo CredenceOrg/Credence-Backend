@@ -289,6 +289,206 @@ interface ScoreHistorySnapshot {
 }
 ```
 
+## Concurrency and Race Safety (Withdrawal Listener)
+
+`HorizonWithdrawalListener` guarantees that a withdrawal operation is applied
+**at most once** to bond/score state and **never partially**, even across a
+crash, a restart-replay, or an unexpected duplicate delivery of the same
+Horizon operation.
+
+### Invariant
+
+For a given Horizon operation id, exactly one of the following is true after
+the system settles:
+
+1. The operation was never applied and the cursor was not advanced past it
+   (nothing happened yet — it will be retried), or
+2. The operation was applied exactly once, its cursor checkpoint was
+   committed in the same transaction, and it is recorded in
+   `idempotency_keys` so any later re-delivery is a safe no-op.
+
+There is no state in which the mutation committed but the cursor did not (or
+vice versa), and no state in which the same operation is applied twice.
+
+### Design
+
+- **Mutation + checkpoint are one transaction.** Each valid event is
+  processed and its `upsertCursor(...)` call runs inside a single
+  `BEGIN…COMMIT` against one `PoolClient` (see `pollForEvents()` in
+  `src/listeners/horizonWithdrawalEvents.ts`). This mirrors the pattern
+  already used by the bond-creation listener
+  (`horizonBondEvents.ts`) — a crash before `COMMIT` leaves the cursor
+  unmoved, so the next poll re-fetches and retries the same event.
+- **Idempotency guard on top of the transaction.** Before running that
+  transaction, the event is keyed by `bond_withdrawal:<operation id>` and
+  routed through the existing `IdempotentConsumer` /
+  `IdempotencyRepository` (`src/services/idempotentConsumer.ts`). This
+  protects against the one case atomicity alone cannot: the *same* operation
+  id being handed to the handler a second time — whether from overlapping
+  poll windows, a manual replay, or (should it ever be deployed with more
+  than one active instance) two replicas racing on the same stream. A second
+  delivery short-circuits to the cached result without re-running the
+  handler. Concurrent (not just sequential) duplicate calls are also
+  deduped via the consumer's in-memory in-flight map.
+- **Batch stops at the first failure.** `pollForEvents()` processes events
+  in order and stops the batch as soon as one fails (the failed event's
+  transaction rolls back, so nothing partial is committed). The cursor is
+  **not** advanced past the failure, so the next poll cycle (at the
+  configured `pollingInterval`) retries starting from the same event. This
+  is the explicit client/consumer retry contract: retries are automatic,
+  bounded by the polling cadence, and never skip an unprocessed event.
+- **Poison messages are the one deliberate exception.** A schema-invalid
+  event can never pass validation on a retry, so it is routed to the DLQ via
+  `replayService.captureFailure` and the cursor is advanced past it — this
+  is unchanged from the prior behavior and prevents a permanently malformed
+  payload from stalling the stream forever.
+- **Exact decimal arithmetic.** `calculateBondUpdate`, `shouldCreateScoreSnapshot`,
+  and `createScoreSnapshot` now use the BigInt-based helpers in
+  `src/lib/decimalMath.ts` (`subtractDecimals`, `compareDecimals`,
+  `isValidPositiveDecimal`) instead of `parseFloat`. `parseFloat` silently
+  loses precision on Stellar's 7-decimal amounts (e.g.
+  `parseFloat("0.3") - parseFloat("0.1")` is `0.19999999999999998` in IEEE-754
+  double arithmetic); over many withdrawals this drift is exactly the kind of
+  "balance disagrees with the ledger" bug this listener must not have.
+
+### Compatibility
+
+`BondStateUpdate.newAmount` is still produced with the same trimmed shape
+`parseFloat(...).toString()` used to produce (e.g. `"700"`, not
+`"700.0000000"`) via a small string-only trim helper — no response-shape or
+schema change. No migration is required: `idempotency_keys` is an existing
+table already used elsewhere in this codebase (`src/db/repositories/idempotencyRepository.ts`).
+
+### Operational limitations
+
+- **Single active instance assumption.** Like the sibling `horizonBondEvents.ts`
+  stream, this listener does not use the `LeaseManager` /
+  `LeasedHorizonListener` cross-replica fencing mechanism documented above
+  under "Controlled Failover" — that mechanism exists in this codebase but is
+  only wired up for `HorizonListener`. The idempotency guard makes a second
+  concurrent replica *safe* (it cannot double-apply an operation), but it does
+  not make replicas *coordinate* — two replicas would each independently poll
+  and redundantly attempt every event (the loser of each race simply gets a
+  cached/no-op result). Operators should run one active instance of this
+  listener per stream in production; wiring in lease-based fencing is a
+  reasonable future improvement but is out of scope for this fix.
+- **Bond/score persistence is still a placeholder.** `getBondState`,
+  `updateBondState`, and `saveScoreSnapshot` remain mock implementations (as
+  they were before this change) — this fix guarantees that *whatever*
+  persistence exists there is applied atomically with the cursor checkpoint
+  and idempotently with respect to replay, so wiring real persistence in
+  later inherits these guarantees automatically without further changes to
+  the listener's concurrency structure.
+
+### Security assumptions
+
+The idempotency key (`bond_withdrawal:<operation id>`) is derived from
+Horizon's own operation id, which is assigned by the network and not
+attacker-controlled by anything this service trusts less than the rest of
+the ingested event. No new trust boundary is introduced.
+
+## State-Transition Invariants (Horizon Ingestion Lifecycle)
+
+`HorizonListener.handleEvent` (the entry point for the `bond` / `slash` /
+`withdrawal` event dispatcher, `src/listeners/horizon.listeners.ts`) now
+enforces a deterministic state-transition invariant on the node/bond
+lifecycle before any write reaches the repository. The transition matrix and
+its decision procedure live in `src/listeners/horizonTransitions.ts` and
+reuse the generic `TransitionMatrix` from `src/lib/stateTransition.ts`.
+
+### Lifecycle states
+
+| State      | Meaning                                                              |
+|------------|----------------------------------------------------------------------|
+| `active`   | Node/bond exists on chain and is live (created by a `bond` event)    |
+| `slashed`  | Node/bond incurred a slash on chain (still on chain, penalized)      |
+| `withdrawn`| Node/bond fully withdrawn on chain (**terminal**)                    |
+
+### Legal transitions
+
+| From        | To          | Trigger                |
+|-------------|-------------|------------------------|
+| `active`    | `slashed`   | `slash` event          |
+| `active`    | `withdrawn` | `withdrawal` event     |
+| `slashed`   | `withdrawn` | `withdrawal` after slash|
+| `withdrawn` | —           | terminal: no outgoing  |
+
+`withdrawn` is terminal: on chain a fully withdrawn bond cannot be slashed or
+re-activated, so `withdrawn → slashed` and `withdrawn → active` are rejected
+rather than silently corrupting local state. Likewise `slashed → active`
+(un-slash) is impossible on chain and is rejected.
+
+### Enforcement and the decision procedure
+
+`handleEvent` performs a **read-validate-write**: for `slash` / `withdrawal`
+it reads the node's current state via the repository contract's
+`getNodeStatus(nodeId)`, validates the requested transition, and only then
+issues the existing `updateNodeStatus(...)` write. The repository contract
+(`HorizonIngestionRepository`) now requires `getNodeStatus`; `src/db/repository.ts`
+provides a stub that returns `null` (refuses to manufacture state).
+
+Because Horizon delivers events **at-least-once** (cursors can replay after a
+crash, a lease hand-off, or a manual re-ingestion), the decision procedure
+(`resolveIngestionTransition`) distinguishes four deterministic outcomes:
+
+1. **`applied`** — a legal state *change*; the caller persists the new state.
+2. **`noop`** — same-state redelivery (`active → active`, `slashed → slashed`,
+   `withdrawn → withdrawn`). This is the expected replay case: accepted with
+   **no write** and no error, so a replay storm can never double-apply or
+   poison the stream.
+3. **`rejected` (`INVALID_STATE_TRANSITION`)** — stale / out-of-order event
+   (e.g. a `slash` for a `withdrawn` bond). A typed
+   `HorizonIngestionTransitionError` is thrown and **nothing is written**.
+4. **`rejected` (`NODE_NOT_INGESTED`)** — a `slash` / `withdrawal` for a node
+   the store has never seen (an ingestion gap where the prior `bond` event
+   was missed). Rejected with a typed error and **no write** — the local
+   store never materializes `slashed` / `withdrawn` state from nothing.
+   Close the gap via reconciliation (`IdentityStateSync`, `replayLedgerRange`)
+   before re-ingesting.
+
+The `bond` event is the only way a node comes into existence: it upserts the
+node into `active` (idempotent create-or-refresh), so repeated `bond`
+redelivery is safe by construction.
+
+### Failure behavior
+
+- Rejected transitions throw `HorizonIngestionTransitionError` with structured
+  fields (`code`, `nodeId`, `eventType`, `current`, `requested`) so callers
+  can route to a DLQ or audit log deterministically.
+- Repository write failures propagate to the caller unchanged; because the
+  validation happens before the write, a failed write leaves the node in its
+  previous state — no partial state is ever observable.
+- In `LeasedHorizonListener.process`, a rejected event propagates the error to
+  the caller (it is neither acknowledged as `'processed'` nor silently
+  dropped); a lost lease still returns `'skipped'` as before.
+
+### Compatibility
+
+This change is **additive**: previously-undefined behavior (writing a
+slash/withdrawal for an unknown node, or applying an illegal state change)
+is now rejected with a structured error. Every legal transition issues the
+exact same repository calls as before, so the public surface of
+`HorizonListener`, `LeasedHorizonListener`, and `LeaseManager` is unchanged.
+The only repository-contract addition is the `getNodeStatus` read.
+
+### Migration / rollback
+
+No schema migration is required. Rolling back means removing the
+`resolveIngestionTransition` call in `HorizonListener.handleEvent` and
+dropping `getNodeStatus` from the repository contract.
+
+### Security / correctness assumptions
+
+- The matrix validates the **logical** lifecycle only. Callers still own
+  authentication, authorization, cursor/idempotency handling, and
+  persistence; the matrix is a guardrail, not a replacement for optimistic
+  concurrency control or operation-id idempotency.
+- `NODE_NOT_INGESTED` rejection prevents an attacker or a misconfigured feed
+  from materializing `slashed` / `withdrawn` records for bonds the local
+  store never saw — phantom state cannot be created out of order.
+- No new trust boundary: node ids and event types come from the same Horizon
+  feed already trusted by the rest of the ingestion pipeline.
+
 ## Error Handling
 
 The listener implements comprehensive error handling:
@@ -664,8 +864,105 @@ This module listens for bond creation events from Stellar/Horizon and syncs iden
 - Parses event payload (identity, amount, duration, etc.)
 - Upserts identity and bond records in PostgreSQL
 - **Idempotent Restart & Gap-Free Resumption**: Loads the saved `bond_creation` cursor checkpoint from the `horizon_cursors` table on startup (falling back to `'now'` only on the first boot or DB error) to ensure no blockchain operations are missed across process restarts.
+- **Bounded Exponential Backoff with Full Jitter**: On stream errors, reconnects with exponential backoff starting at 500ms, capped at 30 seconds, with full jitter to prevent thundering herd
+- **Single Stream** (no duplicate connections): Exactly one stream is opened to prevent double subscriptions
 - Handles reconnection and backfill
 - Comprehensive tests with mocked Horizon
+
+## Reconnection Strategy: Bounded Exponential Backoff
+
+The bond creation listener uses **bounded exponential backoff with full jitter** to handle stream reconnections gracefully:
+
+### Algorithm
+
+```
+delay = random(0, min(maxDelay, baseDelay * 2^attempt))
+```
+
+Where:
+- **baseDelay** = 500 ms (initial reconnect delay)
+- **maxDelay** = 30 seconds (reconnect cap)
+- **attempt** = current attempt number (0-based)
+- **full jitter** = prevents thundering herd when multiple listeners reconnect simultaneously
+
+### Example Sequence
+
+```
+Attempt 0: random(0, 500ms)     ← first reconnect
+Attempt 1: random(0, 1000ms)    ← second attempt
+Attempt 2: random(0, 2000ms)    ← continues exponentially
+Attempt 3: random(0, 4000ms)
+Attempt 4: random(0, 8000ms)
+Attempt 5: random(0, 16000ms)   ← approaching cap
+Attempt 6: random(0, 30000ms)   ← capped at maxDelay
+Attempt 7+: random(0, 30000ms)  ← stays capped
+```
+
+### Reset on Success
+
+When a bond event is **successfully processed**, `backoff.reset()` is called to restart the backoff sequence at attempt 0. This ensures that temporary network blips don't accumulate delay.
+
+### Implementation
+
+```typescript
+// In horizonBondEvents.ts
+const backoff = new BoundedBackoff({
+  baseMs: 500,        // Start at 500ms
+  maxMs: 30_000,      // Cap at 30 seconds
+  maxAttempts: 0,     // Infinite retries (0 = no limit)
+});
+
+// On successful message
+onmessage: async (op: any) => {
+  // ... process event ...
+  backoff.reset();  // Reset to attempt 0 on success
+  // ... update cursor ...
+}
+
+// On stream error
+onerror: async (err: unknown) => {
+  metrics.streamUp.set({ stream: STREAM_NAME }, 0);
+  metrics.reconnectTotal.inc({ stream: STREAM_NAME });
+  try {
+    await backoff.wait();     // Wait with exponential backoff
+    startStream();            // Reconnect
+  } catch (e: any) {
+    if (e?.stopped) {
+      // Stream was stopped, exit gracefully
+    } else if (e?.exhausted) {
+      // Max attempts reached
+      console.warn('Max reconnect attempts reached');
+    }
+  }
+}
+```
+
+### Stop Handling
+
+When `stop()` is called:
+1. `stopped` flag is set to `true`
+2. `backoff.stop()` cancels any pending sleep timer
+3. Any pending reconnect attempts are immediately rejected
+4. The stream is closed gracefully
+
+This prevents timer leaks and ensures clean shutdown.
+
+### Metrics
+
+The listener exposes Prometheus metrics for monitoring reconnection behavior:
+
+```prometheus
+# Counter: incremented on each reconnect attempt
+horizon_reconnect_total{stream="bond_creation"}
+
+# Gauge: 1 if stream is connected, 0 if disconnected
+horizon_stream_up{stream="bond_creation"}
+```
+
+Monitor these to detect:
+- **Flapping streams** — high `reconnect_total` indicates instability
+- **Stream outages** — `stream_up` stays 0 for extended time
+- **Recovery patterns** — tracks how quickly the stream recovers
 
 ## Usage
 
@@ -679,6 +976,9 @@ const handle = subscribeBondCreationEvents(
     console.log(event);
   }
 );
+
+// Later: graceful shutdown with timer cleanup
+handle.stop();
 ```
 
 ## Event Payload Example
@@ -698,9 +998,10 @@ const handle = subscribeBondCreationEvents(
 ```
 
 ## Testing
-- Tests are located in `src/__tests__/horizonBondEvents.test.ts`
+- Tests are located in `src/listeners/__tests__/horizonBondEvents.test.ts`
 - Run tests with `npm test` or `npx jest`
 - Mocked Horizon stream covers event parsing, DB upsert, duplicate handling
+- Backoff tests verify exponential delays, max caps, and reset behavior
 
 ## JSDoc
 - All functions are documented with JSDoc comments in `src/listeners/horizonBondEvents.ts`
@@ -710,7 +1011,7 @@ const handle = subscribeBondCreationEvents(
  - Clear documentation
 
 ## Backfill & Reconnection
- - Listener automatically reconnects on errors
+ - Listener automatically reconnects on errors with bounded exponential backoff
  - Backfill logic can be extended to fetch missed events
 
 ## Event Validation

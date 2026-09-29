@@ -25,11 +25,11 @@ const reportService = new ReportService(reportRepository, reportStorage);
  *
  * Returns Top N tenants by request count in the aggregate window (default: last hour).
  *
- * @requires enterprise scope
+ * @requires exports:read scope
  */
 router.get(
   "/top-talkers",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.EXPORTS_READ),
   validate({ query: topTalkersQuerySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -65,7 +65,7 @@ router.get(
  */
 router.post(
   "/",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.REPORTS_GENERATE),
   validate({ body: createReportBodySchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -112,7 +112,7 @@ router.post(
  */
 router.get(
   "/:jobId",
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.REPORTS_GENERATE),
   validate({ params: reportJobParamsSchema }),
   async (req: Request, res: Response): Promise<void> => {
     try {
@@ -145,10 +145,55 @@ router.get(
 );
 
 /**
+ * DELETE /api/reports/:jobId
+ *
+ * Cancels a report generation job
+ *
+ * @requires reports:generate scope
+ *
+ * @param {string} jobId - Unique report job ID
+ *
+ * @returns {object} Job status and artifact availability
+ */
+router.delete(
+  "/:jobId",
+  requireApiKey(ApiScope.REPORTS_GENERATE),
+  validate({ params: reportJobParamsSchema }),
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const validatedReq = req as ValidatedRequest<ReportJobParams>
+      const { jobId } = validatedReq.validated.params
+
+      const job = await reportService.cancelReportJob(jobId);
+
+      if (!job) {
+        sendError(res, ErrorCode.NOT_FOUND, `Report job ${jobId} not found`);
+        return;
+      }
+
+      res.status(200).json({
+        jobId: job.id,
+        status: job.status,
+        type: job.type,
+        failureReason: job.failureReason,
+        createdAt: job.createdAt,
+        updatedAt: job.updatedAt,
+      });
+    } catch (error) {
+      console.error("Report cancel error:", error);
+      sendError(res, ErrorCode.INTERNAL_SERVER_ERROR, "An unexpected error occurred while cancelling report job");
+    }
+  },
+);
+
+/**
  * GET /api/reports/download/:key
  *
  * Downloads a report artifact using a signed URL.
  * The signature, expires, and key are validated before serving the data.
+ *
+ * **CORS policy:** Open — signed URLs are the credential; cross-origin
+ * `GET` is allowed. See `docs/CORS_POLICY.md`.
  *
  * @param {string} key - Encoded storage key
  * @query {number} expires - Expiration timestamp (ms)

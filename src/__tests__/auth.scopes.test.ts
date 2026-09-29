@@ -2,6 +2,7 @@
  * @file src/__tests__/auth.scopes.test.ts
  *
  * Comprehensive tests for the granular API scope model.
+ * All keys are generated via `generateApiKey()` — no hardcoded keys.
  *
  * Coverage targets
  * ────────────────
@@ -11,6 +12,7 @@
  * • requireApiKey() middleware — per-scope enforcement
  *   - missing key → 401
  *   - invalid key → 401
+ *   - revoked key → 401
  *   - key with insufficient scope → 403 (deny-by-default)
  *   - key with exact scope → 200 / next()
  *   - key with superset scopes → 200 / next()
@@ -19,7 +21,6 @@
  *   - req.apiKey metadata shape (scopes array + legacy scope field)
  *   - Authorization: Bearer header accepted alongside X-API-Key
  *   - unknown scope string → deny
- *   - backward compat: existing test-enterprise-key-12345 still works
  */
 
 import { Request, Response, NextFunction } from 'express'
@@ -31,6 +32,8 @@ import {
   scopeSatisfies,
   AuthenticatedRequest,
 } from '../middleware/auth.js'
+import { generateApiKey, _resetStore, revokeApiKey } from '../services/apiKeys.js'
+import { userRepo } from '../repositories/userRepository.js'
 
 // ─── helpers ────────────────────────────────────────────────────────────────
 
@@ -49,6 +52,25 @@ function makeNext(): NextFunction {
   return vi.fn() as unknown as NextFunction
 }
 
+/** Helper to create a key with legacy scope string and return the raw key. */
+function legacyKey(scope: 'read' | 'full'): string {
+  return generateApiKey('u-admin', scope).key
+}
+
+/** Helper to create a key with granular scopes and return the raw key. */
+function granularKey(scopes: string[]): string {
+  return generateApiKey('u-admin', scopes).key
+}
+
+// ─── seed on every test ─────────────────────────────────────────────────────
+
+beforeEach(() => {
+  _resetStore()
+  userRepo._reset()
+  userRepo.upsert({ id: 'u-admin', role: 'super-admin', email: 'a@x.com', tenantId: 't-admin' })
+  userRepo.upsert({ id: 'u-verifier', role: 'verifier', email: 'v@x.com', tenantId: 't-ver' })
+})
+
 // ─── ApiScope enum ───────────────────────────────────────────────────────────
 
 describe('ApiScope enum', () => {
@@ -60,8 +82,13 @@ describe('ApiScope enum', () => {
     expect(ApiScope.REPORTS_GENERATE).toBe('reports:generate')
     expect(ApiScope.EXPORTS_READ).toBe('exports:read')
     expect(ApiScope.WEBHOOKS_ADMIN).toBe('webhooks:admin')
+    expect(ApiScope.OUTBOX_REINJECT).toBe('outbox:reinject')
     expect(ApiScope.ADMIN_READ).toBe('admin:read')
     expect(ApiScope.ADMIN_WRITE).toBe('admin:write')
+    expect(ApiScope.FLAGS_READ).toBe('flags:read')
+    expect(ApiScope.FLAGS_WRITE).toBe('flags:write')
+    expect(ApiScope.BOND_READ).toBe('bond:read')
+    expect(ApiScope.BOND_WRITE).toBe('bond:write')
   })
 
   it('retains legacy backward-compat values', () => {
@@ -84,6 +111,8 @@ describe('SCOPE_SETS', () => {
     expect(pub.has(ApiScope.WEBHOOKS_ADMIN)).toBe(false)
     expect(pub.has(ApiScope.ADMIN_READ)).toBe(false)
     expect(pub.has(ApiScope.ADMIN_WRITE)).toBe(false)
+    expect(pub.has(ApiScope.BOND_READ)).toBe(false)
+    expect(pub.has(ApiScope.BOND_WRITE)).toBe(false)
   })
 
   it('ENTERPRISE set contains every granular scope', () => {
@@ -96,8 +125,13 @@ describe('SCOPE_SETS', () => {
       ApiScope.REPORTS_GENERATE,
       ApiScope.EXPORTS_READ,
       ApiScope.WEBHOOKS_ADMIN,
+      ApiScope.OUTBOX_REINJECT,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.FLAGS_READ,
+      ApiScope.FLAGS_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
     for (const scope of granular) {
       expect(ent.has(scope)).toBe(true)
@@ -130,8 +164,13 @@ describe('scopeSatisfies()', () => {
         ApiScope.REPORTS_GENERATE,
         ApiScope.EXPORTS_READ,
         ApiScope.WEBHOOKS_ADMIN,
+        ApiScope.OUTBOX_REINJECT,
         ApiScope.ADMIN_READ,
         ApiScope.ADMIN_WRITE,
+        ApiScope.FLAGS_READ,
+        ApiScope.FLAGS_WRITE,
+        ApiScope.BOND_READ,
+        ApiScope.BOND_WRITE,
       ]
       for (const scope of granular) {
         expect(scopeSatisfies([ApiScope.ENTERPRISE], scope)).toBe(true)
@@ -159,6 +198,8 @@ describe('scopeSatisfies()', () => {
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.WEBHOOKS_ADMIN)).toBe(false)
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.ADMIN_READ)).toBe(false)
       expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.ADMIN_WRITE)).toBe(false)
+      expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.BOND_READ)).toBe(false)
+      expect(scopeSatisfies([ApiScope.PUBLIC], ApiScope.BOND_WRITE)).toBe(false)
     })
   })
 
@@ -207,20 +248,20 @@ describe('requireApiKey() middleware', () => {
   // ── missing key ────────────────────────────────────────────────────────────
 
   describe('missing API key', () => {
-    it('returns 401 when no key header is present', () => {
+    it('returns 401 when no key header is present', async () => {
       const req = makeReq()
       const { res, status, json } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(401)
       expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Unauthorized' }))
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 401 when X-API-Key is empty string', () => {
+    it('returns 401 when X-API-Key is empty string', async () => {
       const req = makeReq({ 'x-api-key': '' })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(401)
       expect(next).not.toHaveBeenCalled()
@@ -230,20 +271,42 @@ describe('requireApiKey() middleware', () => {
   // ── invalid key ────────────────────────────────────────────────────────────
 
   describe('invalid API key', () => {
-    it('returns 401 for an unrecognised key', () => {
+    it('returns 401 for an unrecognised key', async () => {
       const req = makeReq({ 'x-api-key': 'not-a-real-key' })
       const { res, status, json } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(401)
       expect(json).toHaveBeenCalledWith(expect.objectContaining({ error: 'Unauthorized', message: 'Invalid API key' }))
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 401 for a random string', () => {
+    it('returns 401 for a random string', async () => {
       const req = makeReq({ 'x-api-key': 'random-garbage-xyz' })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(401)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 401 for revoked keys', async () => {
+      const key = generateApiKey('u-admin', 'full')
+      revokeApiKey(key.id)
+
+      const req = makeReq({ 'x-api-key': key.key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(401)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 401 for unknown but well-formed keys', async () => {
+      const randomKey = 'cr_' + 'f'.repeat(64)
+      const req = makeReq({ 'x-api-key': randomKey })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(401)
       expect(next).not.toHaveBeenCalled()
@@ -253,10 +316,11 @@ describe('requireApiKey() middleware', () => {
   // ── insufficient scope (deny-by-default) ──────────────────────────────────
 
   describe('insufficient scope — deny-by-default', () => {
-    it('returns 403 when trust:read key is used on attestations:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-trust-read-key' })
+    it('returns 403 when trust:read key is used on attestations:write endpoint', async () => {
+      const key = granularKey(['trust:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status, json } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(json).toHaveBeenCalledWith(expect.objectContaining({
@@ -266,55 +330,91 @@ describe('requireApiKey() middleware', () => {
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 403 when attestations:write key is used on payouts:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-attestations-write-key' })
+    it('returns 403 when attestations:write key is used on payouts:write endpoint', async () => {
+      const key = granularKey(['attestations:read', 'attestations:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 403 when reports key is used on webhooks:admin endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-reports-key' })
+    it('returns 403 when reports key is used on webhooks:admin endpoint', async () => {
+      const key = granularKey(['reports:generate', 'exports:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.WEBHOOKS_ADMIN)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.WEBHOOKS_ADMIN)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 403 when admin:read key is used on admin:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-admin-read-key' })
+    it('returns 403 when admin:read key is used on admin:write endpoint', async () => {
+      const key = granularKey(['admin:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ADMIN_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ADMIN_WRITE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 403 when PUBLIC key is used on payouts:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-public-key-67890' })
+    it('returns 403 when PUBLIC key is used on payouts:write endpoint', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('returns 403 when PUBLIC key is used on reports:generate endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-public-key-67890' })
+    it('returns 403 when PUBLIC key is used on reports:generate endpoint', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.REPORTS_GENERATE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.REPORTS_GENERATE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()
     })
 
-    it('response body includes grantedScopes for debugging', () => {
-      const req = makeReq({ 'x-api-key': 'test-trust-read-key' })
+    it('returns 403 when bond:read key is used on bond:write endpoint', async () => {
+      const key = granularKey(['bond:read'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.BOND_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when bond:read key is used on payouts:write endpoint', async () => {
+      const key = granularKey(['bond:read'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('returns 403 when flags:read key is used on flags:write endpoint', async () => {
+      const key = granularKey(['flags:read'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.FLAGS_WRITE)(req as Request, res as Response, next)
+
+      expect(status).toHaveBeenCalledWith(403)
+      expect(next).not.toHaveBeenCalled()
+    })
+
+    it('response body includes grantedScopes for debugging', async () => {
+      const key = granularKey(['trust:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, json } = makeRes()
-      requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
 
       expect(json).toHaveBeenCalledWith(expect.objectContaining({
         grantedScopes: expect.arrayContaining([ApiScope.TRUST_READ]),
@@ -325,82 +425,141 @@ describe('requireApiKey() middleware', () => {
   // ── exact scope match ──────────────────────────────────────────────────────
 
   describe('exact scope match — allow', () => {
-    it('trust:read key passes trust:read endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-trust-read-key' })
+    it('trust:read key passes trust:read endpoint', async () => {
+      const key = granularKey(['trust:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('attestations:write key passes attestations:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-attestations-write-key' })
+    it('attestations:write key passes attestations:write endpoint', async () => {
+      const key = granularKey(['attestations:read', 'attestations:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('attestations:write key also passes attestations:read endpoint (superset)', () => {
-      const req = makeReq({ 'x-api-key': 'test-attestations-write-key' })
+    it('attestations:write key also passes attestations:read endpoint (superset)', async () => {
+      const key = granularKey(['attestations:read', 'attestations:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('payouts:write key passes payouts:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-payouts-write-key' })
+    it('payouts:write key passes payouts:write endpoint', async () => {
+      const key = granularKey(['payouts:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PAYOUTS_WRITE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('reports key passes reports:generate endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-reports-key' })
+    it('reports key passes reports:generate endpoint', async () => {
+      const key = granularKey(['reports:generate', 'exports:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.REPORTS_GENERATE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.REPORTS_GENERATE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('reports key passes exports:read endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-reports-key' })
+    it('reports key passes exports:read endpoint', async () => {
+      const key = granularKey(['reports:generate', 'exports:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.EXPORTS_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.EXPORTS_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('webhooks:admin key passes webhooks:admin endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-webhooks-admin-key' })
+    it('webhooks:admin key passes webhooks:admin endpoint', async () => {
+      const key = granularKey(['webhooks:admin'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.WEBHOOKS_ADMIN)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.WEBHOOKS_ADMIN)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('admin:write key passes admin:read endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-admin-write-key' })
+    it('admin:write key passes admin:read endpoint', async () => {
+      const key = granularKey(['admin:read', 'admin:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ADMIN_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ADMIN_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('admin:write key passes admin:write endpoint', () => {
-      const req = makeReq({ 'x-api-key': 'test-admin-write-key' })
+    it('admin:write key passes admin:write endpoint', async () => {
+      const key = granularKey(['admin:read', 'admin:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ADMIN_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ADMIN_WRITE)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('flags:read key passes flags:read endpoint', async () => {
+      const key = granularKey(['flags:read'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.FLAGS_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('flags:write key passes flags:write endpoint', async () => {
+      const key = granularKey(['flags:read', 'flags:write'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.FLAGS_WRITE)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:read key passes bond:read endpoint', async () => {
+      const key = granularKey(['bond:read'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.BOND_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:write key passes bond:read endpoint (superset)', async () => {
+      const key = granularKey(['bond:read', 'bond:write'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.BOND_READ)(req as Request, res as Response, next)
+
+      expect(next).toHaveBeenCalled()
+      expect(status).not.toHaveBeenCalled()
+    })
+
+    it('bond:write key passes bond:write endpoint', async () => {
+      const key = granularKey(['bond:read', 'bond:write'])
+      const req = makeReq({ 'x-api-key': key })
+      const { res, status } = makeRes()
+      await requireApiKey(ApiScope.BOND_WRITE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
@@ -410,8 +569,6 @@ describe('requireApiKey() middleware', () => {
   // ── ENTERPRISE superset ────────────────────────────────────────────────────
 
   describe('ENTERPRISE key — superset of all scopes', () => {
-    const enterpriseKey = 'test-enterprise-key-12345'
-
     const allGranularScopes: ApiScope[] = [
       ApiScope.TRUST_READ,
       ApiScope.ATTESTATIONS_READ,
@@ -420,25 +577,32 @@ describe('requireApiKey() middleware', () => {
       ApiScope.REPORTS_GENERATE,
       ApiScope.EXPORTS_READ,
       ApiScope.WEBHOOKS_ADMIN,
+      ApiScope.OUTBOX_REINJECT,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.FLAGS_READ,
+      ApiScope.FLAGS_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
 
     for (const scope of allGranularScopes) {
-      it(`ENTERPRISE key satisfies ${scope}`, () => {
-        const req = makeReq({ 'x-api-key': enterpriseKey })
+      it(`ENTERPRISE key satisfies ${scope}`, async () => {
+        const key = legacyKey('full')
+        const req = makeReq({ 'x-api-key': key })
         const { res, status } = makeRes()
-        requireApiKey(scope)(req as Request, res as Response, next)
+        await requireApiKey(scope)(req as Request, res as Response, next)
 
         expect(next).toHaveBeenCalled()
         expect(status).not.toHaveBeenCalled()
       })
     }
 
-    it('ENTERPRISE key satisfies legacy ENTERPRISE scope (backward compat)', () => {
-      const req = makeReq({ 'x-api-key': enterpriseKey })
+    it('ENTERPRISE key satisfies legacy ENTERPRISE scope (backward compat)', async () => {
+      const key = legacyKey('full')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
@@ -448,30 +612,31 @@ describe('requireApiKey() middleware', () => {
   // ── PUBLIC key ─────────────────────────────────────────────────────────────
 
   describe('PUBLIC key — read-only subset', () => {
-    const publicKey = 'test-public-key-67890'
-
-    it('PUBLIC key satisfies trust:read', () => {
-      const req = makeReq({ 'x-api-key': publicKey })
+    it('PUBLIC key satisfies trust:read', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('PUBLIC key satisfies attestations:read', () => {
-      const req = makeReq({ 'x-api-key': publicKey })
+    it('PUBLIC key satisfies attestations:read', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('PUBLIC key satisfies legacy PUBLIC scope', () => {
-      const req = makeReq({ 'x-api-key': publicKey })
+    it('PUBLIC key satisfies legacy PUBLIC scope', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.PUBLIC)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PUBLIC)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
@@ -485,13 +650,16 @@ describe('requireApiKey() middleware', () => {
       ApiScope.WEBHOOKS_ADMIN,
       ApiScope.ADMIN_READ,
       ApiScope.ADMIN_WRITE,
+      ApiScope.BOND_READ,
+      ApiScope.BOND_WRITE,
     ]
 
     for (const scope of writeScopes) {
-      it(`PUBLIC key is denied for ${scope}`, () => {
-        const req = makeReq({ 'x-api-key': publicKey })
+      it(`PUBLIC key is denied for ${scope}`, async () => {
+        const key = legacyKey('read')
+        const req = makeReq({ 'x-api-key': key })
         const { res, status } = makeRes()
-        requireApiKey(scope)(req as Request, res as Response, next)
+        await requireApiKey(scope)(req as Request, res as Response, next)
 
         expect(status).toHaveBeenCalledWith(403)
         expect(next).not.toHaveBeenCalled()
@@ -502,65 +670,72 @@ describe('requireApiKey() middleware', () => {
   // ── req.apiKey metadata ────────────────────────────────────────────────────
 
   describe('req.apiKey metadata', () => {
-    it('attaches scopes array to req.apiKey', () => {
-      const req = makeReq({ 'x-api-key': 'test-attestations-write-key' })
+    it('attaches scopes array to req.apiKey', async () => {
+      const key = granularKey(['attestations:read', 'attestations:write'])
+      const req = makeReq({ 'x-api-key': key })
       const { res } = makeRes()
-      requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ATTESTATIONS_WRITE)(req as Request, res as Response, next)
 
       const authReq = req as AuthenticatedRequest & { apiKey: any }
       expect(authReq.apiKey).toBeDefined()
-      expect(authReq.apiKey.scopes).toContain(ApiScope.ATTESTATIONS_READ)
-      expect(authReq.apiKey.scopes).toContain(ApiScope.ATTESTATIONS_WRITE)
+      expect(authReq.apiKey.scopes).toContain('attestations:read')
+      expect(authReq.apiKey.scopes).toContain('attestations:write')
     })
 
-    it('attaches legacy scope field for backward compatibility', () => {
-      const req = makeReq({ 'x-api-key': 'test-enterprise-key-12345' })
+    it('attaches legacy scope field for backward compatibility', async () => {
+      const key = legacyKey('full')
+      const req = makeReq({ 'x-api-key': key })
       const { res } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       const authReq = req as any
-      expect(authReq.apiKey.scope).toBe(ApiScope.ENTERPRISE)
+      expect(authReq.apiKey.scope).toBe('full')
     })
 
-    it('attaches key value to req.apiKey.key', () => {
-      const req = makeReq({ 'x-api-key': 'test-trust-read-key' })
+    it('attaches StoredApiKey record with ownerId to req.apiKey', async () => {
+      const key = granularKey(['trust:read'])
+      const req = makeReq({ 'x-api-key': key })
       const { res } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       const authReq = req as any
-      expect(authReq.apiKey.key).toBe('test-trust-read-key')
+      expect(authReq.apiKey).toBeDefined()
+      expect(authReq.apiKey.ownerId).toBe('u-admin')
+      expect(authReq.apiKey.active).toBe(true)
     })
   })
 
   // ── Authorization: Bearer header ──────────────────────────────────────────
 
   describe('Authorization: Bearer header', () => {
-    it('accepts key from Authorization: Bearer header', () => {
-      const req = makeReq({ authorization: 'Bearer test-trust-read-key' })
+    it('accepts key from Authorization: Bearer header', async () => {
+      const key = granularKey(['trust:read'])
+      const req = makeReq({ authorization: `Bearer ${key}` })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('X-API-Key takes precedence over Authorization header', () => {
-      // X-API-Key has a valid key; Authorization has an invalid one
+    it('X-API-Key takes precedence over Authorization header', async () => {
+      const goodKey = granularKey(['trust:read'])
+      const badKeyStr = 'cr_' + 'b'.repeat(64)
       const req = makeReq({
-        'x-api-key': 'test-trust-read-key',
-        authorization: 'Bearer invalid-key',
+        'x-api-key': goodKey,
+        authorization: `Bearer ${badKeyStr}`,
       })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('returns 401 when Bearer token is invalid', () => {
+    it('returns 401 when Bearer token is invalid', async () => {
       const req = makeReq({ authorization: 'Bearer not-a-real-key' })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.TRUST_READ)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(401)
       expect(next).not.toHaveBeenCalled()
@@ -570,28 +745,31 @@ describe('requireApiKey() middleware', () => {
   // ── backward compatibility ─────────────────────────────────────────────────
 
   describe('backward compatibility', () => {
-    it('existing test-enterprise-key-12345 still works for ENTERPRISE scope', () => {
-      const req = makeReq({ 'x-api-key': 'test-enterprise-key-12345' })
+    it('full-scope key satisfies ENTERPRISE scope (backward compat)', async () => {
+      const key = legacyKey('full')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('existing test-public-key-67890 still works for PUBLIC scope', () => {
-      const req = makeReq({ 'x-api-key': 'test-public-key-67890' })
+    it('read-scope key satisfies PUBLIC scope (backward compat)', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.PUBLIC)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.PUBLIC)(req as Request, res as Response, next)
 
       expect(next).toHaveBeenCalled()
       expect(status).not.toHaveBeenCalled()
     })
 
-    it('existing enterprise key is denied for ENTERPRISE scope when using public key', () => {
-      const req = makeReq({ 'x-api-key': 'test-public-key-67890' })
+    it('PUBLIC key is denied for ENTERPRISE scope', async () => {
+      const key = legacyKey('read')
+      const req = makeReq({ 'x-api-key': key })
       const { res, status } = makeRes()
-      requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
+      await requireApiKey(ApiScope.ENTERPRISE)(req as Request, res as Response, next)
 
       expect(status).toHaveBeenCalledWith(403)
       expect(next).not.toHaveBeenCalled()

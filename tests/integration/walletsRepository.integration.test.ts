@@ -240,6 +240,51 @@ describe('WalletsRepository – real Postgres integration', () => {
       const missingId = '00000000-0000-0000-0000-000000000001'
       await expect(repo.credit(missingId, '10')).rejects.toThrow('not found')
     })
+
+    // ── Precision & overflow at the real column boundary ─────────────────
+
+    it('rejects_credit_amount_exceeding_column_scale_before_any_write', async () => {
+      if (!isRealPostgres(testDb)) return
+
+      const wallet = await seedWallet('0xITest_credit_scale_overflow', '1')
+      const amount = '0.1234567890123456789' // 19 fractional digits
+
+      const err = await repo.credit(wallet.id, amount).catch((e) => e)
+
+      expect(err.name).toBe('AmountScaleError')
+      const found = await repo.findById(wallet.id)
+      expect(found!.balance).toBe('1.000000000000000000')
+      const rows = await pool.query(
+        'SELECT * FROM wallet_transactions WHERE wallet_id = $1',
+        [wallet.id],
+      )
+      expect(rows.rowCount).toBe(0)
+    })
+
+    it('rejects_credit_that_would_push_balance_past_column_magnitude', async () => {
+      if (!isRealPostgres(testDb)) return
+
+      // Neither the existing balance nor the credited amount overflows on
+      // its own — only their sum does. This can only be caught after the
+      // row is locked and the current balance is read, proving the
+      // post-lock, pre-write check (not just the pre-lock format check) is
+      // what's guarding the real column here.
+      const wallet = await seedWallet(
+        '0xITest_credit_sum_overflow',
+        '999999999999999999',
+      )
+
+      const err = await repo.credit(wallet.id, '1').catch((e) => e)
+
+      expect(err.name).toBe('AmountOverflowError')
+      const found = await repo.findById(wallet.id)
+      expect(found!.balance).toBe('999999999999999999.000000000000000000')
+      const rows = await pool.query(
+        'SELECT * FROM wallet_transactions WHERE wallet_id = $1',
+        [wallet.id],
+      )
+      expect(rows.rowCount).toBe(0)
+    })
   })
 
   // =========================================================================
@@ -329,6 +374,71 @@ describe('WalletsRepository – real Postgres integration', () => {
 
       const found = await repo.findById(wallet.id)
       expect(parseFloat(found!.balance)).toBeCloseTo(80, 5)
+    })
+
+    // ── Precision & overflow at the real column boundary ─────────────────
+    // wallets.balance is NUMERIC(36, 18). Postgres does not reject excess
+    // fractional digits on write — it silently rounds. These tests prove
+    // the application layer rejects such amounts before Postgres ever sees
+    // them, and that a rejected amount leaves no row in either the wallets
+    // table or the wallet_transactions ledger.
+
+    it('round_trips_the_exact_max_scale_amount_without_rounding', async () => {
+      if (!isRealPostgres(testDb)) return
+
+      const wallet = await seedWallet('0xITest_debit_max_scale', '1')
+      // 18 fractional digits — exactly the column's scale.
+      const amount = '0.123456789012345678'
+
+      const result = await repo.debit(wallet.id, amount)
+
+      expect(result.newBalance).toBe('0.876543210987654322')
+      const found = await repo.findById(wallet.id)
+      expect(found!.balance).toBe('0.876543210987654322')
+    })
+
+    it('rejects_debit_amount_exceeding_column_scale_before_any_write', async () => {
+      if (!isRealPostgres(testDb)) return
+
+      const wallet = await seedWallet('0xITest_debit_scale_overflow', '1')
+      // 19 fractional digits — one past NUMERIC(36,18)'s scale. Postgres
+      // would silently round this to 18 digits rather than reject it.
+      const amount = '0.1234567890123456789'
+
+      const err = await repo.debit(wallet.id, amount).catch((e) => e)
+
+      expect(err.name).toBe('AmountScaleError')
+
+      // No partial state: balance untouched, no ledger row written.
+      const found = await repo.findById(wallet.id)
+      expect(found!.balance).toBe('1.000000000000000000')
+      const rows = await pool.query(
+        'SELECT * FROM wallet_transactions WHERE wallet_id = $1',
+        [wallet.id],
+      )
+      expect(rows.rowCount).toBe(0)
+    })
+
+    it('rejects_debit_amount_exceeding_column_magnitude_before_any_write', async () => {
+      if (!isRealPostgres(testDb)) return
+
+      const wallet = await seedWallet('0xITest_debit_magnitude_overflow', '1')
+      // 19 integer digits — one past NUMERIC(36,18)'s 18-digit integer
+      // capacity. Writing this would raise a raw Postgres
+      // 22003 numeric_field_overflow error if not caught first.
+      const amount = '1000000000000000000'
+
+      const err = await repo.debit(wallet.id, amount).catch((e) => e)
+
+      expect(err.name).toBe('AmountOverflowError')
+
+      const found = await repo.findById(wallet.id)
+      expect(found!.balance).toBe('1.000000000000000000')
+      const rows = await pool.query(
+        'SELECT * FROM wallet_transactions WHERE wallet_id = $1',
+        [wallet.id],
+      )
+      expect(rows.rowCount).toBe(0)
     })
   })
 

@@ -10,6 +10,7 @@ import { createImportsRouter } from "./routes/imports.js";
 import { createAdminRouter } from "./routes/admin/index.js";
 import { createWebhookAdminRouter } from "./routes/admin/webhooks.js";
 import { createFeatureFlagAdminRouter } from "./routes/admin/featureFlags.js";
+import { createApiKeyRouter } from "./routes/apiKeys.js";
 import { createPolicyRouter } from "./routes/policy.js";
 import { createAnalyticsRouter } from "./routes/analytics.js";
 import { createPayoutsRouter } from "./routes/payouts.js";
@@ -20,6 +21,7 @@ import { cache } from "./cache/redis.js";
 import { pool } from "./db/pool.js";
 import { responseTimeMiddleware } from "./middleware/responseTime.js";
 import { requestIdMiddleware } from "./middleware/requestId.js";
+import { correlationIdMiddleware } from "./middleware/correlationId.js";
 import { latencyBudgetMiddleware } from "./middleware/latencyBudget.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 import { createRateLimitMiddleware } from "./middleware/rateLimit.js";
@@ -29,9 +31,10 @@ import { securityHeadersMiddleware } from "./middleware/securityHeaders.js";
 import { createAttestationRouter } from "./routes/attestations.js";
 import { tenantContextMiddleware } from "./middleware/tenantContext.js";
 import { gracefulDegradeMiddleware } from "./middleware/gracefulDegrade.js";
+import { logger } from "./utils/logger.js";
 import { createDevResponseValidator } from "./middleware/validateResponse.js";
 import {
-  createCompressionMiddleware,
+  compressionMiddleware,
   compressionMetricsMiddleware,
 } from "./middleware/compression.js";
 import { metricsMiddleware, register } from "./middleware/metrics.js";
@@ -42,9 +45,59 @@ import {
   requestSizeLimitErrorHandler,
 } from "./middleware/requestSizeLimit.js";
 import { createWsSubscriptionServer } from "./routes/ws.js";
+import reportRouter from "./routes/report.js";
+import cspReportRouter from "./routes/cspReport.js";
+import { idempotencyMiddleware } from "./middleware/idempotency.js";
+import { IdempotencyRepository } from "./db/repositories/idempotencyRepository.js";
+import { createTimeoutBudgetMiddleware } from "./middleware/timeoutBudget.js";
+import { clientVersionEchoMiddleware } from "./middleware/clientVersionEcho.js";
+import { requestAttemptEchoMiddleware } from "./middleware/requestAttemptEcho.js";
+import { RedisConnection } from "./cache/redis.js";
+import { createFaultInjectionRouter } from "./routes/faultInjection.js";
+import { cacheHeaderMiddleware } from "./middleware/cacheHeader.js";
+import { createAuthRouter } from "./routes/auth.js";
 import { createMaintenanceModeMiddleware } from "./middleware/maintenanceMode.js";
+import { applyRouteCorsPolicy } from "./middleware/corsPolicy.js";
+import { sunsetHeaderMiddleware } from "./middleware/sunsetHeader.js";
+import { createOutboxAdminRouter } from "./routes/admin/outbox.js";
+import { structuredLoggingMiddleware } from "./middleware/structuredLogging.js";
+import { createWebhookReplayRouter } from "./routes/webhookReplay.js";
+import { createWebhookRouter } from "./routes/webhooks.js";
+import { PostgresWebhookRepository } from "./db/repositories/webhookRepository.js";
+import { auditLogService } from "./services/audit/index.js";
+import { createExportRouter } from "./routes/export/index.js";
 
 const app = express();
+
+function rejectMissingTenantContext(req, res, next) {
+  const tenantContext = req.tenantContext;
+  const expired =
+    typeof tenantContext?.exp === "number" &&
+    tenantContext.exp * 1000 <= Date.now();
+  if (!tenantContext?.tenantId || expired) {
+    res.status(401).json({
+      error: {
+        code: "UNAUTHENTICATED",
+        message: "Authentication required: missing or expired tenant identity",
+      },
+    });
+    return;
+  }
+  next();
+}
+
+function rejectCrossTenantOrgAccess(req, res, next) {
+  if (req.params.orgId !== req.tenantContext?.tenantId) {
+    res.status(403).json({
+      error: {
+        code: "FORBIDDEN",
+        message: "Cross-tenant access denied",
+      },
+    });
+    return;
+  }
+  next();
+}
 
 // ── Rate-limit configuration ──────────────────────────────────────────────────
 let rateLimitConfig: {
@@ -57,18 +110,58 @@ let rateLimitConfig: {
 };
 try {
   rateLimitConfig = validateConfig(process.env).rateLimit;
-} catch {
+} catch (err) {
   const isProd = process.env.NODE_ENV === "production";
+  logger.error(
+    { err, fallbackFailOpen: !isProd },
+    "Rate-limit config validation failed — using safe fallback. " +
+    "Fix RATE_LIMIT_* environment variables.",
+  );
   rateLimitConfig = {
     enabled: true,
     windowSec: 60,
     maxFree: 100,
     maxPro: 1000,
     maxEnterprise: 10000,
+    // Fail-closed in production: a config error must never silently
+    // disable rate limiting when the API is exposed to real traffic.
     failOpen: !isProd,
   };
 }
-const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig);
+const rateLimitMiddleware = createRateLimitMiddleware(rateLimitConfig, { includeRoute: true });
+
+let authRateLimitConfig: {
+  enabled: boolean;
+  windowSec: number;
+  maxPerTenant: number;
+  failOpen: boolean;
+};
+try {
+  authRateLimitConfig = validateConfig(process.env).authRateLimit;
+} catch (err) {
+  const isProd = process.env.NODE_ENV === "production";
+  logger.error(
+    { err, fallbackFailOpen: !isProd },
+    "Auth rate-limit config validation failed — using safe fallback. " +
+    "Fix AUTH_RATE_LIMIT_* environment variables.",
+  );
+  authRateLimitConfig = {
+    enabled: true,
+    windowSec: 60,
+    maxPerTenant: 20,
+    // Fail-closed in production: a config error must never silently
+    // disable rate limiting when the API is exposed to real traffic.
+    failOpen: !isProd,
+  };
+}
+
+let globalTimeoutMs: number;
+try {
+  globalTimeoutMs = validateConfig(process.env).timeouts.global;
+} catch {
+  globalTimeoutMs = 30000;
+}
+const timeoutBudgetMiddleware = createTimeoutBudgetMiddleware(globalTimeoutMs);
 
 // Resolve maintenance mode flag at startup; default to off when config is invalid.
 let maintenanceModeEnabled = false;
@@ -79,7 +172,17 @@ try {
 }
 const maintenanceModeMiddleware = createMaintenanceModeMiddleware(maintenanceModeEnabled);
 
+let corsOrigin = "*";
+try {
+  corsOrigin = validateConfig(process.env).cors.origin;
+} catch {
+  // Default to wildcard when config is invalid (dev/test convenience).
+}
+
+app.use(responseTimeMiddleware);
 app.use(requestIdMiddleware);
+app.use(correlationIdMiddleware);
+app.use(structuredLoggingMiddleware);
 app.use(securityHeadersMiddleware);
 app.use(cacheHeaderMiddleware);
 app.use(clientVersionEchoMiddleware);
@@ -115,9 +218,12 @@ app.use(requestSizeLimitErrorHandler);
 app.use(tenantContextMiddleware);
 app.use(gracefulDegradeMiddleware);
 
+applyRouteCorsPolicy(app, corsOrigin);
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
 app.use(maintenanceModeMiddleware);
+app.use(sunsetHeaderMiddleware);
 app.use("/.well-known/jwks.json", createJwksRouter());
 
 const healthProbes = createDefaultProbes();
@@ -138,6 +244,7 @@ app.use("/api/version", createVersionRouter());
 app.use("/api/auth", createAuthRouter(authRateLimitConfig));
 
 app.use("/api", rateLimitMiddleware);
+app.use("/api", rejectMissingTenantContext);
 
 // Idempotency middleware — runs after body parsing, before route handlers.
 try {
@@ -168,6 +275,7 @@ try {
 }
 
 app.use("/api/trust", trustRouter);
+app.use("/api/integrations/keys", createApiKeyRouter());
 
 // Bond status — uses the real BondService + BondStore backed by
 // deriveBondPaymentStatus, with read-through caching via CacheService.
@@ -193,8 +301,25 @@ app.use(
 app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());
+app.use("/api/admin/outbox", createOutboxAdminRouter());
 
-app.use("/api/orgs/:orgId/policies", createPolicyRouter());
+// Webhook DLQ replay — GET /api/webhooks/dlq, POST /api/webhooks/dlq/:id/replay
+app.use("/api/webhooks/dlq", createWebhookReplayRouter(pool));
+
+// Webhook signing-secret rotation — POST /api/webhooks/:webhookId/rotate-secret
+// (audited, safe-rollout dual-secret grace period — see docs/SECRETS.md and
+// docs/WEBHOOK_SIGNING.md). Mounted after /api/webhooks/dlq so it never
+// intercepts that router's requests.
+app.use(
+  "/api/webhooks",
+  createWebhookRouter(new PostgresWebhookRepository(pool), auditLogService),
+);
+
+app.use(
+  "/api/orgs/:orgId/policies",
+  rejectCrossTenantOrgAccess,
+  createPolicyRouter(),
+);
 
 const analyticsThresholdSeconds = Number(
   process.env.ANALYTICS_STALENESS_SECONDS ?? "300",
@@ -207,6 +332,7 @@ app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 app.use("/api/payouts", createPayoutsRouter());
 
 app.use("/api/reports", reportRouter);
+app.use("/api/export", createExportRouter());
 app.use(cspReportRouter);
 
 

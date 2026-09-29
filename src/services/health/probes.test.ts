@@ -31,14 +31,14 @@ afterEach(() => {
 
 describe('createDbProbe', () => {
   it('returns up and includes latencyMs when query succeeds', async () => {
-    const probe = createDbProbe({ runQuery: async () => {} })!
+    const probe = createDbProbe({ runQuery: async () => {} })
     const result = await probe()
     expect(result.status).toBe('up')
     expect(typeof result.latencyMs).toBe('number')
   })
 
   it('returns down with reason=connection_refused on query failure', async () => {
-    const probe = createDbProbe({ runQuery: async () => { throw new Error('ECONNREFUSED') } })!
+    const probe = createDbProbe({ runQuery: async () => { throw new Error('ECONNREFUSED') } })
     const result = await probe()
     expect(result.status).toBe('down')
     expect(result.reason).toBe('connection_refused')
@@ -49,7 +49,7 @@ describe('createDbProbe', () => {
     vi.useFakeTimers()
     const probe = createDbProbe({
       runQuery: () => new Promise(() => {}), // never resolves
-    })!
+    })
     const resultPromise = probe()
     vi.advanceTimersByTime(5001)
     const result = await resultPromise
@@ -58,12 +58,17 @@ describe('createDbProbe', () => {
     expect(typeof result.latencyMs).toBe('number')
   })
 
-  it('returns undefined when DB_URL is not set and no runQuery injected', () => {
+  it('returns down with reason=not_configured when DB_URL is not set (fail-closed)', async () => {
     const saved = process.env.DB_URL
     delete process.env.DB_URL
-    const probe = createDbProbe()
-    expect(probe).toBeUndefined()
-    process.env.DB_URL = saved
+    try {
+      const probe = createDbProbe()
+      const result = await probe()
+      expect(result.status).toBe('down')
+      expect(result.reason).toBe('not_configured')
+    } finally {
+      if (saved !== undefined) process.env.DB_URL = saved
+    }
   })
 })
 
@@ -71,14 +76,14 @@ describe('createDbProbe', () => {
 
 describe('createCacheProbe', () => {
   it('returns up and includes latencyMs when ping succeeds', async () => {
-    const probe = createCacheProbe({ ping: async () => 'PONG' })!
+    const probe = createCacheProbe({ ping: async () => 'PONG' })
     const result = await probe()
     expect(result.status).toBe('up')
     expect(typeof result.latencyMs).toBe('number')
   })
 
   it('returns down with reason=connection_refused on ping failure', async () => {
-    const probe = createCacheProbe({ ping: async () => { throw new Error('ECONNREFUSED') } })!
+    const probe = createCacheProbe({ ping: async () => { throw new Error('ECONNREFUSED') } })
     const result = await probe()
     expect(result.status).toBe('down')
     expect(result.reason).toBe('connection_refused')
@@ -87,12 +92,25 @@ describe('createCacheProbe', () => {
 
   it('returns down with reason=timeout when ping hangs', async () => {
     vi.useFakeTimers()
-    const probe = createCacheProbe({ ping: () => new Promise(() => {}) })!
+    const probe = createCacheProbe({ ping: () => new Promise(() => {}) })
     const resultPromise = probe()
     vi.advanceTimersByTime(5001)
     const result = await resultPromise
     expect(result.status).toBe('down')
     expect(result.reason).toBe('timeout')
+  })
+
+  it('returns down with reason=not_configured when REDIS_URL is not set (fail-closed)', async () => {
+    const saved = process.env.REDIS_URL
+    delete process.env.REDIS_URL
+    try {
+      const probe = createCacheProbe()
+      const result = await probe()
+      expect(result.status).toBe('down')
+      expect(result.reason).toBe('not_configured')
+    } finally {
+      if (saved !== undefined) process.env.REDIS_URL = saved
+    }
   })
 })
 
@@ -260,8 +278,8 @@ describe('createOutboxPublisherProbe', () => {
 describe('partial outage: postgres down, redis up → 503', () => {
   it('all checks run in parallel regardless of one failing', async () => {
     let redisChecked = false
-    const dbProbe = createDbProbe({ runQuery: async () => { throw new Error('ECONNREFUSED') } })!
-    const redisProbe = createCacheProbe({ ping: async () => { redisChecked = true; return 'PONG' } })!
+    const dbProbe = createDbProbe({ runQuery: async () => { throw new Error('ECONNREFUSED') } })
+    const redisProbe = createCacheProbe({ ping: async () => { redisChecked = true; return 'PONG' } })
     const { runHealthChecks } = await import('./checks.js')
     const result = await runHealthChecks({ postgres: dbProbe, redis: redisProbe })
     expect(result.status).toBe('unhealthy')
@@ -274,7 +292,7 @@ describe('partial outage: postgres down, redis up → 503', () => {
 describe('slow dependency: bounded by CHECK_TIMEOUT_MS', () => {
   it('probe returns down (timeout) before CHECK_TIMEOUT_MS + 100ms', async () => {
     vi.useFakeTimers()
-    const probe = createDbProbe({ runQuery: () => new Promise(() => {}) })!
+    const probe = createDbProbe({ runQuery: () => new Promise(() => {}) })
     const resultPromise = probe()
     vi.advanceTimersByTime(5001)
     const result = await resultPromise

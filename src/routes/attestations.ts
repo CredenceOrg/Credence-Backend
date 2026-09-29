@@ -10,6 +10,7 @@ import {
 } from '../lib/pagination.js'
 import { ValidationError, ErrorCode, NotFoundError } from '../lib/errors.js'
 import { validate } from '../middleware/validate.js'
+import { requireApiKey, ApiScope } from '../middleware/auth.js'
 import {
   attestationsPathParamsSchema,
   createAttestationBodySchema,
@@ -21,6 +22,7 @@ import {
 } from '../db/repositories/attestationsRepository.js'
 import { pool, withReplica } from '../db/pool.js'
 import { TransactionManager } from '../db/transaction.js'
+import { loadConfig } from '../config/index.js'
 import { outboxEmitter, type OutboxEventEmitter } from '../db/outbox/index.js'
 import { AttestationCacheService } from '../services/attestationCacheService.js'
 import type { Queryable } from '../db/repositories/queryable.js'
@@ -157,11 +159,12 @@ export function createAttestationRouter(
   const db = deps.db ?? pool
   const repository = deps.repository ?? new AttestationsRepository(db, { skipTenantCheck: deps.skipTenantCheck })
   const cacheService = deps.cacheService ?? new AttestationCacheService(repository)
-  const transactionManager = deps.transactionManager ?? new TransactionManager(pool)
+  const transactionManager = deps.transactionManager ?? new TransactionManager(pool, loadConfig().db.lockTimeouts)
   const emitter = deps.outbox ?? outboxEmitter
 
   router.get(
     '/:address',
+    requireApiKey(ApiScope.ATTESTATIONS_READ),
     validate({ params: attestationsPathParamsSchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       try {
@@ -223,6 +226,7 @@ export function createAttestationRouter(
 
   router.post(
     '/',
+    requireApiKey(ApiScope.ATTESTATIONS_WRITE),
     validate({ body: createAttestationBodySchema }),
     async (req: Request, res: Response, next: NextFunction): Promise<void> => {
       // Set tenant context from request header if available

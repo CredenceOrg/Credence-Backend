@@ -159,9 +159,21 @@ export const importDryRunErrorResponseSchema = z
 /** Successful commit body. */
 export const importCommitSuccessResponseSchema = z
   .object({
-    committed: z.literal(true),
+    committed: z.boolean(),
     totalRows: z.number().int().nonnegative(),
     imported: z.number().int().nonnegative(),
+    operationId: z.string().min(1),
+    partial: z.boolean(),
+    accepted: z.number().int().nonnegative(),
+    rejected: z.number().int().nonnegative(),
+    retried: z.number().int().nonnegative(),
+    rowOutcomes: z.array(z.object({
+      row: z.number().int().positive(),
+      rowKey: z.string().min(1),
+      status: z.enum(['accepted', 'rejected', 'retryable']),
+      code: z.string().min(1),
+      message: z.string().min(1),
+    }).strict()),
   })
   .strict()
 
@@ -172,6 +184,13 @@ export const importCommitValidationFailureSchema = z
     totalRows: z.number().int().nonnegative(),
     errors: z.array(importDryRunRowErrorSchema),
     errorsTruncated: z.boolean(),
+    rowOutcomes: z.array(z.object({
+      row: z.number().int().positive(),
+      rowKey: z.string().min(1),
+      status: z.literal('rejected'),
+      code: z.string().min(1),
+      message: z.string().min(1),
+    }).strict()).optional(),
   })
   .strict()
 

@@ -8,6 +8,10 @@ import disputesRouter from "./routes/disputes.js";
 import evidenceRouter from "./routes/evidence.js";
 import { loadConfig } from "./config/index.js";
 import { pool, workerPool, replicaPool } from "./db/pool.js";
+import {
+  validateMigrationChecksums,
+  resolveMigrationsDir,
+} from "./migrations/index.js";
 import { redisConnection } from "./cache/redis.js";
 import { createShutdownMetrics } from "./observability/shutdownMetrics.js";
 import { AnalyticsService } from "./services/analytics/service.js";
@@ -40,6 +44,7 @@ import { OutboxJob } from "./jobs/outbox.js";
 import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
 import { IdempotencyKeySweeper } from "./jobs/idempotencyKeySweeper.js";
 import { ExpiredSessionsSweeper } from "./jobs/expiredSessionsSweeper.js";
+import { WebhookDlqProcessor } from "./jobs/webhookDlqProcessor.js";
 
 app.use("/api/admin", createAdminRouter());
 app.use("/api/governance", governanceRouter);
@@ -61,6 +66,7 @@ let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
 let idempotencyKeySweeper: IdempotencyKeySweeper | null = null;
 let expiredSessionsSweeper: ExpiredSessionsSweeper | null = null;
 let keyRotationScheduler: KeyRotationScheduler | null = null;
+let webhookDlqProcessor: WebhookDlqProcessor | null = null;
 
 function installShutdownHandlers(): void {
   if (!shutdownManager) return;
@@ -106,6 +112,34 @@ if (process.env.NODE_ENV !== "test") {
 
   try {
     const config = loadConfig();
+
+    if (process.env.MIGRATION_CHECKSUM_VALIDATE !== "false") {
+      const bootstrapMissing = process.env.MIGRATION_CHECKSUM_BOOTSTRAP !== "false";
+      try {
+        const checksumResult = await validateMigrationChecksums(
+          pool,
+          {
+            migrationsDir: resolveMigrationsDir(),
+            migrationsTable: process.env.MIGRATIONS_TABLE ?? "pgmigrations",
+            migrationsSchema: process.env.MIGRATIONS_SCHEMA ?? "public",
+          },
+          { bootstrapMissing },
+        );
+        if (checksumResult.bootstrapped.length > 0) {
+          logger.info(
+            `[Main] Bootstrapped migration checksums for: ${checksumResult.bootstrapped.join(", ")}`,
+          );
+        }
+      } catch (checksumErr) {
+        logger.error(
+          `[Main] Aborting startup — migration checksum validation failed: ${
+            checksumErr instanceof Error ? checksumErr.message : String(checksumErr)
+          }`,
+          checksumErr,
+        );
+        process.exit(1);
+      }
+    }
 
     // Bootstrap the JWT signing key BEFORE accepting traffic so the
     // `/.well-known/jwks.json` endpoint and JWT signing respond with
@@ -342,6 +376,22 @@ if (process.env.NODE_ENV !== "test") {
       logger.error(`Failed to start cache invalidation bus: ${message}`, error);
     }
 
+    // Start Webhook DLQ Processor — promotes permanently-failed outbox webhook
+    // events into the webhook_dlq table so operators can replay them.
+    if (process.env.DATABASE_URL) {
+      try {
+        webhookDlqProcessor = new WebhookDlqProcessor(pool, {
+          intervalMs: parseInt(process.env.WEBHOOK_DLQ_INTERVAL_MS ?? "60000", 10),
+          batchSize: parseInt(process.env.WEBHOOK_DLQ_BATCH_SIZE ?? "200", 10),
+          logger: logger.info,
+        });
+        webhookDlqProcessor.start();
+        logger.info("[Main] Webhook DLQ Processor started");
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        logger.error(`Failed to start Webhook DLQ Processor: ${message}`, error);
+      }
+    }
     // Start JWT signing-key rotation scheduler.
     // Rotation interval is configurable (KEY_ROTATION_INTERVAL_SECONDS, default 24h).
     // The pruning tick is hourly so retired keys are GC'd even if rotation halts.
@@ -390,6 +440,10 @@ if (process.env.NODE_ENV !== "test") {
         if (keyRotationScheduler) {
           logger.info("[Main] Stopping Key Rotation Scheduler");
           keyRotationScheduler.stop();
+        }
+        if (webhookDlqProcessor) {
+          logger.info("[Main] Stopping Webhook DLQ Processor");
+          webhookDlqProcessor.stop();
         }
         return originalShutdown(signal ?? "SIGTERM");
       };

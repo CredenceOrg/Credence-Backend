@@ -53,6 +53,25 @@ CORS_ORIGIN=https://app.credence.io,https://admin.credence.io
 
 ---
 
+## Public Routes Quick Reference
+
+Routes callable without user authentication or API keys, with their CORS classification:
+
+| Route | Method(s) | CORS Policy | Allowed Origins (production) |
+| ----- | --------- | ----------- | ---------------------------- |
+| `/.well-known/jwks.json` | `GET` | **Open** | Any origin |
+| `/api/health` and subpaths (`/live`, `/ready`, `/workers`, …) | `GET` | **Open** | Any origin |
+| `/api/version` | `GET` | **Open** | Any origin |
+| `/csp-report` | `POST` | **Open** | Any origin |
+| `/api/reports/download/:key` | `GET` | **Open** | Any origin (signed URL is the credential) |
+| `/api/bond/:address` | `GET` | **Restricted** | Origins listed in `CORS_ORIGIN` |
+| `/api/verification/:address` | `GET` | **Restricted** | Origins listed in `CORS_ORIGIN` |
+| `/api/verification/verify` | `POST` | **Restricted** | Origins listed in `CORS_ORIGIN` |
+
+In `development` and `test`, **Restricted** routes accept any origin when `CORS_ORIGIN=*` (the default).
+
+---
+
 ## Route Classification
 
 Every route group is assigned one of three CORS policies:
@@ -103,7 +122,7 @@ Every route group is assigned one of three CORS policies:
 
 ### Current State
 
-The application does **not** currently use an Express CORS middleware (`cors` package) or implement per-route `Access-Control-Allow-Origin` headers. The only CORS-related control is the global `CORS_ORIGIN` environment variable validated at startup.
+Per-route CORS middleware is enforced via `src/middleware/corsPolicy.ts` and mounted from `src/app.ts` using `applyRouteCorsPolicy()`. Startup validation rejects `CORS_ORIGIN=*` in production.
 
 ### Recommended Implementation
 
@@ -195,7 +214,7 @@ The `/api/reports/download/:key` endpoint is classified as **Open** because:
 A negative test should verify that cross-origin requests to same-origin-only endpoints are properly rejected. The test should fail **before** the CORS enforcement is implemented and pass **after**.
 
 ```typescript
-// src/middleware/__tests__/corsPolicy.test.ts
+// tests/routes/corsPolicy.test.ts
 import { describe, it, expect } from "vitest";
 import request from "supertest";
 import app from "../../app.js";

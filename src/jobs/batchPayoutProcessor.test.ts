@@ -191,6 +191,51 @@ describe('BatchPayoutProcessor', () => {
     expect(result.failed).toBe(1)
     expect(result.skipped).toBe(1)
   })
+
+  describe('upfront payload validation (atomic semantics)', () => {
+    it('throws error when an item has invalid amount (negative or bad precision) before applying any writes', async () => {
+      const store = makeStore()
+      const executor = makeExecutor()
+      const processor = new BatchPayoutProcessor(store, executor)
+
+      const items = [
+        { bondId: 'bond-1', amount: '100', transactionHash: 'tx-1' },
+        { bondId: 'bond-2', amount: '-50', transactionHash: 'tx-2' },
+      ]
+
+      await expect(processor.process(items)).rejects.toThrow('invalid amount')
+      expect(store.upsert).not.toHaveBeenCalled()
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+
+    it('throws error when an item has empty or missing transactionHash before applying any writes', async () => {
+      const store = makeStore()
+      const executor = makeExecutor()
+      const processor = new BatchPayoutProcessor(store, executor)
+
+      const items = [
+        { bondId: 'bond-1', amount: '100', transactionHash: '' },
+      ]
+
+      await expect(processor.process(items)).rejects.toThrow('invalid transactionHash')
+      expect(store.upsert).not.toHaveBeenCalled()
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+
+    it('throws error when an item has empty bondId before applying any writes', async () => {
+      const store = makeStore()
+      const executor = makeExecutor()
+      const processor = new BatchPayoutProcessor(store, executor)
+
+      const items = [
+        { bondId: '', amount: '100', transactionHash: 'tx-1' },
+      ]
+
+      await expect(processor.process(items)).rejects.toThrow('invalid bondId')
+      expect(store.upsert).not.toHaveBeenCalled()
+      expect(executor.execute).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('getRetryableItems', () => {

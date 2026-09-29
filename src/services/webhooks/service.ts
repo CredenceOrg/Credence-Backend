@@ -2,11 +2,13 @@ import { randomBytes } from 'crypto'
 import type { WebhookStore, WebhookEventType, WebhookPayload, WebhookDeliveryResult, WebhookConfig, DlqStore, WebhookEmitOptions } from './types.js'
 import { deliverWebhook, type DeliveryOptions } from './delivery.js'
 import { type AuditLogService, AuditAction } from '../audit/index.js'
+import { PREVIOUS_SECRET_TTL_MS } from './rotationService.js'
 import { buildDlqEntry } from './dlq.js'
 import {
   recordJobDeadLetter,
   recordJobTerminalOutcome,
 } from '../../jobs/retryMetrics.js'
+import { recordWebhookDeliveryOutcome } from '../../metrics/webhookLagDashboard.js'
 
 /**
  * Webhook service for delivering bond lifecycle events.
@@ -24,7 +26,12 @@ export class WebhookService {
 
   /**
    * Rotate a webhook's signing secret.
-   * Moves current secret to previousSecret and generates a new one.
+   *
+   * Uses the store's atomic `rotateSecret()` (a single UPDATE ... RETURNING)
+   * rather than read-modify-write via `get()` + `set()`, so a concurrent
+   * rotation of the same webhook (e.g. via the other rotation entry point,
+   * POST /api/webhooks/:webhookId/rotate-secret) can't silently clobber the
+   * secret written by this call with a stale in-memory copy.
    */
   async rotateSecret(id: string, admin?: { id: string, email: string, tenantId: string }, requestId?: string): Promise<WebhookConfig> {
     const webhook = await this.store.get(id)
@@ -32,12 +39,10 @@ export class WebhookService {
       throw new Error('Webhook not found')
     }
 
-    // Move current to previous and generate new
-    webhook.previousSecret = webhook.secret
-    webhook.secret = randomBytes(32).toString('hex')
-    webhook.secretUpdatedAt = new Date()
+    const newSecret = randomBytes(32).toString('hex')
+    const previousSecretExpiresAt = new Date(Date.now() + PREVIOUS_SECRET_TTL_MS).toISOString()
 
-    await this.store.set(webhook)
+    const updated = await this.store.rotateSecret(id, newSecret, webhook.secret, previousSecretExpiresAt)
 
     if (this.auditLog && admin) {
       this.auditLog.logAction(
@@ -46,8 +51,8 @@ export class WebhookService {
         admin.email,
         AuditAction.ROTATE_WEBHOOK_SECRET,
         id,
-        webhook.url,
-        { rotatedAt: webhook.secretUpdatedAt },
+        updated.url,
+        { rotatedAt: updated.secretUpdatedAt, previousSecretExpiresAt },
         undefined,
         undefined,
         undefined,
@@ -55,7 +60,7 @@ export class WebhookService {
       )
     }
 
-    return webhook
+    return updated
   }
 
   /**
@@ -114,10 +119,13 @@ export class WebhookService {
           ...this.deliveryOptions,
           returnAllChunks: true,
           eventId: options.eventId,
+          correlationId: options.correlationId,
           idempotencyStore: this.store,
         })
       ))
     )
+
+    const flatResults = rawResults.flat()
 
     if (this.dlq) {
       // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
@@ -128,7 +136,7 @@ export class WebhookService {
       // `errorCode`, then to `UNKNOWN`. The boundedReason helper inside
       // retryMetrics.ts normalizes the label to a low-cardinality
       // ASCII-uppercase-underscore identifier.
-      const exhaustedResults = rawResults.flat().filter(r => !r.success)
+      const exhaustedResults = flatResults.filter(r => !r.success)
       for (const r of exhaustedResults) {
         const reasonText = r.error ?? r.errorCode ?? 'UNKNOWN'
         // WebhookDeliveryResult.attempts is REQUIRED by the type but the
@@ -142,6 +150,12 @@ export class WebhookService {
       await Promise.all(
         exhaustedResults.map(r => this.dlq!.push(buildDlqEntry(r, payload)))
       )
+    }
+
+    // Compact lag-dashboard success-rate counters (no high-cardinality labels).
+    // See docs/WEBHOOK_LAG_DASHBOARD.md / src/metrics/webhookLagDashboard.ts.
+    for (const r of flatResults) {
+      recordWebhookDeliveryOutcome(r.success ? 'success' : 'failure')
     }
 
     return rawResults.map(webhookResults => 
@@ -186,15 +200,18 @@ export class WebhookService {
     }
 
     // Deliver without idempotency check since we are explicitly replaying
-    const result = await deliverWebhook(webhook, entry.payload, {
+    const results = await deliverWebhook(webhook, entry.payload, {
       ...this.deliveryOptions,
       returnAllChunks: true,
       eventId: entry.payload.data && typeof entry.payload.data === 'object' && 'eventId' in entry.payload.data ? (entry.payload.data as any).eventId : undefined,
     })
 
-    if (result.success) {
+    const allSucceeded = results.every(r => r.success)
+    if (allSucceeded) {
       await this.dlq.markReplayed(dlqId, new Date().toISOString())
     }
+
+    const result = results[0]
 
     if (this.auditLog && admin) {
       this.auditLog.logAction(

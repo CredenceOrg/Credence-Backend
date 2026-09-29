@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest'
 import { WorkerHealthService } from './workerHealth.js'
 
 // ---------------------------------------------------------------------------
-// In-memory Redis stub that supports scan, get, and ttl
+// In-memory Redis stub that supports scan, get, ttl, mGet, and multi
 // ---------------------------------------------------------------------------
 interface StoreEntry {
   value: string
@@ -26,6 +26,33 @@ function makeFakeRedis() {
       const entry = store.get(key)
       if (!entry) return null
       return entry.value
+    },
+
+    async mGet(keys: string[]): Promise<(string | null)[]> {
+      return keys.map((k) => {
+        const entry = store.get(k)
+        return entry ? entry.value : null
+      })
+    },
+
+    multi() {
+      const commands: Array<{ cmd: string; args: string[] }> = []
+      return {
+        ttl(key: string) {
+          commands.push({ cmd: 'ttl', args: [key] })
+          return this
+        },
+        async exec(): Promise<unknown[]> {
+          return commands.map((c) => {
+            if (c.cmd === 'ttl') {
+              const entry = store.get(c.args[0])
+              if (!entry) return -2
+              return entry.ttl
+            }
+            return null
+          })
+        },
+      }
     },
 
     async ttl(key: string): Promise<number> {
@@ -110,20 +137,17 @@ describe('WorkerHealthService', () => {
     expect(result.workers[0].held).toBe(false)
   })
 
-  it('handles Redis get failure gracefully', async () => {
+  it('handles Redis mGet failure gracefully', async () => {
     redis.set('cron:score-snapshot', '12345-1700000000000-abc', 30)
-    // Override get to throw
-    const originalGet = redis.get
-    redis.get = async () => {
-      throw new Error('get failed')
+    const originalMGet = redis.mGet
+    redis.mGet = async () => {
+      throw new Error('mGet failed')
     }
 
     const result = await service.getWorkerStatuses()
-    // Should still report the worker with held=false
     const worker = result.workers.find((w) => w.lockKey === 'cron:score-snapshot')
     expect(worker).toBeDefined()
     expect(worker!.held).toBe(false)
-    // Restore
-    redis.get = originalGet
+    redis.mGet = originalMGet
   })
 })

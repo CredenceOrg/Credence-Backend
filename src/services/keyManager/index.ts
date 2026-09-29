@@ -11,6 +11,7 @@ import type {
   KekAuditEvent,
   KekRegistrationResult,
 } from './types.js'
+import { trySigningKeyTransition, tryKekTransition } from './keyTransitions.js'
 
 const ALG = 'PS256'
 const JWKS_CACHE_TTL_MS = 10 * 60 * 1000
@@ -113,6 +114,12 @@ export class KeyManager {
   async rotate(): Promise<{ newKid: string; retiredKid: string }> {
     const previous = this.getCurrentKey()
     const retiredKid = previous.kid
+
+    // Validate the transition via the state machine before mutating.
+    const transition = trySigningKeyTransition(previous.state, 'retired')
+    if (!transition.success) {
+      throw new Error(`Key rotation rejected: ${transition.error}`)
+    }
 
     // Retire previous active key
     previous.state = 'retired'
@@ -430,9 +437,20 @@ export class KekManager {
       )
     }
 
+    // Validate the transition via the state machine before mutating.
+    const transition = tryKekTransition(kek.state, 'active')
+    if (!transition.success) {
+      throw new Error(`KEK activation rejected: ${transition.error}`)
+    }
+
     const previousVersion = this.currentVersion
     if (previousVersion !== null) {
       const prev = this.versions.get(previousVersion)!
+      // Retire the previous active version
+      const retireTransition = tryKekTransition(prev.state, 'retired')
+      if (!retireTransition.success) {
+        throw new Error(`KEK supersede rejected: ${retireTransition.error}`)
+      }
       prev.state = 'retired'
       prev.retiredAt = new Date()
       this._emitAudit({

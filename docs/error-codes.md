@@ -27,6 +27,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | `rate_limit_exceeded` | 429 | rate_limit | Rate limit exceeded |
 | `not_found` | 404 | resource | The requested resource was not found |
 | `conflict` | 409 | resource | The request conflicts with the current resource state |
+| `optimistic_lock_conflict` | 409 | resource | The resource was modified by another request. Fetch the latest version and retry. |
 | `internal_server_error` | 500 | system | An unexpected internal server error occurred |
 | `missing_security_header` | 500 | system | A required security response header is missing |
 | `service_unavailable` | 503 | system | Service temporarily unavailable |
@@ -51,7 +52,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 
 | Locale | Coverage | Notes |
 | --- | ---: | --- |
-| `en` | 32 messages | Catalog default messages for active codes. |
+| `en` | 33 messages | Catalog default messages for active codes. |
 
 ## Deprecated codes
 

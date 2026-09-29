@@ -190,6 +190,9 @@ GET /api/audit/export?from=2026-01-01&to=2026-06-01
 
 Streams audit logs as NDJSON with PII redaction applied. Rate-limited to 10 requests per minute.
 
+For the authenticated, size-capped tenant export API (`exports:read`), see
+[`docs/export.md`](export.md) (`GET /api/export/audit-logs`).
+
 ## Audited Actions
 
 - Admin: role and API key management, user listing

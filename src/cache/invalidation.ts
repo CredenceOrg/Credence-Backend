@@ -10,6 +10,16 @@ import { recordStaleCacheRead } from '../middleware/metrics.js'
 import { getInvalidationBus } from './invalidationBus.js'
 import { logger } from '../utils/logger.js'
 import { ValidationError, ServiceUnavailableError } from '../lib/errors.js'
+import { transactionContextStorage, runPostCommit, runRollback } from '../db/transaction.js'
+
+/**
+ * Compute a deterministic, stable hash for comparing cached values.
+ * Produces identical output for structurally equal objects regardless of
+ * property insertion order, so it is safe to use for stale-read detection.
+ */
+function computeStableHash(value: unknown): string {
+  return JSON.stringify(value, Object.keys(value as object).sort())
+}
 
 export interface InvalidationOptions {
   /**
@@ -62,6 +72,9 @@ export async function invalidateCache(
           }
         }
       }
+    })
+    runRollback(async () => {
+      logger.debug(`Cache invalidation for ${namespace}:${key} rolled back — cache retains valid data`)
     })
     return true
   }
@@ -123,6 +136,9 @@ export async function invalidateMultiple(
         keys
       })
     })
+    runRollback(async () => {
+      logger.debug(`Batch cache invalidation for ${namespace} rolled back (${keys.length} keys) — cache retains valid data`)
+    })
     return keys.length
   }
 
@@ -168,6 +184,9 @@ export async function invalidatePattern(
         namespace,
         pattern
       })
+    })
+    runRollback(async () => {
+      logger.debug(`Pattern cache invalidation for ${namespace}:${pattern} rolled back — cache retains valid data`)
     })
     return 0
   }

@@ -1,6 +1,8 @@
 import { SpanStatusCode } from '@opentelemetry/api'
 import { getPaymentTracer, PaymentSpans } from '../../tracing/tracer.js'
 import type { SettlementsRepository } from '../../db/repositories/settlementsRepository.js'
+import { withRetryableTransaction } from '../../db/retry.js'
+import { pool } from '../../db/pool.js'
 import type {
   PaymentRequest,
   ValidationResult,
@@ -53,7 +55,6 @@ export class PaymentOrchestrator {
       rootSpan.setAttributes({
         'payment.bond_id':          request.bondId,
         'payment.transaction_hash': request.transactionHash,
-        'payment.from_account':     request.fromAccount,
       })
 
       const processedAt = new Date()
@@ -145,9 +146,7 @@ export class PaymentOrchestrator {
       try {
         span.setAttributes({
           'ingest.bond_id':          request.bondId,
-          'ingest.amount':           request.amount,
           'ingest.transaction_hash': request.transactionHash,
-          'ingest.from_account':     request.fromAccount,
         })
 
         const trimmed = request.amount.trim()
@@ -155,7 +154,6 @@ export class PaymentOrchestrator {
           throw new Error('Payment amount must not be empty')
         }
 
-        span.setAttributes({ 'ingest.normalized_amount': trimmed })
         span.setStatus({ code: SpanStatusCode.OK })
       } catch (error) {
         span.setStatus({
@@ -291,6 +289,9 @@ export class PaymentOrchestrator {
   /**
    * Stage 5 – Settle: persist a settlement record and report whether it was a
    * duplicate (idempotent re-submission of an already-recorded transaction).
+   * 
+   * Wrapped in withRetryableTransaction to handle transient PostgreSQL errors
+   * (serialization failures, deadlocks) with exponential backoff retry.
    */
   private async settlePayment(
     request: PaymentRequest,
@@ -301,15 +302,24 @@ export class PaymentOrchestrator {
         span.setAttributes({
           'settle.bond_id':          request.bondId,
           'settle.transaction_hash': processorResult.transactionHash,
-          'settle.amount':           request.amount,
         })
 
-        const { settlement, isDuplicate } = await this.repository.upsert({
-          bondId:          request.bondId,
-          amount:          request.amount,
-          transactionHash: processorResult.transactionHash,
-          status:          'settled',
-        })
+        // Wrap settlement write in retryable transaction to handle concurrent payment conflicts
+        const { settlement, isDuplicate } = await withRetryableTransaction(
+          pool,
+          async (client) => {
+            return await this.repository.upsert({
+              bondId:          request.bondId,
+              amount:          request.amount,
+              transactionHash: processorResult.transactionHash,
+              status:          'settled',
+            })
+          },
+          {
+            maxRetries: 5,
+            operationName: `settle-payment-${processorResult.transactionHash}`,
+          }
+        )
 
         const settlementId = Number(settlement.id)
 

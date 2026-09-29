@@ -1,4 +1,6 @@
 import type { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
+import { withRetryableTransaction } from '../db/retry.js'
+import { pool } from '../db/pool.js'
 
 export interface IdempotentMessage<T = unknown> {
   messageId: string

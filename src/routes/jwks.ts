@@ -42,6 +42,9 @@ function stableStringify(value: unknown): unknown {
  * issued by this service. No authentication is required — the endpoint is
  * intentionally public per RFC 8414 / OIDC Discovery conventions.
  *
+ * **CORS policy:** Open — `GET /.well-known/jwks.json` accepts any `Origin`.
+ * See `docs/CORS_POLICY.md`.
+ *
  * ## Key lifecycle
  * - **Active key**: the current signing key.
  * - **Retired key**: a recently rotated key kept alive for `KEY_GRACE_PERIOD_SECONDS`

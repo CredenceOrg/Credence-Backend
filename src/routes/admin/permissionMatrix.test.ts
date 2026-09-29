@@ -268,6 +268,8 @@ export const ADMIN_PERMISSION_MATRIX: AdminRouteTestSpec[] = [
   // ── Outbox Admin Router (src/routes/admin/outbox.ts)
   { method: 'get', path: '/api/admin/outbox/quarantine' },
   { method: 'post', path: '/api/admin/outbox/pause' },
+  { method: 'post', path: '/api/admin/outbox/resume' },
+  { method: 'get', path: '/api/admin/outbox/status' },
 
   // ── Members Admin Router (src/routes/admin/member.ts)
   { method: 'get', path: '/api/admin/orgs/org1/members' },

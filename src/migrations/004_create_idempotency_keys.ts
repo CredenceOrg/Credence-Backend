@@ -8,6 +8,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     request_hash: { type: 'text', notNull: true },
     response_code: { type: 'integer', notNull: true },
     response_body: { type: 'jsonb', notNull: true },
+    response_headers: { type: 'jsonb' },
     expires_at: { type: 'timestamptz', notNull: true },
     created_at: {
       type: 'timestamptz',

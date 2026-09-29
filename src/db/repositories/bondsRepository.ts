@@ -6,6 +6,10 @@ import {
   LockTimeoutPolicy,
   LockTimeoutError,
 } from '../transaction.js'
+import {
+  compareDecimals,
+  isValidPositiveDecimal,
+} from '../../lib/decimalMath.js'
 
 export type BondStatus = 'active' | 'released' | 'slashed'
 
@@ -186,6 +190,11 @@ export class BondsRepository {
       )
     }
 
+    // Reject malformed, zero, or negative amounts before acquiring the row lock.
+    if (!isValidPositiveDecimal(amount)) {
+      throw new Error(`Invalid debit amount: "${amount}"`)
+    }
+
     return this.txManager.withTransaction(
       async (client) => {
         // Lock the row so concurrent debits queue up rather than racing.
@@ -205,12 +214,10 @@ export class BondsRepository {
 
         const current = mapBond(lockResult.rows[0])
 
-        // Use NUMERIC arithmetic in JS with BigInt-safe string comparison to
-        // avoid floating-point drift on large wei values.
-        const availableNum = Number(current.amount)
-        const requestedNum = Number(amount)
-
-        if (requestedNum > availableNum) {
+        // Number() loses precision beyond ~15 significant digits and can silently
+        // permit an overdraft on large or high-scale (e.g. wei) balances.
+        // compareDecimals() uses BigInt-scaled integer arithmetic and is always exact.
+        if (compareDecimals(amount, current.amount) > 0) {
           throw new InsufficientFundsError(id, current.amount, amount)
         }
 

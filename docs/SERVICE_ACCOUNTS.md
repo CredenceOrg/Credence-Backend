@@ -16,6 +16,8 @@ Credence Backend uses two categories of service accounts to access its APIs and 
 
 This document lists every known service account, the permissions it holds, and the threat model for each.
 
+For backend-maintenance purposes, the canonical inventory now lives in [src/auth/serviceAccountInventory.ts](../src/auth/serviceAccountInventory.ts) and is covered by [src/auth/serviceAccountInventory.test.ts](../src/auth/serviceAccountInventory.test.ts). The inventory is intentionally limited to service accounts that access backend routes through API-key-based auth and documents the owning team, the purpose, the scopes, and the endpoint paths they may reach.
+
 ---
 
 ## 1. Kubernetes Service Accounts
@@ -81,7 +83,23 @@ API keys are the primary mechanism for service-to-service authentication. Each k
 | `settlement-reconciler` | `payouts:write`, `trust:read`, `bond:read` | Reconciles on-chain settlement state with DB records | **High impact** — can initiate payouts. Must be restricted to the dedicated settlement service account. |
 | `impersonation-service` | `admin:write` | Issues short-lived impersonation tokens for admin debug/support | **Critical impact** — can temporarily assume any user's identity. Must be restricted to admin role only (enforced at route level via `requireAdminRole`). |
 
-### 2.3 Impersonation Tokens
+### 2.3 Backend Service Account Inventory
+
+The backend inventory is maintained as code so that service-account ownership and endpoint reachability can be reviewed without reading every route file manually.
+
+| Service account | Owner | Purpose | Scopes | Endpoints |
+|---|---|---|---|---|
+| `horizon-listener` | `platform` | Ingests Horizon events and writes attestation/trust state | `trust:read`, `attestations:read` | `GET /api/transactions/history`, `GET /api/attestations/:address` |
+| `outbox-publisher` | `platform` | Reinjects quarantined outbox events | `outbox:reinject` | `POST /api/admin/outbox/quarantine/:id/reinject` |
+| `analytics-refresher` | `analytics` | Refreshes analytics and export datasets | `trust:read`, `attestations:read`, `exports:read` | `GET /api/transactions/history`, `GET /api/attestations/:address` |
+| `data-retention` | `security` | Runs retention workflows that inspect admin metadata | `admin:read` | `GET /api/admin/audit-logs` |
+| `key-rotation-worker` | `security` | Performs key rotation maintenance activities | `admin:read` | `GET /api/admin/audit-logs` |
+| `settlement-reconciler` | `settlement` | Reconciles payout and settlement state | `payouts:write`, `trust:read`, `bond:read` | `POST /api/payouts`, `GET /api/transactions/history` |
+| `impersonation-service` | `admin` | Issues temporary impersonation tokens | `admin:write` | `POST /api/admin/impersonate` |
+
+When a new service account is introduced, add it to the inventory module and update this table so the ownership map remains current.
+
+### 2.4 Impersonation Tokens
 
 | Field | Detail |
 |---|---|

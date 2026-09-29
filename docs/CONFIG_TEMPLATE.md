@@ -206,6 +206,7 @@ Global defaults plus optional per-provider overrides (`SOROBAN`, `WEBHOOK`):
 | --- | --- | --- |
 | `TRUST_SCORE_CACHE_TTL` | `600` | Seconds; 60–86400. |
 | `AUDIT_EXPORT_MAX_WINDOW_DAYS` | `90` | 1–3650. |
+| `EXPORT_MAX_ROWS` | `100000` | 1–10000000. Hard row cap for authenticated data exports; oversized requests return 413 before streaming. See [export.md](export.md). |
 | `REPORT_MAX_CONCURRENT_JOBS_PER_ORG` | `10` | 0–1000. |
 | `REPORT_DOWNLOAD_BASE_URL` | `https://credence.example.com` | Base URL embedded in signed report download links (`src/services/reportStorage.ts`). |
 | `METRICS_ALLOWED_CIDRS` | unset | Comma-separated IPv4 CIDRs allowed to scrape `/metrics`; unset = open. |

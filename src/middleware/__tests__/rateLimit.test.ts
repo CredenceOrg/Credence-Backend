@@ -42,32 +42,45 @@ import type { SubscriptionTier } from '../../services/apiKeys.js'
  * inspect state directly without network or timer side-effects.
  */
 class FakeRedis {
-  private readonly counts = new Map<string, number>()
-  private readonly ttls   = new Map<string, number>()
+  private readonly counts    = new Map<string, number>()
+  private readonly expiresAt = new Map<string, number>()
 
   async incr(key: string): Promise<number> {
+    this.pruneIfExpired(key)
     const next = (this.counts.get(key) ?? 0) + 1
     this.counts.set(key, next)
     return next
   }
 
   async expire(key: string, seconds: number): Promise<void> {
-    this.ttls.set(key, seconds)
+    this.expiresAt.set(key, Date.now() + seconds * 1000)
   }
 
   async ttl(key: string): Promise<number> {
-    return this.ttls.get(key) ?? -1
+    this.pruneIfExpired(key)
+    const expiresAt = this.expiresAt.get(key)
+    if (expiresAt === undefined) return -1
+    return Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000))
   }
 
   /** Reset all state between tests. */
   flush(): void {
     this.counts.clear()
-    this.ttls.clear()
+    this.expiresAt.clear()
   }
 
   /** Peek at the current count for a key (test introspection only). */
   count(key: string): number {
+    this.pruneIfExpired(key)
     return this.counts.get(key) ?? 0
+  }
+
+  private pruneIfExpired(key: string): void {
+    const expiresAt = this.expiresAt.get(key)
+    if (expiresAt !== undefined && Date.now() >= expiresAt) {
+      this.counts.delete(key)
+      this.expiresAt.delete(key)
+    }
   }
 }
 
@@ -250,14 +263,16 @@ describe('burst behaviour', () => {
  */
 describe('refill behaviour', () => {
   const windowSec   = 60
-  // Anchor to a known epoch-aligned window far from any edge.
-  const windowStart = 1_700_004_000 // already a multiple of 60
-  const lastSecOfN  = (windowStart + windowSec - 1) * 1000
-  const firstSecOfN1 = (windowStart + windowSec)   * 1000
+  // Anchor near an epoch-aligned boundary to prove that refill is driven by
+  // the key TTL, not by crossing a wall-clock second/minute boundary.
+  const firstHitAt = 1_700_004_059_999
+  const oneMsAfterEpochBoundary = 1_700_004_060_001
+  const oneMsBeforeTtlExpiry = firstHitAt + windowSec * 1000 - 1
+  const exactTtlExpiry = firstHitAt + windowSec * 1000
 
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
-    vi.setSystemTime(lastSecOfN) // start every refill test inside window N
+    vi.setSystemTime(firstHitAt)
   })
 
   it('token_bucket_refills_after_window_rolls_over', async () => {
@@ -274,9 +289,9 @@ describe('refill behaviour', () => {
     }
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance clock into window N+1 — a new Redis key is produced, so the
-    // counter starts from zero again.
-    vi.setSystemTime(firstSecOfN1)
+    // Advance past the TTL started by the first hit. The existing Redis key
+    // has expired, so the counter starts from zero again.
+    vi.setSystemTime(exactTtlExpiry)
 
     for (let i = 0; i < max; i++) {
       expect((await request(app).get('/api/ping')).status).toBe(200)
@@ -296,8 +311,8 @@ describe('refill behaviour', () => {
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance one millisecond — still inside window N.
-    vi.setSystemTime(lastSecOfN + 500)
+    // Advance almost to expiry, but stay inside the TTL started by the first hit.
+    vi.setSystemTime(oneMsBeforeTtlExpiry)
 
     // Must remain blocked — no refill yet.
     expect((await request(app).get('/api/ping')).status).toBe(429)
@@ -314,8 +329,8 @@ describe('refill behaviour', () => {
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
 
-    // Advance to the exact first millisecond of window N+1.
-    vi.setSystemTime(firstSecOfN1)
+    // Advance to exact TTL expiry.
+    vi.setSystemTime(exactTtlExpiry)
 
     // Budget is fully restored.
     expect((await request(app).get('/api/ping')).status).toBe(200)
@@ -332,11 +347,30 @@ describe('refill behaviour', () => {
     // Consume 1 request in window N.
     expect((await request(app).get('/api/ping')).status).toBe(200)
 
-    // Roll into window N+1 — the NEW window starts at 0, not at 1.
-    vi.setSystemTime(firstSecOfN1)
+    // Roll past TTL expiry. The NEW window starts at 0, not at 1.
+    vi.setSystemTime(exactTtlExpiry)
 
     // Should have the full budget of max=2 again, not max-1=1.
     expect((await request(app).get('/api/ping')).status).toBe(200)
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+    expect((await request(app).get('/api/ping')).status).toBe(429)
+  })
+
+  it('token_bucket_counts_sub_second_burst_across_epoch_boundary_in_same_window', async () => {
+    const max = 2
+    const app = buildApp({
+      max,
+      namespace: 'unit:refill:subsecond-boundary',
+      config: { windowSec },
+    })
+
+    expect((await request(app).get('/api/ping')).status).toBe(200)
+
+    // Previously this crossed an epoch-aligned window boundary and received a
+    // fresh counter only 2ms after the first hit. It must still spend the same
+    // TTL-backed window budget.
+    vi.setSystemTime(oneMsAfterEpochBoundary)
+
     expect((await request(app).get('/api/ping')).status).toBe(200)
     expect((await request(app).get('/api/ping')).status).toBe(429)
   })

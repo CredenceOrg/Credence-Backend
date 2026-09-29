@@ -43,6 +43,13 @@ export class IdentitiesRepository {
     return t;
   }
 
+  private scopedWhere(): { clause: string; params: string[] } {
+    const tenantId = this.assertTenant();
+    return tenantId
+      ? { clause: "tenant_id = ?", params: [tenantId] }
+      : { clause: "1 = 1", params: [] };
+  }
+
   /**
    * Create a new identity.
    *
@@ -50,7 +57,7 @@ export class IdentitiesRepository {
    * @returns The newly created identity record.
    */
   create(input: CreateIdentityInput): Identity {
-    const tenantId = input.tenantId || this.assertTenant();
+    const tenantId = this.skipTenantCheck ? input.tenantId : this.assertTenant();
     
     // Only include tenant_id in INSERT if it exists
     if (tenantId) {
@@ -75,8 +82,9 @@ export class IdentitiesRepository {
    * @returns The identity record, or undefined if not found.
    */
   findById(id: number): Identity | undefined {
-    const stmt = this.db.prepare("SELECT * FROM identities WHERE id = ?");
-    return stmt.get(id) as Identity | undefined;
+    const scope = this.scopedWhere();
+    const stmt = this.db.prepare(`SELECT * FROM identities WHERE id = ? AND ${scope.clause}`);
+    return stmt.get(id, ...scope.params) as Identity | undefined;
   }
 
   /**
@@ -86,8 +94,9 @@ export class IdentitiesRepository {
    * @returns The identity record, or undefined if not found.
    */
   findByAddress(address: string): Identity | undefined {
-    const stmt = this.db.prepare("SELECT * FROM identities WHERE address = ?");
-    return stmt.get(address) as Identity | undefined;
+    const scope = this.scopedWhere();
+    const stmt = this.db.prepare(`SELECT * FROM identities WHERE address = ? AND ${scope.clause}`);
+    return stmt.get(address, ...scope.params) as Identity | undefined;
   }
 
   /**
@@ -96,7 +105,8 @@ export class IdentitiesRepository {
    * @returns An array of all identity records.
    */
   findAll(): Identity[] {
-    const stmt = this.db.prepare("SELECT * FROM identities ORDER BY id ASC");
-    return stmt.all() as Identity[];
+    const scope = this.scopedWhere();
+    const stmt = this.db.prepare(`SELECT * FROM identities WHERE ${scope.clause} ORDER BY id ASC`);
+    return stmt.all(...scope.params) as Identity[];
   }
 }

@@ -5,11 +5,18 @@
  * Provides programmatic access to migration operations.
  */
 
-export { loadMigrationConfig, validateConfig, MigrationConfig } from './config.js'
-export { 
-  runMigration, 
-  getMigrationStatus, 
+export { loadMigrationConfig, validateConfig, resolveMigrationsDir, MigrationConfig } from './config.js'
+export {
+  runMigration,
+  getMigrationStatus,
   createMigration,
   MigrationOptions,
-  MigrationResult 
+  MigrationResult,
 } from './runner.js'
+export {
+  validateMigrationChecksums,
+  recordAppliedMigrationChecksums,
+  MigrationChecksumError,
+  MigrationChecksumValidationOptions,
+  MigrationChecksumValidationResult,
+} from './checksumValidation.js'

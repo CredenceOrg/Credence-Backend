@@ -50,6 +50,13 @@ export class SlashEventsRepository {
     return t;
   }
 
+  private scopedWhere(): { clause: string; params: string[] } {
+    const tenantId = this.assertTenant();
+    return tenantId
+      ? { clause: "tenant_id = ?", params: [tenantId] }
+      : { clause: "1 = 1", params: [] };
+  }
+
   /**
    * Create a new slash event.
    *
@@ -57,7 +64,7 @@ export class SlashEventsRepository {
    * @returns The newly created slash event record.
    */
   create(input: CreateSlashEventInput): SlashEvent {
-    const tenantId = input.tenantId || this.assertTenant();
+    const tenantId = this.skipTenantCheck ? input.tenantId : this.assertTenant();
     
     // Only include tenant_id in INSERT if it exists
     if (tenantId) {
@@ -93,8 +100,9 @@ export class SlashEventsRepository {
    * @returns The slash event record, or undefined if not found.
    */
   findById(id: number): SlashEvent | undefined {
-    const stmt = this.db.prepare("SELECT * FROM slash_events WHERE id = ?");
-    return stmt.get(id) as SlashEvent | undefined;
+    const scope = this.scopedWhere();
+    const stmt = this.db.prepare(`SELECT * FROM slash_events WHERE id = ? AND ${scope.clause}`);
+    return stmt.get(id, ...scope.params) as SlashEvent | undefined;
   }
 
   /**
@@ -104,10 +112,11 @@ export class SlashEventsRepository {
    * @returns An array of slash event records for the identity.
    */
   findByIdentityId(identityId: number): SlashEvent[] {
+    const scope = this.scopedWhere();
     const stmt = this.db.prepare(
-      "SELECT * FROM slash_events WHERE identity_id = ? ORDER BY id ASC"
+      `SELECT * FROM slash_events WHERE identity_id = ? AND ${scope.clause} ORDER BY id ASC`
     );
-    return stmt.all(identityId) as SlashEvent[];
+    return stmt.all(identityId, ...scope.params) as SlashEvent[];
   }
 
   /**
@@ -116,7 +125,8 @@ export class SlashEventsRepository {
    * @returns An array of all slash event records.
    */
   findAll(): SlashEvent[] {
-    const stmt = this.db.prepare("SELECT * FROM slash_events ORDER BY id ASC");
-    return stmt.all() as SlashEvent[];
+    const scope = this.scopedWhere();
+    const stmt = this.db.prepare(`SELECT * FROM slash_events WHERE ${scope.clause} ORDER BY id ASC`);
+    return stmt.all(...scope.params) as SlashEvent[];
   }
 }

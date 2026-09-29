@@ -6,11 +6,13 @@ import {
   UserRole,
 } from "../../middleware/auth.js";
 import erasureProofRouter from './erasureProof.js'
+import exportPaginatedRouter from './exportPaginated.js'
 import { keyManager } from '../../services/keyManager/index.js'
-import { rotateSigningKeyBodySchema } from '../../schemas/admin.js'
+import { rotateSigningKeyBodySchema, replayWebhookBodySchema, type ReplayWebhookBody } from '../../schemas/admin.js'
 import auditChainStatusRouter from './auditChainStatus.js'
 import settlementReconciliationRouter from './settlementReconciliation.js'
 import migrationsRouter from './migrations.js'
+import systemRouter from './system.js'
 import {
   buildCursorPaginationLinks,
   buildPaginationLinks,
@@ -46,12 +48,14 @@ import {
 import type { ReplayEventBody } from '../../schemas/admin.js'
 import { z } from 'zod'
 import { preventAdminCrawling } from "../../middleware/preventAdminCrawling.js";
-import { validateConfig, ConfigValidationError } from "../../config/index.js";
+import { validateConfig, ConfigValidationError, loadConfig } from "../../config/index.js";
 import fs from "fs";
 import dotenv from "dotenv";
 import { WebhookService } from "../../services/webhooks/service.js";
 import { PostgresWebhookRepository } from "../../db/repositories/webhookRepository.js";
 import { PostgresDlqStore } from "../../services/webhooks/postgresDlqStore.js";
+import { ApiKeyRotationService } from "../../services/apiKeyRotationService.js";
+import { InMemoryApiKeyRepository } from "../../repositories/apiKeyRepository.js";
 
 
 /**
@@ -70,7 +74,7 @@ export function createAdminRouter(): Router {
   const replayService = new ReplayService(replayRepo)
 
   const identityRepo = new IdentityRepository(pool)
-  const bondsRepo = new BondsRepository(pool)
+  const bondsRepo = new BondsRepository(pool, pool, loadConfig().db.lockTimeouts)
 
   // Register handlers
   registerAllReplayHandlers(replayService, identityRepo, bondsRepo);
@@ -194,14 +198,24 @@ export function createAdminRouter(): Router {
 
       res.status(200).json({
         success: true,
-        message: result.message,
-        data: result.user,
       })
     } catch (error) {
       next(error)
     }
-  },
-  )
+  };
+
+  /**
+   * POST /api/admin/reload-config
+   * Triggering a live reload of the validated config; audit-logged.
+   */
+  router.post('/reload-config', requireUserAuth, requireAdminRole, handleReloadConfig);
+
+  /**
+   * POST /api/admin/refresh-secrets
+   * Reloads secrets from the vault (.env) without a restart.
+   * @deprecated Use /reload-config instead.
+   */
+  router.post('/refresh-secrets', requireUserAuth, requireAdminRole, handleReloadConfig);
 
   /**
    * POST /api/admin/keys/revoke
@@ -229,56 +243,48 @@ export function createAdminRouter(): Router {
     }
   });
 
-      res.status(200).json({
-        success: true,
-        message: result.message,
-      })
-    } catch (error) {
-      next(error)
-    }
-  },
-  )
-
   /**
    * POST /api/admin/impersonate
    *
    * Issue a short-lived impersonation token for support/debug purposes.
    */
-  router.post('/impersonate', requireUserAuth, requireAdminRole, idempotencyMiddleware(idempotencyRepo), (req: Request, res: Response, next) => {
-    try {
-      const authReq = req as AuthenticatedRequest
-      const user = authReq.user!
-      const requestId = (req as any).requestId
-      const body = req.body as Partial<IssueImpersonationTokenRequest>
+  router.post(
+    '/impersonate',
+    requireUserAuth,
+    requireAdminRole,
+    idempotencyMiddleware(idempotencyRepo),
+    validate({ body: issueImpersonationTokenBodySchema }),
+    async (req: Request, res: Response) => {
+      try {
+        const authReq = req as AuthenticatedRequest
+        const user = authReq.user!
+        const requestId = (req as any).requestId
+        const body = req.body as IssueImpersonationTokenRequest
 
-      if (!body.targetUserId || !body.reason) {
-        sendError(res, ErrorCode.FIELD_REQUIRED, 'targetUserId and reason are required')
-        return
+        const issued = await impersonationService.issueToken(
+          user.id,
+          user.email,
+          user.tenantId,
+          {
+            targetUserId: body.targetUserId,
+            reason: body.reason,
+            ttlSeconds: body.ttlSeconds,
+          },
+          req.ip,
+          requestId,
+        )
+
+        res.status(201).json({ success: true, data: issued })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Unknown error"
+        if (/User not found/i.test(message)) {
+          res.status(404).json({ error: "NotFound", message })
+          return
+        }
+        res.status(400).json({ error: "BadRequest", message })
       }
-
-      const issued = impersonationService.issueToken(
-        user.id,
-        user.email,
-        user.tenantId,
-        {
-          targetUserId: body.targetUserId,
-          reason: body.reason,
-          ttlSeconds: body.ttlSeconds,
-        },
-        req.ip,
-      )
-
-      res.status(201).json({ success: true, data: issued })
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unknown error"
-      if (/User not found/i.test(message)) {
-        res.status(404).json({ error: "NotFound", message })
-        return
-      }
-      res.status(400).json({ error: "BadRequest", message })
-    }
-  },
+    },
   )
 
   /**
@@ -675,8 +681,72 @@ export function createAdminRouter(): Router {
     }
   });
 
+  /**
+   * POST /api/admin/regen-api-key
+   *
+   * Rotate (regenerate) the authenticated tenant's API key on demand.
+   * The old key is immediately revoked and a new key with identical scopes
+   * and tier is issued. The new raw key is returned exactly once.
+   * Every attempt (success or failure) is audit-logged.
+   */
+  router.post('/regen-api-key', requireUserAuth, idempotencyMiddleware(idempotencyRepo), async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const user = authReq.user!;
+      const requestId = (req as any).requestId;
+
+      if (!user.id) {
+        sendError(res, ErrorCode.FIELD_REQUIRED, 'Authenticated user ID is required');
+        return;
+      }
+
+      // Find the tenant's active API key(s)
+      const keyRepo = new InMemoryApiKeyRepository();
+      const rotationService = new ApiKeyRotationService(keyRepo, auditLogService);
+      const keys = await keyRepo.listByOwner(user.id);
+      const activeKey = keys.find((k: any) => k.active);
+
+      if (!activeKey) {
+        sendError(res, ErrorCode.NOT_FOUND, 'No active API key found for this tenant. Create one first.');
+        return;
+      }
+
+      // Rotate the key
+      const newKey = await rotationService.rotateKey(
+        activeKey.id,
+        user.id,
+        user.email,
+        req.ip
+      );
+
+      if (!newKey) {
+        sendError(res, ErrorCode.INTERNAL_ERROR, 'Failed to rotate API key. Please try again.');
+        return;
+      }
+
+      res.status(200).json({
+        success: true,
+        message: 'API key rotated successfully. The old key is no longer valid.',
+        data: {
+          id: newKey.id,
+          key: newKey.key,
+          prefix: newKey.prefix,
+          scopes: newKey.scopes,
+          tier: newKey.tier,
+          createdAt: newKey.createdAt,
+        },
+      });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   // Mount erasure-proof sub-routes
   router.use(erasureProofRouter)
+
+  // Mount paginated audit-log export (bounded cursor-based pagination with date-range filtering)
+  router.use(exportPaginatedRouter)
+
 
   // Mount audit chain status (read-only verifier state)
   router.use('/audit', auditChainStatusRouter)
@@ -686,6 +756,9 @@ export function createAdminRouter(): Router {
 
   // Mount migrations sub-router (dry-run)
   router.use('/migrations', migrationsRouter)
+
+  // Mount system status sub-router
+  router.use('/system', systemRouter)
 
   return router
 }

@@ -32,6 +32,53 @@ export class DivisionByZeroError extends Error {
   }
 }
 
+/**
+ * Thrown by {@link assertWithinNumericBounds} when a value carries more
+ * fractional digits than the target column's scale allows.
+ *
+ * This case is distinct from overflow: a Postgres `NUMERIC(p,s)` column does
+ * not reject excess fractional digits, it silently *rounds* the value to `s`
+ * digits on write. Left unchecked, the caller believes the exact input
+ * amount was persisted (and may record it verbatim in an audit ledger) while
+ * the column silently stores a rounded value — a precision-loss bug that
+ * matches values in normal review.
+ */
+export class DecimalScaleError extends Error {
+  constructor(
+    readonly value: string,
+    readonly maxScale: number,
+    readonly actualScale: number,
+  ) {
+    super(
+      `Value "${value}" has ${actualScale} fractional digit(s), exceeding the maximum allowed scale of ${maxScale}`,
+    )
+    this.name = 'DecimalScaleError'
+  }
+}
+
+/**
+ * Thrown by {@link assertWithinNumericBounds} when a value's integer part
+ * has more digits than the target column's precision allows.
+ *
+ * Writing such a value to a Postgres `NUMERIC(p,s)` column raises a raw
+ * `22003 numeric_field_overflow` error at the database boundary. Checking
+ * this in the application layer lets the operation be rejected *before* any
+ * row lock or state mutation, with a typed, documented error instead of a
+ * driver-specific exception leaking out of the repository.
+ */
+export class DecimalOverflowError extends Error {
+  constructor(
+    readonly value: string,
+    readonly precision: number,
+    readonly scale: number,
+  ) {
+    super(
+      `Value "${value}" exceeds the maximum magnitude representable by NUMERIC(${precision},${scale})`,
+    )
+    this.name = 'DecimalOverflowError'
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -377,6 +424,74 @@ export function divideDecimals(
   const negative = pa.negative !== pb.negative
   const formatted = formatScaledInt(rounded, scale)
   return negative && rounded !== 0n ? `-${formatted}` : formatted
+}
+
+/**
+ * Validate that a decimal string is representable, exactly and without
+ * rounding, by a Postgres `NUMERIC(precision, scale)` column — the same
+ * bounds Postgres itself enforces for that column type.
+ *
+ * Two independent conditions are checked, each with its own error so
+ * callers (and tests) can distinguish "wrong shape" from "too big":
+ *
+ * 1. **Scale** — the value must not carry more fractional digits than
+ *    `scale`. Postgres does not error on this; it silently rounds, which is
+ *    exactly the kind of silent precision loss financial code must reject
+ *    explicitly instead.
+ * 2. **Overflow** — the value's integer part must fit within
+ *    `precision - scale` digits, matching Postgres's own
+ *    `22003 numeric_field_overflow` boundary. Checking it here lets the
+ *    caller reject the operation before acquiring any lock or writing any
+ *    state, with a typed error instead of a raw driver exception.
+ *
+ * This performs no rounding and no floating-point conversion; digit counts
+ * are computed directly from the decimal string.
+ *
+ * @param value     - Decimal string to validate (e.g. "10.50", "-3").
+ * @param precision - Total significant digits allowed by the column (> 0).
+ * @param scale     - Fractional digits allowed by the column (0 ≤ scale ≤ precision).
+ * @throws {Error}              if `value` is not a syntactically valid decimal string.
+ * @throws {DecimalScaleError}    if `value` has more than `scale` fractional digits.
+ * @throws {DecimalOverflowError} if `value`'s integer part exceeds `precision - scale` digits.
+ *
+ * @example
+ * assertWithinNumericBounds("1.5", 36, 18)              // ok
+ * assertWithinNumericBounds("0.0000000000000000001", 36, 18) // throws DecimalScaleError (19 > 18)
+ * assertWithinNumericBounds("9".repeat(19), 36, 18)     // throws DecimalOverflowError (19 > 18 int digits)
+ * assertWithinNumericBounds("0", 36, 18)                // ok (zero always fits)
+ */
+export function assertWithinNumericBounds(
+  value: string,
+  precision: number,
+  scale: number,
+): void {
+  if (!Number.isInteger(precision) || precision <= 0) {
+    throw new Error(`precision must be a positive integer, got: ${precision}`)
+  }
+  if (!Number.isInteger(scale) || scale < 0 || scale > precision) {
+    throw new Error(
+      `scale must be an integer in [0, precision], got: ${scale}`,
+    )
+  }
+
+  const { intStr, fracStr } = parseDecimalString(value)
+
+  if (fracStr.length > scale) {
+    throw new DecimalScaleError(value, scale, fracStr.length)
+  }
+
+  // Strip leading zeros before counting significant integer digits so that
+  // "0007" (4 chars) correctly counts as 1 digit, not 4 — and an integer
+  // part that is entirely zero ("0", "00", ...) counts as 0 digits, since
+  // Postgres does not charge precision for a value with no integer part
+  // (e.g. NUMERIC(1,1) legitimately holds "0.9").
+  const strippedIntStr = intStr.replace(/^0+/, '')
+  const significantIntDigits = strippedIntStr.length
+  const maxIntDigits = precision - scale
+
+  if (significantIntDigits > maxIntDigits) {
+    throw new DecimalOverflowError(value, precision, scale)
+  }
 }
 
 /**

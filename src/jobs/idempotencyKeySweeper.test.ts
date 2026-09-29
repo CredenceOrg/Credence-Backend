@@ -205,6 +205,114 @@ describe('IdempotencyKeySweeper', () => {
     })
   })
 
+  describe('TTL boundary semantics', () => {
+    /**
+     * Rather than pre-programming canned responses, this fake extracts the
+     * actual comparison operator (`<=` vs `<`) from the SQL the sweeper sends
+     * and applies it against real Date values. That keeps the test coupled
+     * to the production query: if the sweeper's expiry comparison regresses
+     * (e.g. `<=` narrowed to `<`), these boundary cases fail instead of
+     * silently passing against a re-implemented copy of the logic.
+     */
+    function createStatefulMockQueryable(seed: Array<{ key: string; expiresAt: Date }>): {
+      db: Queryable
+      remainingKeys: () => string[]
+    } {
+      const storage = new Map(seed.map((row) => [row.key, row.expiresAt]))
+
+      const isExpired = (sql: string, expiresAt: Date, now: Date): boolean => {
+        const operator = sql.match(/expires_at\s*(<=|<)\s*NOW\(\)/)?.[1]
+        if (!operator) throw new Error(`Could not find expiry comparison in query: ${sql}`)
+        return operator === '<=' ? expiresAt <= now : expiresAt < now
+      }
+
+      const db = {
+        query: vi.fn(async (sql: string, params?: unknown[]) => {
+          const now = new Date()
+
+          if (sql.includes('COUNT(*)')) {
+            const count = [...storage.values()].filter((expiresAt) => isExpired(sql, expiresAt, now)).length
+            return { rows: [{ count: String(count) }] }
+          }
+
+          if (sql.includes('DELETE FROM idempotency_keys')) {
+            const limit = (params?.[0] as number | undefined) ?? Number.POSITIVE_INFINITY
+            const expiredKeys = [...storage.entries()]
+              .filter(([, expiresAt]) => isExpired(sql, expiresAt, now))
+              .map(([key]) => key)
+              .slice(0, limit)
+
+            for (const key of expiredKeys) storage.delete(key)
+
+            return { rows: [], rowCount: expiredKeys.length }
+          }
+
+          return { rows: [], rowCount: 0 }
+        }),
+      } as unknown as Queryable
+
+      return { db, remainingKeys: () => [...storage.keys()] }
+    }
+
+    beforeEach(() => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2024-01-01T00:00:00.000Z'))
+    })
+
+    it('treats a key exactly at its expiry boundary as expired', async () => {
+      const now = new Date()
+      const { db, remainingKeys } = createStatefulMockQueryable([{ key: 'at-boundary', expiresAt: now }])
+
+      const result = await new IdempotencyKeySweeper(db, { logger }).run()
+
+      expect(result.expiredCount).toBe(1)
+      expect(result.deletedCount).toBe(1)
+      expect(remainingKeys()).not.toContain('at-boundary')
+    })
+
+    it('does not treat a key one millisecond before expiry as expired (no false positive)', async () => {
+      const now = new Date()
+      const notYetExpired = new Date(now.getTime() + 1)
+      const { db, remainingKeys } = createStatefulMockQueryable([
+        { key: 'not-yet-expired', expiresAt: notYetExpired },
+      ])
+
+      const result = await new IdempotencyKeySweeper(db, { logger }).run()
+
+      expect(result.expiredCount).toBe(0)
+      expect(result.deletedCount).toBe(0)
+      expect(remainingKeys()).toContain('not-yet-expired')
+    })
+
+    it('treats a key one millisecond past expiry as expired', async () => {
+      const now = new Date()
+      const justExpired = new Date(now.getTime() - 1)
+      const { db, remainingKeys } = createStatefulMockQueryable([{ key: 'just-expired', expiresAt: justExpired }])
+
+      const result = await new IdempotencyKeySweeper(db, { logger }).run()
+
+      expect(result.expiredCount).toBe(1)
+      expect(result.deletedCount).toBe(1)
+      expect(remainingKeys()).not.toContain('just-expired')
+    })
+
+    it('sweeps only expired keys out of a mixed batch, leaving unexpired keys untouched', async () => {
+      const now = new Date()
+      const { db, remainingKeys } = createStatefulMockQueryable([
+        { key: 'expired-well-before', expiresAt: new Date(now.getTime() - 1000) },
+        { key: 'expired-at-boundary', expiresAt: now },
+        { key: 'valid-one-ms-away', expiresAt: new Date(now.getTime() + 1) },
+        { key: 'valid-well-after', expiresAt: new Date(now.getTime() + 1000) },
+      ])
+
+      const result = await new IdempotencyKeySweeper(db, { logger }).run()
+
+      expect(result.expiredCount).toBe(2)
+      expect(result.deletedCount).toBe(2)
+      expect(remainingKeys().sort()).toEqual(['valid-one-ms-away', 'valid-well-after'])
+    })
+  })
+
   describe('isRunning', () => {
     it('should return true during run', async () => {
       const mockQuery = vi.fn().mockImplementation(() => 

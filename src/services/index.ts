@@ -13,3 +13,4 @@ export {
   createDiscardExportWriter,
   createNdjsonExportWriter,
 } from './exportService.js'
+export { BatchPayoutService } from './batchPayoutService.js'

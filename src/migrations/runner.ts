@@ -5,6 +5,7 @@
  * Wraps node-pg-migrate to provide a TypeScript-friendly API.
  */
 
+import pg from "pg";
 import { runner, Migration } from "node-pg-migrate";
 import {
   loadMigrationConfig,
@@ -12,6 +13,9 @@ import {
   MigrationConfig,
 } from "./config.js";
 import { analyzeMigration, PreflightResult } from "./guardrails.js";
+import { recordAppliedMigrationChecksums } from "./checksumValidation.js";
+
+const { Pool } = pg;
 
 type RunnerOptions = Parameters<typeof runner>[0] & { ignorePattern?: string };
 
@@ -159,6 +163,30 @@ export async function runMigration(
         error: (msg: string) => console.error(msg),
       },
     } as RunnerOptions);
+
+    if (options.direction === "up" && applied.length > 0) {
+      const checksumPool = new Pool({ connectionString: config.databaseUrl });
+      try {
+        await recordAppliedMigrationChecksums(
+          checksumPool,
+          config.migrationsDir,
+          applied,
+        );
+      } catch (checksumError) {
+        checksumPool.end().catch(() => undefined);
+        const message =
+          checksumError instanceof Error
+            ? checksumError.message
+            : String(checksumError);
+        return {
+          success: false,
+          applied,
+          error: `Migration applied but checksum recording failed: ${message}`,
+          preflight: preflightResult,
+        };
+      }
+      await checksumPool.end();
+    }
 
     return {
       success: true,

@@ -203,9 +203,13 @@ Both commands target `src/` and respect the ignore patterns in `eslint.config.js
 | GET    | `/api/verification/:address` | Verification proof (stub)                   |
 | GET    | `/api/analytics/summary`     | Aggregated analytics from materialized view |
 | GET    | `/api/reports/top-talkers`   | Top N tenants by request count in last hour |
+| GET    | `/api/admin/system/backup-status` | Admin endpoint: Returns the backup job status (stale if > 24h) |
+| POST   | `/api/payouts`                    | Create a payout (settlement). Idempotent via `Idempotency-Key` header — see [docs/IDEMPOTENCY.md](docs/IDEMPOTENCY.md). Requires `payouts:write` scope. |
 
 
 Invalid input returns **400** with `{ "error": "Validation failed", "details": [{ "path", "message" }] }`. See [docs/VALIDATION.md](docs/VALIDATION.md).
+
+Every API error carries a stable error code and an HTTP status. The full reference with remediation for each status and code: **[docs/HTTP_STATUS_REFERENCE.md](docs/HTTP_STATUS_REFERENCE.md)** and **[docs/API_ERROR_TAXONOMY.md](docs/API_ERROR_TAXONOMY.md)**.
 
 List endpoints support offset/page and cursor-based pagination. See **[docs/PAGINATION_CONTRACT.md](docs/PAGINATION_CONTRACT.md)** for cursor format, page-size limits, and ordering guarantees.
 
@@ -213,7 +217,8 @@ Full request/response documentation, cURL examples, and import instructions:
 **[docs/api.md](docs/api.md)**
 
 **API versioning & stability policy:** **[docs/API_STABILITY.md](docs/API_STABILITY.md)**  
-**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**
+**API deprecation policy:** **[docs/DEPRECATION_POLICY.md](docs/DEPRECATION_POLICY.md)**  
+**API change log & format guide:** **[docs/API_CHANGELOG.md](docs/API_CHANGELOG.md)**
 
 ### OpenAPI spec
 
@@ -294,6 +299,7 @@ We rely on structured logging to maintain a consistent schema and protect PII. S
 
 Comprehensive monitoring with Prometheus and Grafana is available.
 
+- **[docs/METRICS_DASHBOARDS.md](docs/METRICS_DASHBOARDS.md)** — operator's reference mapping the Grafana dashboard panels directly to Service Level Indicators (SLIs) and Objectives (SLOs).
 - **[docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)** — operator's index of every Prometheus metric, the Grafana dashboard panel for each, the PromQL behind every alert, and runnable triage queries. **Start here if you are operating the service.**
 - **[docs/monitoring.md](docs/monitoring.md)** — full setup, instrumentation, and deployment guide for Prometheus + Grafana.
 - **[docs/SLA.md](docs/SLA.md)** — uptime commitments and per-endpoint SLO/SLI targets for downstream integrators.
@@ -352,6 +358,8 @@ The backend implements a comprehensive timeout and retry strategy for all extern
 - Operational runbook (symptom → diagnosis → tuning)
 
 For diagnosing a backed-up outbox event queue specifically, see **[docs/RUNBOOK_QUEUE_LAG.md](docs/RUNBOOK_QUEUE_LAG.md)**.
+For crash recovery across background workers, leases, retries, and shutdown, see
+**[docs/BACKGROUND_JOB_RECOVERY.md](docs/BACKGROUND_JOB_RECOVERY.md)**.
 
 ## Horizon Listener
 
@@ -364,6 +372,8 @@ The service includes a Horizon withdrawal events listener that:
 - **Handles errors gracefully** with automatic retry and recovery
 
 See [docs/horizon-listener.md](./docs/horizon-listener.md) for detailed documentation.
+
+Every committed Horizon transition also writes a versioned, correlation-identified record to the `horizon_events` ledger inside the same transaction as the state mutation, and a deterministic parity verifier reconciles event payloads against final state. See [docs/horizon-events-parity.md](./docs/horizon-events-parity.md) for the design, invariants, failure behavior, and compatibility notes.
 
 ## Caching
 
@@ -378,11 +388,14 @@ The service includes a Redis-based caching layer with:
 
 See [docs/caching.md](./docs/caching.md) for detailed documentation, and
 [docs/CACHE_INVENTORY.md](./docs/CACHE_INVENTORY.md) for the full list of
-cache namespaces and their TTLs.
+cache namespaces and their TTLs. For the mutation-to-invalidation map, see
+[docs/CACHE_INVALIDATION_TRIGGERS.md](./docs/CACHE_INVALIDATION_TRIGGERS.md).
 
-## Developer SDK
+## API Clients & SDKs
 
 A TypeScript/JavaScript SDK is available at `src/sdk/` for programmatic access to the API. See [docs/sdk.md](docs/sdk.md) for full documentation.
+
+For a complete list of recommended client libraries and guidance on generating clients for other languages, see **docs/API_CLIENTS.md**.
 
 ## Configuration
 
@@ -551,11 +564,13 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
 
 ### Environment Variables
 
-| Variable            | Description                        | Default        |
-| ------------------- | ---------------------------------- | -------------- |
-| `DATABASE_URL`      | PostgreSQL connection string       | Required       |
-| `MIGRATIONS_TABLE`  | Table name for tracking migrations | `pgmigrations` |
-| `MIGRATIONS_SCHEMA` | Schema for migrations table        | `public`       |
+| Variable                       | Description                                      | Default        |
+| ------------------------------ | ------------------------------------------------ | -------------- |
+| `DATABASE_URL`                 | PostgreSQL connection string                     | Required       |
+| `MIGRATIONS_TABLE`             | Table name for tracking migrations               | `pgmigrations` |
+| `MIGRATIONS_SCHEMA`            | Schema for migrations table                      | `public`       |
+| `MIGRATION_CHECKSUM_VALIDATE`  | Reject startup when applied migrations drift       | enabled        |
+| `MIGRATION_CHECKSUM_BOOTSTRAP` | Seed missing checksum records on first startup   | enabled        |
 
 ### CI/CD Integration
 
@@ -646,6 +661,7 @@ For observability, request tracing, metrics, and structured logging guidelines:
 - **Structured Logging Policy**: See [docs/LOGGING.md](docs/LOGGING.md) for logs, formats, and conventions.
 - **Log Retention**: See [docs/LOG_RETENTION.md](docs/LOG_RETENTION.md) for how long each log type is kept and where.
 - **Request Tracing & Metrics**: See [docs/observability.md](docs/observability.md) for request tracing, PII redaction rules, and the `req.log` request-scoped logger.
+- **Correlation ID Middleware**: See `src/middleware/correlationId.ts` — every request receives an `X-Correlation-ID` (propagated or auto-generated) for distributed tracing across services.
 
 ## Security
 
@@ -653,6 +669,7 @@ For security policies, reporting, and architecture documentation:
 - **Security Policy & Vulnerability Reporting**: See [SECURITY.md](SECURITY.md) for details on supported versions and how to report a vulnerability.
 - **Dependency Upgrades**: See [docs/dependency-upgrades.md](docs/dependency-upgrades.md) for how aggressively we upgrade deps and our review process.
 - **Security Architecture**: See [docs/security.md](docs/security.md) for details on the API key scope model, encrypted evidence storage, rate limiting, and dependency scanning SLAs.
+- **API Key Scopes**: See [docs/SCOPES.md](docs/SCOPES.md) for every available scope, which endpoints each unlocks, and how to request the right set for your integration.
 - **Canonical JWT Claims Reference**: See [docs/JWT_CLAIMS.md](docs/JWT_CLAIMS.md) for standard, custom, and impersonation JWT claims, headers, and consumer middleware.
 - **Rate Limiting Support & Operations**: See [docs/rate-limiting.md](docs/rate-limiting.md) for details on default tier rate limits, environment configuration, troubleshooting, and support FAQs.
 - **Rate Limit Response Headers**: See [docs/RATE_LIMIT_HEADERS.md](docs/RATE_LIMIT_HEADERS.md) for header semantics (`X-RateLimit-*`, `Retry-After`), calculation rules, and client integration examples.

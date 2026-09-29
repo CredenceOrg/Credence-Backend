@@ -24,6 +24,12 @@ export interface WebhookPayloadData {
  */
 export interface WebhookEmitOptions {
   eventId?: string
+  /**
+   * Correlation id of the request (or async job/outbox event) that caused
+   * this webhook to be emitted. Forwarded to the delivery layer so it can
+   * be sent as the `X-Correlation-Id` header and tagged onto delivery logs.
+   */
+  correlationId?: string
 }
 
 /**

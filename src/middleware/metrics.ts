@@ -11,8 +11,18 @@
 
 import { Request, Response, NextFunction } from 'express'
 import client from 'prom-client'
-import { httpRequestDurationHistogram, httpRequestStatusTotal, normalizeRoute, registerLatencyMetrics } from '../observability/latencyMetrics.js'
-import { registerPoolMetrics, registerPreparedStatementCacheMetrics, registerRpcLatencyMetrics } from '../observability/index.js'
+import {
+  httpRequestDurationHistogram,
+  httpRequestStatusTotal,
+  normalizeRoute,
+  getRouteTemplate,
+  registerLatencyMetrics,
+} from '../observability/latencyMetrics.js'
+import {
+  registerPoolMetrics,
+  registerRpcLatencyMetrics,
+  registerPreparedStatementCacheMetrics,
+} from '../observability/index.js'
 import { registerAdvisoryLockMetrics } from '../jobs/advisoryLockMonitor.js'
 import {
   pool,
@@ -258,6 +268,18 @@ export function recordJwksRequest(cache: 'hit' | 'miss', status: number): void {
 }
 
 // ============================================================================
+// Redis Cache Metrics
+// ============================================================================
+
+export const redisKeySizeBytes = new client.Histogram({
+  name: 'redis_key_size_bytes',
+  help: 'Size in bytes of values written to Redis cache keys, labeled by cache namespace. Helps detect a single endpoint ballooning a key (e.g. a hash/JSON blob) into a mega-key.',
+  labelNames: ['namespace'],
+  buckets: [1024, 4096, 16384, 65536, 262144, 1048576, 4194304], // 1KB to 4MB
+  registers: [register]
+})
+
+// ============================================================================
 // Memory/OOM Metrics
 // ============================================================================
 
@@ -283,13 +305,13 @@ export const oomEventsTotal = new client.Counter({
 export function metricsMiddleware(req: Request, res: Response, next: NextFunction) {
   // Initialize a fresh metrics namespace for each request to avoid leakage
   (req as any).metrics = {};
-  const start = Date.now()
   const hrStart = process.hrtime.bigint()
   
   res.on('finish', () => {
-    const duration = (Date.now() - start) / 1000
     const durationSeconds = Number(process.hrtime.bigint() - hrStart) / 1e9
-    const route = normalizeRoute(req.path, req.route?.path)
+    // Use getRouteTemplate which correctly joins req.baseUrl + req.route.path
+    // so sub-router mounted routes produce fully-qualified templates.
+    const route = getRouteTemplate(req)
     const statusClass = `${Math.floor(res.statusCode / 100)}xx`
     
     httpRequestsTotal.inc({
@@ -513,4 +535,18 @@ export function recordWebhookDlqSize(size: number) {
  */
 export function recordOomEvent(): void {
   oomEventsTotal.inc()
+}
+
+/**
+ * Record the size (in bytes) of a value written to a Redis cache key.
+ *
+ * Usage:
+ * ```typescript
+ * import { recordRedisKeySize } from './middleware/metrics.js'
+ *
+ * recordRedisKeySize('attestation', Buffer.byteLength(serialized, 'utf8'))
+ * ```
+ */
+export function recordRedisKeySize(namespace: string, bytes: number): void {
+  redisKeySizeBytes.observe({ namespace }, bytes)
 }

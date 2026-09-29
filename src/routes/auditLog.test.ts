@@ -44,7 +44,7 @@ function buildApp(service: Partial<AuditLogService>) {
   const app = express()
   // Attach a minimal req.user so requireMinRole passes
   app.use((req: any, _res, next) => {
-    req.user = { id: 'admin-1', address: 'GADMIN', role: 'admin' }
+    req.user = { id: 'admin-1', address: 'GADMIN', role: 'admin', tenantId: 'tenant-1' }
     next()
   })
   app.use('/api/audit', createAuditLogRouter(service as AuditLogService))
@@ -92,7 +92,7 @@ describe('GET /api/audit/export', () => {
     expect(res.text.trim()).toBe('')
   })
 
-  it('passes from/to query params to the service', async () => {
+  it('passes from/to query params and the caller tenant to the service', async () => {
     service.exportLogsStream.mockReturnValue(makeStream([]))
 
     await request(buildApp(service))
@@ -101,9 +101,44 @@ describe('GET /api/audit/export', () => {
     expect(service.exportLogsStream).toHaveBeenCalledWith(
       new Date('2024-01-01T00:00:00Z'),
       new Date('2024-03-30T23:59:59Z'),
-      undefined,
-      { allowSuperScope: true },
+      'tenant-1',
     )
+  })
+
+  it('returns 400 when caller has no tenant context', async () => {
+    service.exportLogsStream.mockReturnValue(makeStream([]))
+
+    const app = express()
+    app.use((req: any, _res, next) => {
+      req.user = { id: 'admin-1', address: 'GADMIN', role: 'admin' }
+      next()
+    })
+    app.use('/api/audit', createAuditLogRouter(service as AuditLogService))
+    app.use(errorHandler)
+
+    const res = await request(app).get('/api/audit/export')
+
+    expect(res.status).toBe(400)
+    expect(res.body.error).toBe('MissingTenantContext')
+    expect(service.exportLogsStream).not.toHaveBeenCalled()
+  })
+
+  it('does not leak logs from other tenants when exporting', async () => {
+    service.exportLogsStream.mockReturnValue(
+      makeStream([makeEntry({ id: 'own-tenant-entry' })]),
+    )
+
+    const res = await request(buildApp(service)).get('/api/audit/export')
+
+    expect(res.status).toBe(200)
+    expect(service.exportLogsStream).toHaveBeenCalledWith(
+      expect.any(Date),
+      expect.any(Date),
+      'tenant-1',
+    )
+    // Confirm no super-scope / cross-tenant bypass option is ever passed.
+    const callArgs = service.exportLogsStream.mock.calls[0]
+    expect(callArgs).toHaveLength(3)
   })
 
   it('returns 400 for invalid date params', async () => {

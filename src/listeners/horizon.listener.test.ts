@@ -8,6 +8,7 @@ vi.mock('../db/repository.js', () => ({
   dbRepository: {
     upsertNode: vi.fn(),
     updateNodeStatus: vi.fn(),
+    getNodeStatus: vi.fn(),
   },
 }));
 
@@ -43,6 +44,9 @@ describe('HorizonListener Logic', () => {
         penalty: '500',
       };
 
+      // The node must be known and in a state from which 'slashed' is a
+      // legal transition (read-validate-write enforcement).
+      vi.mocked(dbRepository.getNodeStatus).mockResolvedValue('active');
       vi.mocked(dbRepository.updateNodeStatus).mockResolvedValue(true);
 
       await listener.handleEvent(mockSlashEvent);
@@ -57,6 +61,9 @@ describe('HorizonListener Logic', () => {
         nodeId: 'G_VALID_NODE_123',
       };
 
+      // The node must be known and in a state from which 'withdrawn' is a
+      // legal transition (read-validate-write enforcement).
+      vi.mocked(dbRepository.getNodeStatus).mockResolvedValue('active');
       vi.mocked(dbRepository.updateNodeStatus).mockResolvedValue(true);
 
       await listener.handleEvent(mockWithdrawalEvent);

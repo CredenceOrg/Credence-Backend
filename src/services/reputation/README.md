@@ -21,6 +21,14 @@ REPUTATION_ATTESTATION_SCORE_MAX=30
 REPUTATION_ONE_ETH_WEI=1000000000000000000  # 1 ETH in wei
 REPUTATION_MAX_DURATION_DAYS=365             # Days for full duration score
 REPUTATION_MAX_ATTESTATION_COUNT=5           # Attestations for full score
+
+# Module-level weight parameters
+REPUTATION_BOND_MULTIPLIER=0.01              # Bond amount multiplier
+REPUTATION_MAX_BOND_SCORE=1000               # Bond score cap
+REPUTATION_ATTESTATION_MULTIPLIER=0.1        # Attestation weight multiplier
+REPUTATION_MAX_ATTESTATION_WEIGHT=100        # Attestation score cap
+REPUTATION_MAX_DURATION_MS=31536000000       # Max duration for full time weight (1 year in ms)
+REPUTATION_TIME_DECAY_RATE=0.5               # Exponential decay rate for time weight
 ```
 
 ### Configuration Validation
@@ -28,6 +36,7 @@ REPUTATION_MAX_ATTESTATION_COUNT=5           # Attestations for full score
 - All score maxima are validated to be between 0 and 100
 - `REPUTATION_ONE_ETH_WEI` must be a valid BigInt string
 - Duration and attestation count must be positive integers
+- Module weight parameters have sensible defaults and runtime validation
 - Invalid configuration will cause the application to fail at startup with a clear error message
 
 ### Tuning the Model
@@ -46,6 +55,13 @@ REPUTATION_MODEL_VERSION=1.1.0
 REPUTATION_BOND_SCORE_MAX=30
 REPUTATION_DURATION_SCORE_MAX=20
 REPUTATION_ATTESTATION_SCORE_MAX=50
+```
+
+**Override module weight defaults via config:**
+```bash
+REPUTATION_BOND_MULTIPLIER=0.02
+REPUTATION_MAX_BOND_SCORE=2000
+REPUTATION_ATTESTATION_MULTIPLIER=0.2
 ```
 
 ## Formula
@@ -175,20 +191,19 @@ interface ReputationScore {
 }
 ```
 
-## Constants
+## Default Constants
+
+The scoring functions have built-in defaults. All values can be overridden at runtime via `ReputationModuleConfig`:
 
 ```typescript
-// Bond Score
-const BOND_MULTIPLIER = 0.01
-const MAX_BOND_SCORE = 1000
-
-// Attestation Score
-const ATTESTATION_MULTIPLIER = 0.1
-const MAX_ATTESTATION_WEIGHT = 100
-
-// Time Weight
-const DECAY_RATE = 0.5
-const MAX_DURATION_MS = 365 * 24 * 60 * 60 * 1000 // 1 year
+const DEFAULT_CONFIG: ReputationModuleConfig = {
+  bondMultiplier: 0.01,
+  maxBondScore: 1000,
+  attestationMultiplier: 0.1,
+  maxAttestationWeight: 100,
+  maxDurationMs: 365 * 24 * 60 * 60 * 1000, // 1 year in ms
+  decayRate: 0.5,
+}
 ```
 
 ## Examples
@@ -351,19 +366,19 @@ See [TEST_DOCUMENTATION.md](./TEST_DOCUMENTATION.md) for detailed test scenarios
 
 ### Functions
 
-#### `calculateReputationScore(input: ReputationInput): ReputationScore`
+#### `calculateReputationScore(input: ReputationInput, identityId?: string, config?: ReputationModuleConfig): ReputationScore`
 Calculate comprehensive reputation score with all components.
 
-#### `calculateReputationScoreWithCustomDuration(input: ReputationInput, maxDuration: number): ReputationScore`
+#### `calculateReputationScoreWithCustomDuration(input: ReputationInput, maxDuration: number, config?: ReputationModuleConfig): ReputationScore`
 Calculate reputation score with custom maximum duration for time weight.
 
-#### `calculateBondScore(bond: BondData): number`
+#### `calculateBondScore(bond: BondData, config?: ReputationModuleConfig): number`
 Calculate bond score component only.
 
-#### `calculateAttestationScore(attestations: Attestation[]): number`
+#### `calculateAttestationScore(attestations: Attestation[], config?: ReputationModuleConfig): number`
 Calculate attestation score component only.
 
-#### `calculateTimeWeight(bondStart: number, currentTime: number, maxDuration?: number): number`
+#### `calculateTimeWeight(bondStart: number, currentTime: number, maxDuration?: number, config?: ReputationModuleConfig): number`
 Calculate time weight component only.
 
 ### Getters

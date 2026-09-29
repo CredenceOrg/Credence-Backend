@@ -160,3 +160,8 @@ The histogram observation in this PR is **per-domain accurate**:
 | `outbox` | `markFailed(...)` returns `{ status, retryCount }` — the SQL `RETURNING retry_count` clause hands back the *final* count after `retry_count + 1` and the dead-letter transition. The publisher takes that value directly. Operators reading the `outbox` buckets see the actual budget consumed, not a synthetic `1`. |
 | `notification` | The `attempts` parameter on `IdempotentEmailDeliveryService.routeToDlq()` is the end-of-cycle attempt count from the provider-failover loop. Whatever value survived the bounded failover is exactly what the histogram samples. |
 | `webhook` | `WebhookDeliveryResult.attempts` is REQUIRED in the type. The `WebhookService.emit()` flow reads it once per failed delivery and forwards it; the defensive `?? 1` is there only because earlier (pre-type-strictness) callers have been observed to skip it. |
+
+## See also
+
+- [WEBHOOK_LAG_DASHBOARD.md](WEBHOOK_LAG_DASHBOARD.md) — compact webhook-only Grafana row for oldest queued age + success rate (`webhook_queued_oldest_age_seconds`, `webhook_delivery_outcome_total`). Complements the cross-domain `jobs_*` view above; does not replace it.
+- [RUNBOOK_QUEUE_LAG.md](RUNBOOK_QUEUE_LAG.md) — outbox backlog triage when age rises without a matching failure spike.

@@ -14,7 +14,10 @@ import {
   subtractDecimals,
   divideDecimals,
   compareDecimals,
+  assertWithinNumericBounds,
   DivisionByZeroError,
+  DecimalScaleError,
+  DecimalOverflowError,
   RoundingMode,
   DEFAULT_ROUNDING_MODE,
 } from './decimalMath.js'
@@ -926,6 +929,158 @@ describe('decimalMath', () => {
         ),
         { numRuns: 200 },
       )
+    })
+  })
+
+  describe('assertWithinNumericBounds', () => {
+    // Independent oracle: recompute the same bound using only string
+    // splitting and BigInt comparisons, deliberately not reusing any of
+    // decimalMath's own parsing helpers, so a bug shared between the
+    // implementation and its own internals wouldn't also hide here.
+    function oracleWithinBounds(
+      value: string,
+      precision: number,
+      scale: number,
+    ): { validScale: boolean; validMagnitude: boolean } {
+      const trimmed = value.trim()
+      const unsigned = trimmed.startsWith('-') ? trimmed.slice(1) : trimmed
+      const [intPart, fracPart = ''] = unsigned.split('.')
+      const validScale = fracPart.length <= scale
+      const maxIntDigits = precision - scale
+      const normalizedInt = intPart.replace(/^0+(?=\d)/, '') || '0'
+      const validMagnitude =
+        normalizedInt === '0' || normalizedInt.length <= maxIntDigits
+      return { validScale, validMagnitude }
+    }
+
+    // NUMERIC(36, 18) mirrors the wallets.balance column this guards in
+    // production; NUMERIC(20, 7) mirrors bonds.amount.
+    const columnShapes: Array<[number, number]> = [
+      [36, 18],
+      [20, 7],
+      [5, 0],
+      [1, 0],
+      [1, 1],
+    ]
+
+    describe.each(columnShapes)(
+      'NUMERIC(%i, %i) boundary table',
+      (precision, scale) => {
+        const maxIntDigits = precision - scale
+        const maxInt =
+          maxIntDigits > 0 ? '9'.repeat(maxIntDigits) : '0'
+        const maxFrac = scale > 0 ? '9'.repeat(scale) : ''
+        const maxValue = scale > 0 ? `${maxInt}.${maxFrac}` : maxInt
+
+        it('accepts zero', () => {
+          expect(() => assertWithinNumericBounds('0', precision, scale)).not.toThrow()
+        })
+
+        it('accepts the exact maximum representable value', () => {
+          expect(() =>
+            assertWithinNumericBounds(maxValue, precision, scale),
+          ).not.toThrow()
+        })
+
+        it('accepts the exact minimum non-zero representable value', () => {
+          const minValue = scale > 0 ? `0.${'0'.repeat(scale - 1)}1` : '1'
+          expect(() =>
+            assertWithinNumericBounds(minValue, precision, scale),
+          ).not.toThrow()
+        })
+
+        it('accepts a negative value at the maximum magnitude', () => {
+          expect(() =>
+            assertWithinNumericBounds(`-${maxValue}`, precision, scale),
+          ).not.toThrow()
+        })
+
+        if (maxIntDigits > 0) {
+          it('rejects a value one digit past the integer-digit maximum (overflow)', () => {
+            const overflowInt = '1' + '0'.repeat(maxIntDigits) // one digit longer
+            expect(() =>
+              assertWithinNumericBounds(overflowInt, precision, scale),
+            ).toThrow(DecimalOverflowError)
+          })
+
+          it('rejects near-overflow: max value plus the smallest possible unit', () => {
+            const overflowInt = (BigInt(maxInt) + 1n).toString()
+            expect(() =>
+              assertWithinNumericBounds(overflowInt, precision, scale),
+            ).toThrow(DecimalOverflowError)
+          })
+        }
+
+        if (scale > 0) {
+          it('rejects a fractional value with one digit past the scale', () => {
+            const tooFine = `0.${'0'.repeat(scale)}1`
+            expect(() =>
+              assertWithinNumericBounds(tooFine, precision, scale),
+            ).toThrow(DecimalScaleError)
+          })
+
+          it('accepts a fractional value with exactly the max scale (conversion boundary)', () => {
+            const exact = `0.${'1'.repeat(scale)}`
+            expect(() =>
+              assertWithinNumericBounds(exact, precision, scale),
+            ).not.toThrow()
+          })
+        }
+      },
+    )
+
+    it('agrees with an independent oracle across random values and column shapes', () => {
+      fc.assert(
+        fc.property(
+          fc.integer({ min: 1, max: 40 }),
+          fc.integer({ min: 0, max: 40 }),
+          fc.boolean(),
+          fc.string({ minLength: 1, maxLength: 45 }).filter((s) => /^\d+$/.test(s)),
+          fc.string({ minLength: 0, maxLength: 45 }).filter((s) => /^\d*$/.test(s)),
+          (precisionRaw, scaleRaw, negative, intDigits, fracDigits) => {
+            const precision = precisionRaw + scaleRaw // ensure precision >= scale
+            const scale = scaleRaw
+            const value = `${negative && intDigits !== '0' ? '-' : ''}${intDigits}${
+              fracDigits.length > 0 ? `.${fracDigits}` : ''
+            }`
+
+            const { validScale, validMagnitude } = oracleWithinBounds(
+              value,
+              precision,
+              scale,
+            )
+
+            if (validScale && validMagnitude) {
+              expect(() =>
+                assertWithinNumericBounds(value, precision, scale),
+              ).not.toThrow()
+            } else if (!validScale) {
+              expect(() =>
+                assertWithinNumericBounds(value, precision, scale),
+              ).toThrow(DecimalScaleError)
+            } else {
+              expect(() =>
+                assertWithinNumericBounds(value, precision, scale),
+              ).toThrow(DecimalOverflowError)
+            }
+          },
+        ),
+        { numRuns: 500 },
+      )
+    })
+
+    it('rejects a malformed value before ever reaching the bounds check', () => {
+      expect(() => assertWithinNumericBounds('abc', 36, 18)).toThrow()
+      expect(() => assertWithinNumericBounds('1.2.3', 36, 18)).toThrow()
+      expect(() => assertWithinNumericBounds('', 36, 18)).toThrow()
+    })
+
+    it('rejects an invalid precision/scale configuration itself', () => {
+      expect(() => assertWithinNumericBounds('1', 0, 0)).toThrow()
+      expect(() => assertWithinNumericBounds('1', -1, 0)).toThrow()
+      expect(() => assertWithinNumericBounds('1', 5, -1)).toThrow()
+      expect(() => assertWithinNumericBounds('1', 5, 6)).toThrow()
+      expect(() => assertWithinNumericBounds('1', 5.5, 0)).toThrow()
     })
   })
 })

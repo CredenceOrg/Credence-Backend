@@ -450,6 +450,11 @@ The Credence Backend dashboard (`monitoring/grafana/dashboard.json`) provides co
    - Batch size distribution
    - Operation duration (p95)
 
+4. **Webhook delivery lag (compact summary)**
+   - Oldest queued webhook age and 5m success rate
+   - Spec + PromQL: [WEBHOOK_LAG_DASHBOARD.md](WEBHOOK_LAG_DASHBOARD.md)
+   - Code: `src/metrics/webhookLagDashboard.ts`
+
 ### Importing the Dashboard
 
 #### Method 1: Grafana UI

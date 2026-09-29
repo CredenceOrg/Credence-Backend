@@ -256,6 +256,19 @@ export const envSchema = z.object({
     .default('3600000')
     .transform(Number)
     .pipe(z.number().int().min(60000)),
+  OUTBOX_RETRY_MAX_ATTEMPTS: z
+    .string()
+    .default('5')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  OUTBOX_RETRY_INITIAL_DELAY_MS: z
+    .string()
+    .default('200')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  QUARANTINE_PROCESSOR_CRON: z
+    .string()
+    .default('*/1 * * * *'),
 
   // Outbox worker leadership lease (advisory-lock based)
   OUTBOX_LEADER_LEASE_ENABLED: z
@@ -480,6 +493,38 @@ export const envSchema = z.object({
     .default('5')
     .transform(Number)
     .pipe(z.number().int().min(1)),
+
+  // Reputation module (snapshot/persisted) scoring weights
+  REPUTATION_BOND_MULTIPLIER: z
+    .string()
+    .default('0.01')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_BOND_SCORE: z
+    .string()
+    .default('1000')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_ATTESTATION_MULTIPLIER: z
+    .string()
+    .default('0.1')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_ATTESTATION_WEIGHT: z
+    .string()
+    .default('100')
+    .transform(Number)
+    .pipe(z.number().min(0)),
+  REPUTATION_MAX_DURATION_MS: z
+    .string()
+    .default('31536000000')
+    .transform(Number)
+    .pipe(z.number().int().min(1)),
+  REPUTATION_TIME_DECAY_RATE: z
+    .string()
+    .default('0.5')
+    .transform(Number)
+    .pipe(z.number().min(0).max(10)),
   SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: z
     .string()
     .default('5')
@@ -530,6 +575,16 @@ export const envSchema = z.object({
     .default('90')
     .transform(Number)
     .pipe(z.number().int().min(1).max(3650)),
+
+  /**
+   * Maximum rows allowed in a single authenticated data export.
+   * Requests that would exceed this are rejected before streaming starts.
+   */
+  EXPORT_MAX_ROWS: z
+    .string()
+    .default('100000')
+    .transform(Number)
+    .pipe(z.number().int().min(1).max(10_000_000)),
 
   // Report generation
   REPORT_MAX_CONCURRENT_JOBS_PER_ORG: z
@@ -590,6 +645,39 @@ export const envSchema = z.object({
     .default('1024')
     .transform(Number)
     .pipe(z.number().int().min(0).max(10485760)),
+}).superRefine((data, ctx) => {
+  if (data.NODE_ENV === 'production' && data.CORS_ORIGIN === '*') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['CORS_ORIGIN'],
+      message: 'Wildcard CORS origin (*) is prohibited in production environment',
+    })
+  }
+
+  // Security guard: explicitly setting fail-open in production silently
+  // disables rate limiting when Redis is unavailable.  This check catches
+  // the misconfiguration at startup before it can be exploited.
+  if (data.NODE_ENV === 'production' && process.env.RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables rate limiting when Redis is unavailable — exposing the API to abuse. ' +
+        'Remove RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
+
+  if (data.NODE_ENV === 'production' && process.env.AUTH_RATE_LIMIT_FAIL_OPEN === 'true') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['AUTH_RATE_LIMIT_FAIL_OPEN'],
+      message:
+        'AUTH_RATE_LIMIT_FAIL_OPEN is explicitly set to "true" in production. ' +
+        'This disables auth rate limiting when Redis is unavailable. ' +
+        'Remove AUTH_RATE_LIMIT_FAIL_OPEN or set it to "false".',
+    })
+  }
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -730,6 +818,12 @@ export interface Config {
     oneEthWei: bigint
     maxDurationDays: number
     maxAttestationCount: number
+    bondMultiplier: number
+    maxBondScore: number
+    attestationMultiplier: number
+    maxAttestationWeight: number
+    maxDurationMs: number
+    decayRate: number
   }
   sorobanCircuitBreaker: {
     failureThreshold: number
@@ -750,6 +844,10 @@ export interface Config {
   }
   auditLog: {
     exportMaxWindowDays: number
+  }
+  export: {
+    /** Max rows per authenticated export; oversized requests are rejected early. */
+    maxRows: number
   }
   reports: {
     maxConcurrentJobsPerOrg: number
@@ -989,6 +1087,12 @@ function mapEnvToConfig(env: Env): Config {
       oneEthWei: BigInt(env.REPUTATION_ONE_ETH_WEI),
       maxDurationDays: env.REPUTATION_MAX_DURATION_DAYS,
       maxAttestationCount: env.REPUTATION_MAX_ATTESTATION_COUNT,
+      bondMultiplier: env.REPUTATION_BOND_MULTIPLIER,
+      maxBondScore: env.REPUTATION_MAX_BOND_SCORE,
+      attestationMultiplier: env.REPUTATION_ATTESTATION_MULTIPLIER,
+      maxAttestationWeight: env.REPUTATION_MAX_ATTESTATION_WEIGHT,
+      maxDurationMs: env.REPUTATION_MAX_DURATION_MS,
+      decayRate: env.REPUTATION_TIME_DECAY_RATE,
     },
     trustScoreCache: {
       ttl: env.TRUST_SCORE_CACHE_TTL,
@@ -1013,6 +1117,9 @@ function mapEnvToConfig(env: Env): Config {
     },
     auditLog: {
       exportMaxWindowDays: env.AUDIT_EXPORT_MAX_WINDOW_DAYS,
+    },
+    export: {
+      maxRows: env.EXPORT_MAX_ROWS,
     },
     reports: {
       maxConcurrentJobsPerOrg: env.REPORT_MAX_CONCURRENT_JOBS_PER_ORG,

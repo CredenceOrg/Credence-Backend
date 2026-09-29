@@ -99,4 +99,28 @@ describe('AttestationEventListener - poison message routing', () => {
     expect(captureFailure).not.toHaveBeenCalled()
     expect(listener.getStats().eventsProcessed).toBe(1)
   })
+
+  it('loads a durable cursor and checkpoints only after processing succeeds', async () => {
+    const store = makeStore()
+    const validEvent: AttestationEvent = {
+      id: 'evt-durable', pagingToken: 'pt-next', type: 'add', subject: 'GSUBJECT',
+      verifier: 'GVERIFIER', weight: 80, claim: 'trusted',
+      createdAt: new Date().toISOString(), transactionHash: 'tx-durable',
+    }
+    const cursorRepository = {
+      findByStreamName: vi.fn().mockResolvedValue({ pagingToken: 'pt-saved' }),
+      upsert: vi.fn().mockResolvedValue(undefined),
+    }
+    const fetchEvents = vi.fn().mockResolvedValue([validEvent])
+    listener = new AttestationEventListener(
+      store, fetchEvents, { captureFailure: vi.fn().mockResolvedValue(undefined) },
+      { pollingInterval: 60_000, cursorRepository },
+    )
+
+    await listener.start()
+
+    expect(fetchEvents).toHaveBeenCalledWith('pt-saved')
+    expect(cursorRepository.upsert).toHaveBeenCalledWith({ streamName: 'attestation', pagingToken: 'pt-next' })
+    expect(listener.getStats().lastCursor).toBe('pt-next')
+  })
 })

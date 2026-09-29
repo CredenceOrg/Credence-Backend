@@ -1,7 +1,8 @@
-import type { RetentionConfig } from '../config/retention.js'
+import { type RetentionConfig, getEffectiveEntityTtl } from '../config/retention.js'
 import { RetentionRepository } from '../repositories/retentionRepository.js'
 import type { Queryable } from '../db/repositories/queryable.js'
 import type { EvidenceStorageService } from '../services/evidence/storage.js'
+import type { AuditLogService } from '../services/audit/index.js'
 
 export interface RetentionEntityAudit {
   entity: string
@@ -9,12 +10,14 @@ export interface RetentionEntityAudit {
   deletedCount: number
   ttlDays: number
   dryRun: boolean
+  orgId?: string
 }
 
 export interface DataRetentionResult {
   startTime: string
   duration: number
   dryRun: boolean
+  orgId?: string
   entities: RetentionEntityAudit[]
   totalDeleted: number
   totalExpired: number
@@ -29,52 +32,65 @@ export class DataRetentionJob {
     private readonly config: RetentionConfig,
     logger?: (msg: string) => void,
     private readonly evidenceService?: EvidenceStorageService,
+    private readonly auditLogService?: AuditLogService,
   ) {
     this.repo = new RetentionRepository(db, config.dryRun)
     this.logger = logger ?? (() => {})
   }
 
-  async run(): Promise<DataRetentionResult> {
+  async run(orgId?: string): Promise<DataRetentionResult> {
     const start = Date.now()
     const startTime = new Date().toISOString()
-    const { dryRun, batchLimit, entities } = this.config
+    const { dryRun, batchLimit } = this.config
 
+    const orgPrefix = orgId ? ` [org=${orgId}]` : ''
     this.logger(
-      `[retention] Starting run — dryRun=${dryRun} batchLimit=${batchLimit}`,
+      `[retention] Starting run${orgPrefix} — dryRun=${dryRun} batchLimit=${batchLimit}`,
     )
+
+    const scoreTtl = getEffectiveEntityTtl(this.config, 'scoreHistory', orgId)
+    const auditTtl = getEffectiveEntityTtl(this.config, 'auditLogs', orgId)
+    const slashTtl = getEffectiveEntityTtl(this.config, 'slashEvents', orgId)
+    const outboxTtl = getEffectiveEntityTtl(this.config, 'outboxEvents', orgId)
+    const evidenceTtl = getEffectiveEntityTtl(this.config, 'evidence', orgId)
 
     const audits: RetentionEntityAudit[] = await Promise.all([
       this.processEntity(
         'score_history',
-        entities.scoreHistory.ttlDays,
+        scoreTtl,
         batchLimit,
-        () => this.repo.countExpiredScoreHistory(entities.scoreHistory.ttlDays),
-        () => this.repo.deleteExpiredScoreHistory(entities.scoreHistory.ttlDays, batchLimit),
+        () => this.repo.countExpiredScoreHistory(scoreTtl, orgId),
+        () => this.repo.deleteExpiredScoreHistory(scoreTtl, batchLimit, orgId),
+        orgId,
       ),
       this.processEntity(
         'audit_logs',
-        entities.auditLogs.ttlDays,
+        auditTtl,
         batchLimit,
-        () => this.repo.countExpiredAuditLogs(entities.auditLogs.ttlDays),
-        () => this.repo.deleteExpiredAuditLogs(entities.auditLogs.ttlDays, batchLimit),
+        () => this.repo.countExpiredAuditLogs(auditTtl, orgId),
+        () => this.repo.deleteExpiredAuditLogs(auditTtl, batchLimit, orgId),
+        orgId,
       ),
       this.processEntity(
         'slash_events',
-        entities.slashEvents.ttlDays,
+        slashTtl,
         batchLimit,
-        () => this.repo.countExpiredSlashEvents(entities.slashEvents.ttlDays),
-        () => this.repo.deleteExpiredSlashEvents(entities.slashEvents.ttlDays, batchLimit),
+        () => this.repo.countExpiredSlashEvents(slashTtl, orgId),
+        () => this.repo.deleteExpiredSlashEvents(slashTtl, batchLimit, orgId),
+        orgId,
       ),
       this.processEntity(
         'outbox_events',
-        entities.outboxEvents.ttlDays,
+        outboxTtl,
         batchLimit,
-        () => this.repo.countExpiredOutboxEvents(entities.outboxEvents.ttlDays),
-        () => this.repo.deleteExpiredOutboxEvents(entities.outboxEvents.ttlDays, batchLimit),
+        () => this.repo.countExpiredOutboxEvents(outboxTtl, orgId),
+        () => this.repo.deleteExpiredOutboxEvents(outboxTtl, batchLimit, orgId),
+        orgId,
       ),
       this.processEvidenceEntity(
-        entities.evidence.ttlDays,
+        evidenceTtl,
         batchLimit,
+        orgId,
       ),
     ])
 
@@ -83,10 +99,38 @@ export class DataRetentionJob {
     const duration = Date.now() - start
 
     this.logger(
-      `[retention] Run complete — totalExpired=${totalExpired} totalDeleted=${totalDeleted} duration=${duration}ms`,
+      `[retention] Run complete${orgPrefix} — totalExpired=${totalExpired} totalDeleted=${totalDeleted} duration=${duration}ms`,
     )
 
-    return { startTime, duration, dryRun, entities: audits, totalDeleted, totalExpired }
+    if (this.auditLogService) {
+      try {
+        await this.auditLogService.logAction({
+          tenantId: orgId ?? '00000000-0000-0000-0000-000000000000',
+          actorId: 'system:retention_job',
+          actorEmail: 'system@credence.internal',
+          action: 'DATA_RETENTION_ENFORCEMENT',
+          resourceType: 'system',
+          resourceId: orgId ?? 'all_orgs',
+          details: {
+            dryRun,
+            totalExpired,
+            totalDeleted,
+            durationMs: duration,
+            entities: audits,
+          },
+          status: 'success',
+        })
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        this.logger(`[retention] Warning: failed to write audit log: ${msg}`)
+      }
+    }
+
+    return { startTime, duration, dryRun, orgId, entities: audits, totalDeleted, totalExpired }
+  }
+
+  async runForOrg(orgId: string): Promise<DataRetentionResult> {
+    return this.run(orgId)
   }
 
   private async processEntity(
@@ -95,10 +139,11 @@ export class DataRetentionJob {
     batchLimit: number,
     countFn: () => Promise<{ expiredCount: number }>,
     deleteFn: () => Promise<{ deletedCount: number; dryRun: boolean }>,
+    orgId?: string,
   ): Promise<RetentionEntityAudit> {
     if (ttlDays === 0) {
       this.logger(`[retention] ${name} — ttlDays=0, skipping`)
-      return { entity: name, expiredCount: 0, deletedCount: 0, ttlDays: 0, dryRun: this.config.dryRun }
+      return { entity: name, expiredCount: 0, deletedCount: 0, ttlDays: 0, dryRun: this.config.dryRun, orgId }
     }
 
     const { expiredCount } = await countFn()
@@ -108,7 +153,7 @@ export class DataRetentionJob {
     )
 
     if (expiredCount === 0) {
-      return { entity: name, expiredCount: 0, deletedCount: 0, ttlDays, dryRun: this.config.dryRun }
+      return { entity: name, expiredCount: 0, deletedCount: 0, ttlDays, dryRun: this.config.dryRun, orgId }
     }
 
     const { deletedCount, dryRun } = await deleteFn()
@@ -117,7 +162,7 @@ export class DataRetentionJob {
       this.logger(`[retention] ${name} — deleted ${deletedCount} rows`)
     }
 
-    return { entity: name, expiredCount, deletedCount, ttlDays, dryRun }
+    return { entity: name, expiredCount, deletedCount, ttlDays, dryRun, orgId }
   }
 
   /**
@@ -134,21 +179,22 @@ export class DataRetentionJob {
   private async processEvidenceEntity(
     ttlDays: number,
     batchLimit: number,
+    orgId?: string,
   ): Promise<RetentionEntityAudit> {
     if (ttlDays === 0) {
       this.logger(`[retention] evidence — ttlDays=0, skipping`)
-      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays: 0, dryRun: this.config.dryRun }
+      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays: 0, dryRun: this.config.dryRun, orgId }
     }
 
     // Count expired evidence (ignoring legal hold, already shredded, already deleted)
-    const { expiredCount } = await this.repo.countExpiredEvidence(ttlDays)
+    const { expiredCount } = await this.repo.countExpiredEvidence(ttlDays, orgId)
 
     this.logger(
       `[retention] evidence — ttlDays=${ttlDays} expiredCount=${expiredCount}${this.config.dryRun ? ' (dry-run)' : ''}`,
     )
 
     if (expiredCount === 0) {
-      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays, dryRun: this.config.dryRun }
+      return { entity: 'evidence', expiredCount: 0, deletedCount: 0, ttlDays, dryRun: this.config.dryRun, orgId }
     }
 
     // Dry-run: count but don't shred
@@ -156,7 +202,7 @@ export class DataRetentionJob {
       if (!this.evidenceService) {
         this.logger('[retention] evidence — no EvidenceStorageService provided, skipping shred')
       }
-      return { entity: 'evidence', expiredCount, deletedCount: 0, ttlDays, dryRun: this.config.dryRun }
+      return { entity: 'evidence', expiredCount, deletedCount: 0, ttlDays, dryRun: this.config.dryRun, orgId }
     }
 
     // Perform crypto-shred via evidence service
@@ -176,11 +222,11 @@ export class DataRetentionJob {
 
     // Soft-delete the metadata via repository
     if (shreddedCount > 0) {
-      await this.repo.deleteExpiredEvidence(ttlDays, batchLimit)
+      await this.repo.deleteExpiredEvidence(ttlDays, batchLimit, orgId)
     }
 
     this.logger(`[retention] evidence — shredded ${shreddedCount} records`)
 
-    return { entity: 'evidence', expiredCount, deletedCount: shreddedCount, ttlDays, dryRun: false }
+    return { entity: 'evidence', expiredCount, deletedCount: shreddedCount, ttlDays, dryRun: false, orgId }
   }
 }

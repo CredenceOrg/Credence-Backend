@@ -124,6 +124,18 @@ export class ApiKeyRotationService {
     // Guard: rotate() checks the same conditions, but a concurrent revoke
     // between our findById and this call could yield null here.
     if (!newKey) {
+      await this.audit.logAction({
+        tenantId: this.resolveTenantId(),
+        actorId,
+        actorEmail,
+        action: AuditAction.ROTATE_API_KEY,
+        resourceType: 'api_key',
+        resourceId: keyId,
+        details: { keyId, reason: 'rotation_failed_after_validation' },
+        status: 'failure',
+        errorMessage: 'API key rotation failed',
+        ipAddress,
+      })
       return null
     }
 

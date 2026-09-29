@@ -17,12 +17,12 @@ import { InMemoryApiKeyRepository } from '../../src/repositories/apiKeyRepositor
 import { ApiKeyRotationService } from '../../src/services/apiKeyRotationService.js'
 import { InMemoryAuditLogsRepository } from '../../src/db/repositories/auditLogsRepository.js'
 import { AuditLogService } from '../../src/services/audit/index.js'
-import { _resetStore } from '../../src/services/apiKeys.js'
+import { _resetStore, _setUseInMemory } from '../../src/services/apiKeys.js'
 import { userRepo } from '../../src/repositories/userRepository.js'
 
-function createUserAndToken(repo: InMemoryApiKeyRepository, id: string, role: 'super-admin' | 'verifier' | 'admin' | 'user') {
+async function createUserAndToken(repo: InMemoryApiKeyRepository, id: string, role: 'super-admin' | 'verifier' | 'admin' | 'user') {
   userRepo.upsert({ id, role, email: `${id}@example.test`, tenantId: `tenant-${id}` })
-  const created = repo.create(id)
+  const created = await repo.create(id)
   return `Bearer ${created.key}`
 }
 
@@ -92,6 +92,7 @@ function buildApp() {
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 beforeEach(() => {
+  _setUseInMemory(true)
   _resetStore()
   userRepo._reset()
 })
@@ -99,7 +100,7 @@ beforeEach(() => {
 describe('POST /api/integrations/keys', () => {
   it('issues a new key with default scope and tier', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
     })
@@ -115,7 +116,7 @@ describe('POST /api/integrations/keys', () => {
 
   it('respects explicit scope and tier in the request body', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
       body: { scope: 'full', tier: 'enterprise' },
@@ -129,7 +130,7 @@ describe('POST /api/integrations/keys', () => {
 
   it('rejects an invalid scope with 400', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
       body: { scope: 'superuser' },
@@ -140,7 +141,7 @@ describe('POST /api/integrations/keys', () => {
 
   it('rejects an invalid tier with 400', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
       body: { tier: 'platinum' },
@@ -151,7 +152,7 @@ describe('POST /api/integrations/keys', () => {
 
   it('returns 401 when no auth header is provided', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'POST', '/api/integrations/keys')
 
     expect(res.status).toBe(401)
@@ -159,7 +160,7 @@ describe('POST /api/integrations/keys', () => {
 
   it('records a CREATE_API_KEY audit entry', async () => {
     const { app, repo, auditSvc } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     await makeRequest(app, 'POST', '/api/integrations/keys', { auth: ADMIN_TOKEN })
 
     const { logs } = await auditSvc.getLogs(undefined, { action: 'CREATE_API_KEY' }, 100, 0, { allowSuperScope: true })
@@ -172,7 +173,7 @@ describe('POST /api/integrations/keys', () => {
 describe('GET /api/integrations/keys', () => {
   it('returns an empty array when the user has no keys', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'GET', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
     })
@@ -184,8 +185,8 @@ describe('GET /api/integrations/keys', () => {
 
   it('lists only keys belonging to the requesting user', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
-    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = await createUserAndToken(repo, 'verifier-1', 'verifier')
 
     // Issue one key as admin and one as verifier
     await makeRequest(app, 'POST', '/api/integrations/keys', { auth: ADMIN_TOKEN })
@@ -200,7 +201,7 @@ describe('GET /api/integrations/keys', () => {
 
   it('returns 401 when unauthenticated', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'GET', '/api/integrations/keys')
     expect(res.status).toBe(401)
   })
@@ -209,7 +210,7 @@ describe('GET /api/integrations/keys', () => {
 describe('POST /api/integrations/keys/:id/rotate', () => {
   it('rotates a key successfully and returns a new raw key', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     // Issue a key first
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
@@ -236,7 +237,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('preserves the original scope and tier after rotation', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -258,7 +259,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('returns 409 when the key has already been revoked', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -283,7 +284,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('returns 404 for an unknown key ID', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(
       app,
       'POST',
@@ -296,8 +297,8 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('returns 403 when a non-owner attempts to rotate another user\'s key', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
-    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = await createUserAndToken(repo, 'verifier-1', 'verifier')
 
     // Admin creates a key
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
@@ -324,7 +325,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('writes a ROTATE_API_KEY success entry to the audit log', async () => {
     const { app, repo, auditSvc } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -344,7 +345,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 
   it('logs a failure audit entry when rotating a non-existent key', async () => {
     const { app, repo, auditSvc } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     await makeRequest(app, 'POST', '/api/integrations/keys/ghost-id/rotate', {
       auth: ADMIN_TOKEN,
@@ -360,7 +361,7 @@ describe('POST /api/integrations/keys/:id/rotate', () => {
 describe('DELETE /api/integrations/keys/:id', () => {
   it('revokes an active key successfully', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -380,7 +381,7 @@ describe('DELETE /api/integrations/keys/:id', () => {
 
   it('returns 404 for an unknown key ID', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
     const res = await makeRequest(app, 'DELETE', '/api/integrations/keys/ghost-id', {
       auth: ADMIN_TOKEN,
     })
@@ -390,8 +391,8 @@ describe('DELETE /api/integrations/keys/:id', () => {
 
   it('returns 403 when a non-owner attempts to revoke another user\'s key', async () => {
     const { app, repo } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
-    const VERIFIER_TOKEN = createUserAndToken(repo, 'verifier-1', 'verifier')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
+    const VERIFIER_TOKEN = await createUserAndToken(repo, 'verifier-1', 'verifier')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,
@@ -416,7 +417,7 @@ describe('DELETE /api/integrations/keys/:id', () => {
 
   it('writes a REVOKE_API_KEY audit entry on success', async () => {
     const { app, repo, auditSvc } = buildApp()
-    const ADMIN_TOKEN = createUserAndToken(repo, 'admin-1', 'super-admin')
+    const ADMIN_TOKEN = await createUserAndToken(repo, 'admin-1', 'super-admin')
 
     const createRes = await makeRequest(app, 'POST', '/api/integrations/keys', {
       auth: ADMIN_TOKEN,

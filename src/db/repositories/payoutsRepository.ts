@@ -23,8 +23,46 @@ export class PayoutsRepository {
   constructor(private readonly db: Queryable) {}
 
   async create(input: CreatePayoutInput): Promise<Payout> {
+    return this._create(this.db, input)
+  }
+
+  async createBatch(inputs: CreatePayoutInput[]): Promise<Payout[]> {
+    const client = typeof (this.db as any).connect === 'function'
+      ? await (this.db as any).connect()
+      : null
+
+    const targetDb = client ?? this.db
+    const useTx = client !== null
+
+    if (useTx) {
+      await targetDb.query('BEGIN')
+    }
+
+    try {
+      const results: Payout[] = []
+      for (const input of inputs) {
+        const res = await this._create(targetDb, input)
+        results.push(res)
+      }
+      if (useTx) {
+        await targetDb.query('COMMIT')
+      }
+      return results
+    } catch (err) {
+      if (useTx) {
+        await targetDb.query('ROLLBACK').catch(() => {})
+      }
+      throw err
+    } finally {
+      if (client) {
+        client.release()
+      }
+    }
+  }
+
+  private async _create(db: Queryable, input: CreatePayoutInput): Promise<Payout> {
     const id = randomUUID()
-    const result = await this.db.query<{
+    const result = await db.query<{
       id: string
       recipient: string
       amount: string

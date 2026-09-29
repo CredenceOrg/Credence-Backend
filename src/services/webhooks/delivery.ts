@@ -15,7 +15,7 @@ import {
 import { noopRetryObserver, type RetryObserver } from '../../observability/retryMetrics.js'
 import { webhookPayloadBytes } from '../../observability/customMetrics.js'
 import { checkHostBlocked } from '../../lib/ssrfProtection.js'
-import { logger } from '../../utils/logger.js'
+import { logger, runWithCorrelationIds, sanitizeCorrelationId } from '../../utils/logger.js'
 import type { WebhookConfig, WebhookPayload, WebhookDeliveryResult } from './types.js'
 import { generateWebhookIdempotencyKey } from './idempotency.js'
 
@@ -55,6 +55,13 @@ export interface DeliveryOptions {
   payloadSizeCap?: number
   /** Optional idempotency context for deduplicating retries. */
   eventId?: string
+  /**
+   * Correlation id of the request (or async job) that triggered this
+   * delivery. When present it is sent to the receiving endpoint as the
+   * `X-Correlation-Id` header and used to tag delivery logs, so a single
+   * request can be traced end-to-end into the webhook call.
+   */
+  correlationId?: string
   /** Optional store used to reserve and clear webhook delivery attempts. */
   idempotencyStore?: {
     reserveWebhookDelivery(subscriberId: string, eventId: string, idempotencyKey: string): Promise<boolean>
@@ -277,9 +284,16 @@ async function deliverSingleWebhook(
     fetchFn = fetch,
     retryObserver = noopRetryObserver,
     httpsAgent: customHttpsAgent,
+    correlationId,
   } = options
 
-  const legacyOverrides: ExtendedRetryPolicyOverrides = {
+  // Sanitize before it ever reaches an outbound header: this value may
+  // have originated from an external caller's `x-correlation-id` header
+  // and round-tripped through the database, so it must not be trusted as
+  // a safe HTTP header value as-is.
+  const safeCorrelationId = sanitizeCorrelationId(correlationId)
+
+  const legacyOverrides: RetryPolicyOverrides = {
     maxAttempts: maxRetries !== undefined ? maxRetries + 1 : undefined,
     baseDelayMs: initialDelay,
     maxDelayMs,
@@ -336,9 +350,14 @@ async function deliverSingleWebhook(
   let lastError: string | undefined
   let lastStatusCode: number | undefined
   let lastErrorCode: string | undefined
+  const startMs = Date.now()
 
-  try {
-    const response = await executeWithRetry(
+  for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), webhook.timeoutMs ?? timeout ?? 5000)
+
+    try {
+      const response = await executeWithRetry(
       provider,
       async (signal) => {
         attempts += 1
@@ -352,6 +371,7 @@ async function deliverSingleWebhook(
               'Content-Type': 'application/json',
               'X-Webhook-Signature': signatureHeader,
               'X-Webhook-Event': payload.event,
+              ...(safeCorrelationId ? { 'X-Correlation-Id': safeCorrelationId } : {}),
             },
             body: payloadStr,
             signal,
@@ -445,6 +465,16 @@ async function deliverSingleWebhook(
       errorCode: lastErrorCode,
     }
   }
+  }
+
+  return {
+    webhookId: webhook.id,
+    success: false,
+    error: lastError ?? 'Webhook delivery failed: no attempts were made',
+    attempts,
+    statusCode: lastStatusCode,
+    errorCode: lastErrorCode,
+  }
 }
 
 /**
@@ -468,65 +498,71 @@ export async function deliverWebhook(
   payload: WebhookPayload,
   options: DeliveryOptions & { returnAllChunks?: boolean } = {}
 ): Promise<WebhookDeliveryResult | WebhookDeliveryResult[]> {
-  const sizeCap = options.payloadSizeCap ?? 262144 // Default 256KB if not provided
-  const payloadStr = JSON.stringify(payload)
-  const payloadSize = Buffer.byteLength(payloadStr, 'utf8')
-  let results: WebhookDeliveryResult[]
+  // Restore the correlation id (if any) for the duration of this delivery
+  // attempt, so logger calls below — and any further downstream work
+  // triggered by them — are tagged with the id of the request/job that
+  // caused this webhook to fire.
+  return runWithCorrelationIds({ correlationId: sanitizeCorrelationId(options.correlationId) }, async () => {
+    const sizeCap = options.payloadSizeCap ?? 262144 // Default 256KB if not provided
+    const payloadStr = JSON.stringify(payload)
+    const payloadSize = Buffer.byteLength(payloadStr, 'utf8')
+    let results: WebhookDeliveryResult[]
 
-  const shouldUseIdempotency = Boolean(options.eventId && options.idempotencyStore)
-  let reserved = false
-  if (shouldUseIdempotency) {
-    reserved = await options.idempotencyStore!.reserveWebhookDelivery(
-      webhook.id,
-      options.eventId!,
-      generateWebhookIdempotencyKey(webhook.id, options.eventId!)
-    )
+    const shouldUseIdempotency = Boolean(options.eventId && options.idempotencyStore)
+    let reserved = false
+    if (shouldUseIdempotency) {
+      reserved = await options.idempotencyStore!.reserveWebhookDelivery(
+        webhook.id,
+        options.eventId!,
+        generateWebhookIdempotencyKey(webhook.id, options.eventId!)
+      )
 
-    if (!reserved) {
-      return options.returnAllChunks
-        ? [{ webhookId: webhook.id, success: true, skipped: true, attempts: 0 }]
-        : { webhookId: webhook.id, success: true, skipped: true, attempts: 0 }
+      if (!reserved) {
+        return options.returnAllChunks
+          ? [{ webhookId: webhook.id, success: true, skipped: true, attempts: 0 }]
+          : { webhookId: webhook.id, success: true, skipped: true, attempts: 0 }
+      }
     }
-  }
 
-  try {
-    if (payloadSize <= sizeCap) {
-      // Single payload delivery
-      const result = await deliverSingleWebhook(webhook, payload, options)
-      results = [result]
-    } else if (isListData(payload.data)) {
-      const chunks = chunkListPayload(payload, sizeCap)
-      results = []
-      for (const chunk of chunks) {
-        const result = await deliverSingleWebhook(webhook, chunk, options)
-        results.push(result)
-        if (!result.success) {
-          // Stop if any chunk fails
-          break
+    try {
+      if (payloadSize <= sizeCap) {
+        // Single payload delivery
+        const result = await deliverSingleWebhook(webhook, payload, options)
+        results = [result]
+      } else if (isListData(payload.data)) {
+        const chunks = chunkListPayload(payload, sizeCap)
+        results = []
+        for (const chunk of chunks) {
+          const result = await deliverSingleWebhook(webhook, chunk, options)
+          results.push(result)
+          if (!result.success) {
+            // Stop if any chunk fails
+            break
+          }
         }
+      } else {
+        // Can't chunk - mark as truncated and send anyway
+        const truncatedPayload: WebhookPayload = {
+          ...payload,
+          payloadTruncated: true,
+        }
+        const result = await deliverSingleWebhook(webhook, truncatedPayload, options)
+        results = [result]
       }
-    } else {
-      // Can't chunk - mark as truncated and send anyway
-      const truncatedPayload: WebhookPayload = {
-        ...payload,
-        payloadTruncated: true,
+
+      if (reserved && results.some(result => !result.success)) {
+        await options.idempotencyStore!.clearWebhookDeliveryAttempt(webhook.id, options.eventId!)
       }
-      const result = await deliverSingleWebhook(webhook, truncatedPayload, options)
-      results = [result]
+    } catch (error) {
+      if (reserved) {
+        await options.idempotencyStore!.clearWebhookDeliveryAttempt(webhook.id, options.eventId!)
+      }
+      throw error
     }
 
-    if (reserved && results.some(result => !result.success)) {
-      await options.idempotencyStore!.clearWebhookDeliveryAttempt(webhook.id, options.eventId!)
+    if (options.returnAllChunks) {
+      return results
     }
-  } catch (error) {
-    if (reserved) {
-      await options.idempotencyStore!.clearWebhookDeliveryAttempt(webhook.id, options.eventId!)
-    }
-    throw error
-  }
-
-  if (options.returnAllChunks) {
-    return results
-  }
-  return results.length === 1 ? results[0] : results
+    return results.length === 1 ? results[0] : results
+  })
 }

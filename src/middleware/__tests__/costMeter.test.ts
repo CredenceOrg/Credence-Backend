@@ -88,6 +88,10 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool }> {
       status TEXT NOT NULL DEFAULT 'pending',
       retry_count INTEGER NOT NULL DEFAULT 0,
       max_retries INTEGER NOT NULL DEFAULT 5,
+      trace_id TEXT,
+      span_id TEXT,
+      tracestate TEXT,
+      correlation_id TEXT,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `)

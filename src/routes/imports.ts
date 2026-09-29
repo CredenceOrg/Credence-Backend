@@ -161,7 +161,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/preview',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     (req: Request, res: Response, next: NextFunction) => {
       upload.single('file')(req, res, (err: unknown) => {
         if (err !== undefined) {
@@ -206,7 +206,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/preview/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     (req: Request, res: Response, next: NextFunction) => {
       upload.single('file')(req, res, (err: unknown) => {
         if (err !== undefined) {
@@ -267,7 +267,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/dry-run',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -288,7 +288,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/dry-run/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
@@ -324,11 +324,21 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/commit',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
       if (!buffer) return
+
+      const tenantId = getTenantId()
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'InvalidRequest',
+          code: 'MissingTenant',
+          message: 'Tenant context is required for import commits.',
+        })
+        return
+      }
 
       if (isDryRunQuery(req.query.dryRun)) {
         const result = await dryRunImportFile(buffer)
@@ -340,7 +350,10 @@ export function createImportsRouter(
         return
       }
 
-      const result = await commitImportFile(buffer, importCommitter)
+      const result = await commitImportFile(buffer, importCommitter, undefined, {
+        idempotencyKey: req.get('Idempotency-Key'),
+        tenantId,
+      })
       if (!result.success) {
         sendDryRunError(res, result)
         return
@@ -355,15 +368,12 @@ export function createImportsRouter(
           totalRows: result.totalRows,
           errors: result.errors,
           errorsTruncated: result.errorsTruncated,
+          rowOutcomes: result.rowOutcomes,
         })
         return
       }
 
-      res.status(201).json({
-        committed: true,
-        totalRows: result.totalRows,
-        imported: result.imported,
-      })
+      res.status(result.partial ? 207 : 201).json(result)
     }
   )
 
@@ -372,11 +382,21 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/commit/:presetId',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     csvUploadMiddleware,
     async (req: Request, res: Response) => {
       const buffer = requireUploadedFile(req, res)
       if (!buffer) return
+
+      const tenantId = getTenantId()
+      if (!tenantId) {
+        res.status(400).json({
+          error: 'InvalidRequest',
+          code: 'MissingTenant',
+          message: 'Tenant context is required for import commits.',
+        })
+        return
+      }
 
       const preset = await presetRepo.findById(req.params.presetId)
       if (!preset) {
@@ -403,7 +423,10 @@ export function createImportsRouter(
         return
       }
 
-      const result = await commitImportFile(buffer, importCommitter, preset.columnMappings)
+      const result = await commitImportFile(buffer, importCommitter, preset.columnMappings, {
+        idempotencyKey: req.get('Idempotency-Key'),
+        tenantId,
+      })
       if (!result.success) {
         sendDryRunError(res, result)
         return
@@ -418,6 +441,7 @@ export function createImportsRouter(
           totalRows: result.totalRows,
           errors: result.errors,
           errorsTruncated: result.errorsTruncated,
+          rowOutcomes: result.rowOutcomes,
           preset: {
             id: preset.id,
             name: preset.name,
@@ -428,10 +452,8 @@ export function createImportsRouter(
         return
       }
 
-      res.status(201).json({
-        committed: true,
-        totalRows: result.totalRows,
-        imported: result.imported,
+      res.status(result.partial ? 207 : 201).json({
+        ...result,
         preset: {
           id: preset.id,
           name: preset.name,
@@ -447,7 +469,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.get(
     '/presets',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     async (_req: Request, res: Response) => {
       const orgId = getTenantId()
       if (!orgId) {
@@ -469,7 +491,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.post(
     '/presets',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const orgId = getTenantId()
       if (!orgId) {
@@ -516,7 +538,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.get(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_READ),
     async (req: Request, res: Response) => {
       const preset = await presetRepo.findById(req.params.id)
       if (!preset) {
@@ -537,7 +559,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.put(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const { name, columnMappings } = req.body
 
@@ -585,7 +607,7 @@ export function createImportsRouter(
   // -----------------------------------------------------------------------
   router.delete(
     '/presets/:id',
-    requireApiKey(ApiScope.ENTERPRISE),
+    requireApiKey(ApiScope.ADMIN_WRITE),
     async (req: Request, res: Response) => {
       const deleted = await presetRepo.delete(req.params.id)
       if (!deleted) {

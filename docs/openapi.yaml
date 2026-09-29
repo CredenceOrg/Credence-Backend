@@ -462,38 +462,11 @@ components:
         - valid
         - break_detected
         - never_run
-    authLoginBodySchema:
+    auditLogExportQuerySchema:
       def:
         type: object
         shape:
-          email:
-            def:
-              type: string
-              checks:
-                - def:
-                    type: string
-                    format: email
-                    check: string_format
-                    abort: false
-                    pattern: {}
-                  type: string
-                  format: email
-                  minLength: null
-                  maxLength: null
-            type: string
-            format: email
-            minLength: null
-            maxLength: null
-          password:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 1
-            maxLength: null
-          tenantId:
+          from:
             def:
               type: optional
               innerType:
@@ -502,25 +475,11 @@ components:
                   checks:
                     - {}
                 type: string
-                format: null
-                minLength: 1
+                format: regex
+                minLength: null
                 maxLength: null
             type: optional
-      type: object
-    authRefreshBodySchema:
-      def:
-        type: object
-        shape:
-          refreshToken:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 1
-            maxLength: null
-          tenantId:
+          to:
             def:
               type: optional
               innerType:
@@ -529,8 +488,8 @@ components:
                   checks:
                     - {}
                 type: string
-                format: null
-                minLength: 1
+                format: regex
+                minLength: null
                 maxLength: null
             type: optional
       type: object
@@ -568,10 +527,15 @@ components:
               type: string
               checks:
                 - {}
+                - {}
+                - def:
+                    type: custom
+                    check: custom
+                  type: custom
             type: string
             format: regex
             minLength: null
-            maxLength: null
+            maxLength: 32
           duration:
             def:
               type: optional
@@ -1634,92 +1598,6 @@ components:
             format: null
             minLength: null
             maxLength: null
-          message:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-      type: object
-    faultInjectionRequestSchema:
-      def:
-        type: object
-        shape:
-          statusCode:
-            def:
-              type: default
-              innerType:
-                def:
-                  type: number
-                  checks:
-                    - def:
-                        type: number
-                        check: number_format
-                        abort: false
-                        format: safeint
-                      type: number
-                      minValue: -9007199254740991
-                      maxValue: 9007199254740991
-                      isInt: true
-                      isFinite: true
-                      format: safeint
-                    - {}
-                    - {}
-                type: number
-                minValue: 400
-                maxValue: 599
-                isInt: true
-                isFinite: true
-                format: safeint
-              defaultValue: 500
-            type: default
-          message:
-            def:
-              type: optional
-              innerType:
-                def:
-                  type: string
-                  checks:
-                    - {}
-                type: string
-                format: null
-                minLength: null
-                maxLength: 512
-            type: optional
-      type: object
-    faultInjectionResponseSchema:
-      def:
-        type: object
-        shape:
-          fault:
-            def:
-              type: literal
-              values:
-                - true
-            type: literal
-            values: {}
-          statusCode:
-            def:
-              type: number
-              checks:
-                - def:
-                    type: number
-                    check: number_format
-                    abort: false
-                    format: safeint
-                  type: number
-                  minValue: -9007199254740991
-                  maxValue: 9007199254740991
-                  isInt: true
-                  isFinite: true
-                  format: safeint
-            type: number
-            minValue: -9007199254740991
-            maxValue: 9007199254740991
-            isInt: true
-            isFinite: true
-            format: safeint
           message:
             def:
               type: string
@@ -4464,6 +4342,24 @@ components:
             type: never
           type: never
       type: object
+    replayWebhookBodySchema:
+      def:
+        type: object
+        shape:
+          id:
+            def:
+              type: string
+              checks:
+                - {}
+            type: string
+            format: null
+            minLength: 1
+            maxLength: null
+        catchall:
+          def:
+            type: never
+          type: never
+      type: object
     reportJobParamsSchema:
       def:
         type: object
@@ -4497,62 +4393,6 @@ components:
         - bond_audit
         - attestation_export
         - top_talkers
-    resetCacheBodySchema:
-      def:
-        type: object
-        shape:
-          namespace:
-            def:
-              type: string
-              checks:
-                - {}
-            type: string
-            format: null
-            minLength: 1
-            maxLength: null
-        catchall:
-          def:
-            type: never
-          type: never
-      type: object
-    resetCacheResponseSchema:
-      def:
-        type: object
-        shape:
-          success:
-            def:
-              type: boolean
-            type: boolean
-          message:
-            def:
-              type: string
-            type: string
-            format: null
-            minLength: null
-            maxLength: null
-          data:
-            def:
-              type: object
-              shape:
-                namespace:
-                  def:
-                    type: string
-                  type: string
-                  format: null
-                  minLength: null
-                  maxLength: null
-                clearedCount:
-                  def:
-                    type: number
-                    checks: []
-                  type: number
-                  minValue: null
-                  maxValue: null
-                  isInt: false
-                  isFinite: true
-                  format: null
-            type: object
-      type: object
     resolveDisputeBodySchema:
       def:
         type: object
@@ -7479,10 +7319,15 @@ components:
               type: string
               checks:
                 - {}
+                - {}
+                - def:
+                    type: custom
+                    check: custom
+                  type: custom
             type: string
             format: regex
             minLength: null
-            maxLength: null
+            maxLength: 32
           assetType:
             def:
               type: string
@@ -7566,36 +7411,6 @@ components:
         - gitSha
         - buildTimestamp
         - nodeVersion
-    FaultInjectionResponse:
-      type: object
-      properties:
-        fault:
-          type: boolean
-          enum:
-            - true
-        statusCode:
-          type: integer
-          example: 500
-        message:
-          type: string
-          example: Simulated fault for retry testing
-      required:
-        - fault
-        - statusCode
-        - message
-    FaultInjectionRequest:
-      type: object
-      properties:
-        statusCode:
-          type: integer
-          minimum: 400
-          maximum: 599
-          default: 500
-          example: 500
-        message:
-          type: string
-          maxLength: 512
-          example: Simulated fault for retry testing
     Wallet:
       type: object
       properties:
@@ -8525,16 +8340,12 @@ paths:
       requestBody:
         required: true
         content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/FaultInjectionRequest"
+          application/json: {}
       responses:
         "200":
           description: Simulated fault response
           content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FaultInjectionResponse"
+            application/json: {}
         "400":
           description: Validation error (invalid statusCode or message too long)
           content:
@@ -9910,3 +9721,300 @@ paths:
                 required:
                   - error
                   - message
+  /api/admin/system/backup-status:
+    get:
+      summary: System Backup Status
+      description: Returns the status of the continuous WAL archiving backup job.
+      tags:
+        - Admin System
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Backup status returned successfully
+          content:
+            application/json: {}
+        "401":
+          description: Missing or invalid bearer token
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+        "403":
+          description: Forbidden - Requires admin role
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  message:
+                    type: string
+                required:
+                  - error
+                  - message
+  /api/reports:
+    post:
+      summary: Start a report generation job
+      description: Queues an asynchronous report generation job for the given report
+        type. Returns job metadata immediately.
+      tags:
+        - Reports
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                type:
+                  type: string
+                  enum:
+                    - trust_score_summary
+                    - bond_audit
+                    - attestation_export
+                    - top_talkers
+              required:
+                - type
+              additionalProperties: false
+      responses:
+        "202":
+          description: Report job queued
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  type:
+                    type: string
+                  createdAt:
+                    type: string
+                required:
+                  - jobId
+                  - status
+                  - type
+                  - createdAt
+        "400":
+          description: Validation error (invalid or missing report type)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  details:
+                    type: array
+                    items:
+                      nullable: true
+                required:
+                  - error
+                  - details
+        "429":
+          description: Rate limit exceeded (maximum concurrent jobs per org)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code
+  /api/reports/top-talkers:
+    get:
+      summary: Top talkers report
+      description: Returns the top N tenants by request count in the aggregate window.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+          required: false
+          name: limit
+          in: query
+        - schema:
+            type: integer
+            minimum: 1
+            maximum: 1440
+          required: false
+          name: windowMinutes
+          in: query
+      responses:
+        "200":
+          description: Top talkers data
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success:
+                    type: boolean
+                  data:
+                    type: object
+                    properties:
+                      windowStart:
+                        type: string
+                      windowEnd:
+                        type: string
+                      windowMinutes:
+                        type: number
+                      totalRequests:
+                        type: number
+                      topTalkers:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            tenantId:
+                              type: string
+                            requestCount:
+                              type: number
+                            percentage:
+                              type: number
+                            lastRequestAt:
+                              type: string
+                          required:
+                            - tenantId
+                            - requestCount
+                            - percentage
+                    required:
+                      - windowStart
+                      - windowEnd
+                      - windowMinutes
+                      - totalRequests
+                      - topTalkers
+                required:
+                  - success
+                  - data
+  /api/reports/{jobId}:
+    get:
+      summary: Get report job status
+      description: Returns the status and artifact URL of a report generation job.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: jobId
+          in: path
+      responses:
+        "200":
+          description: Report job status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  jobId:
+                    type: string
+                  status:
+                    type: string
+                  type:
+                    type: string
+                  artifactUrl:
+                    type: string
+                  failureReason:
+                    type: string
+                  createdAt:
+                    type: string
+                  updatedAt:
+                    type: string
+                required:
+                  - jobId
+                  - status
+                  - type
+                  - createdAt
+                  - updatedAt
+        "404":
+          description: Report job not found
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                required:
+                  - error
+  /api/reports/download/{key}:
+    get:
+      summary: Download a report artifact
+      description: Serves the report artifact using a signed URL with expires and
+        signature query parameters.
+      tags:
+        - Reports
+      parameters:
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: key
+          in: path
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: expires
+          in: query
+        - schema:
+            type: string
+            minLength: 1
+          required: true
+          name: signature
+          in: query
+      responses:
+        "200":
+          description: Report artifact (PDF)
+          content:
+            application/pdf:
+              schema:
+                nullable: true
+        "400":
+          description: Missing required query parameters (expires or signature)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code
+        "401":
+          description: Invalid or expired signed URL
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                  code:
+                    type: string
+                required:
+                  - error
+                  - code

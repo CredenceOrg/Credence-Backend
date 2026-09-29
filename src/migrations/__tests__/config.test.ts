@@ -25,6 +25,7 @@ describe('loadMigrationConfig', () => {
 
   it('returns config with DATABASE_URL', () => {
     process.env.DATABASE_URL = 'postgres://user:pass@localhost:5432/testdb'
+    process.env.MIGRATIONS_DIR = 'src/migrations'
     
     const config = loadMigrationConfig()
     

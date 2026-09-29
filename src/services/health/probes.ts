@@ -47,6 +47,15 @@ function classifyError(err: unknown): DependencyReason {
 }
 
 /**
+ * Like classifyError but used inside the Horizon circuit-breaker probe where
+ * any unexpected exception indicates the RPC endpoint is unreachable.
+ */
+function classifyHorizonError(_err: unknown): DependencyReason {
+  if (_err instanceof Error && _err.message === "timeout") return "timeout"
+  return "unreachable"
+}
+
+/**
  * Options for createDbProbe (for testing: inject a custom check).
  */
 export interface DbProbeOptions {
@@ -57,18 +66,27 @@ export interface DbProbeOptions {
 }
 
 /**
- * Creates a DB health probe when DATABASE_URL is set.
- * Uses pg Pool; runs a simple query. Does not expose errors.
+ * Creates a DB health probe.
+ *
+ * Always returns a probe (never `undefined`).  When `DB_URL` is not set and
+ * no `runQuery` override is injected the probe returns `{ status: 'down',
+ * reason: 'not_configured' }` so that the readiness endpoint fails closed
+ * rather than silently degrading.
  */
 export function createDbProbe(
   options: DbProbeOptions = {},
-): HealthProbe | undefined {
-  if (!process.env.DB_URL && !options.runQuery) return undefined;
-
+): HealthProbe {
   const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
 
   return async () => {
     const start = Date.now();
+
+    // Fail closed: no DB URL means the service is mis-configured and cannot
+    // serve traffic safely.
+    if (!process.env.DB_URL && !options.runQuery) {
+      return { status: 'down', reason: 'not_configured' };
+    }
+
     try {
       if (options.runQuery) {
         await withTimeout(options.runQuery(), timeoutMs);
@@ -94,19 +112,24 @@ export interface RedisProbeOptions {
 
 /**
  * Creates a generic Redis health probe for a given environment variable URL.
- * Uses ioredis PING. Does not expose errors.
+ *
+ * Always returns a probe (never `undefined`).  When the URL env var is not set
+ * and no `ping` override is injected the probe returns `{ status: 'down',
+ * reason: 'not_configured' }` so that the readiness endpoint fails closed.
  */
 function createGenericRedisProbe(
   urlEnvVar: string,
   options: RedisProbeOptions = {},
-): HealthProbe | undefined {
-  const url = process.env[urlEnvVar];
-  if (!url && !options.ping) return undefined;
-
+): HealthProbe {
   const timeoutMs = options.timeoutMs ?? DEFAULT_CHECK_TIMEOUT_MS
 
   return async () => {
     const start = Date.now();
+
+    if (!process.env[urlEnvVar] && !options.ping) {
+      return { status: 'down', reason: 'not_configured' };
+    }
+
     try {
       if (options.ping) {
         await withTimeout(options.ping(), timeoutMs);
@@ -127,20 +150,28 @@ function createGenericRedisProbe(
 }
 
 /**
- * Creates a Cache health probe when REDIS_URL is set.
+ * Creates a Cache health probe.
+ *
+ * Always returns a probe (never `undefined`).  Reports `down /
+ * not_configured` when `REDIS_URL` is absent so the readiness probe fails
+ * closed rather than silently degrading.
  */
 export function createCacheProbe(
   options: RedisProbeOptions = {},
-): HealthProbe | undefined {
+): HealthProbe {
   return createGenericRedisProbe("REDIS_URL", options);
 }
 
 /**
  * Creates a Queue health probe when QUEUE_URL is set.
+ * This probe is optional; returns `undefined` when the env var is absent
+ * and no ping override is provided (queue is not a critical dependency).
  */
 export function createQueueProbe(
   options: RedisProbeOptions = {},
 ): HealthProbe | undefined {
+  const url = process.env.QUEUE_URL;
+  if (!url && !options.ping) return undefined;
   return createGenericRedisProbe("QUEUE_URL", options);
 }
 
@@ -285,7 +316,7 @@ export function createHorizonClientProbe(
         details: { circuitState: state },
       };
     } catch (err) {
-      return { status: 'down', reason: classifyError(err), latencyMs: elapsed(start) };
+      return { status: 'down', reason: classifyHorizonError(err), latencyMs: elapsed(start) };
     }
   };
 }
@@ -372,32 +403,39 @@ export function createKekProbe(options: KekProbeOptions = {}): HealthProbe {
 
 /**
  * Builds default probes from environment and runtime worker state.
- * When not configured, skips that probe (reported as not_configured).
+ *
+ * Critical probes (postgres, redis, horizonListener) are **always** registered
+ * so that missing env vars cause a fail-closed `unhealthy` response rather than
+ * a silent `degraded`.  Optional probes are registered only when their
+ * respective env vars are present.
  */
 export function createDefaultProbes(): {
-  postgres?: HealthProbe
-  redis?: HealthProbe
-  horizonListener?: HealthProbe
+  postgres: HealthProbe
+  redis: HealthProbe
+  horizonListener: HealthProbe
   outboxPublisher?: HealthProbe
   horizon?: HealthProbe
   keyManager?: HealthProbe
   kek?: HealthProbe
 } {
+  // Critical deps — always present; probe returns down/not_configured when
+  // the env var is missing.
+  const postgres = createDbProbe()
+  const redis = createCacheProbe()
+
+  // horizonListener heartbeat tracking — configured flag drives the probe result.
+  setHorizonListenerConfigured(Boolean(process.env.HORIZON_URL))
+  const horizonListener = createHorizonListenerProbe()
+
   const out: {
-    postgres?: HealthProbe
-    redis?: HealthProbe
-    horizonListener?: HealthProbe
+    postgres: HealthProbe
+    redis: HealthProbe
+    horizonListener: HealthProbe
     outboxPublisher?: HealthProbe
     horizon?: HealthProbe
     keyManager?: HealthProbe
     kek?: HealthProbe
-  } = {}
-
-  if (process.env.DB_URL) out.postgres = createDbProbe()
-  if (process.env.REDIS_URL) out.redis = createCacheProbe()
-
-  setHorizonListenerConfigured(Boolean(process.env.HORIZON_URL))
-  out.horizonListener = createHorizonListenerProbe()
+  } = { postgres, redis, horizonListener }
 
   const outboxEnabled = (process.env.OUTBOX_ENABLED ?? "true") === "true"
   setOutboxPublisherConfigured(outboxEnabled)

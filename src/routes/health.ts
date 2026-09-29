@@ -65,6 +65,10 @@ export interface HealthRouterOptions {
  *  - GET /api/health/live        -> 200 always when process is running.
  *  - GET /api/health/workers     -> worker lease + heartbeat summary
  *                                   (only when redisClient is configured).
+ *
+ * **CORS policy:** Open — `GET` on all `/api/health/*` paths accepts any
+ * `Origin` (orchestrator probes and monitoring dashboards). See
+ * `docs/CORS_POLICY.md`.
  */
 export function createHealthRouter(options: HealthRouterOptions = {}): Router {
   const router = Router()

@@ -1,18 +1,58 @@
 import { Pool, type PoolClient } from 'pg'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import { randomUUID } from 'node:crypto'
 import { RequestSnapshotsRepository } from './repositories/requestSnapshotsRepository.js'
 import { dbTxnDurationSeconds, dbTxnSavepoints } from '../observability/index.js'
 import { withSpan, DbSpans } from '../tracing/tracer.js'
+import { getTenantId } from '../utils/tenantContext.js'
 
 export const transactionStorage = new AsyncLocalStorage<PoolClient>()
 export const disableRedirectionStorage = new AsyncLocalStorage<boolean>()
 
 export interface TransactionContext {
+  correlationId: string
   postCommitHooks: Array<() => Promise<void>>
   rollbackHooks: Array<() => Promise<void>>
 }
 
 export const transactionContextStorage = new AsyncLocalStorage<TransactionContext>()
+
+/**
+ * Register a hook that runs after the current transaction commits successfully.
+ * Must be called while a transaction is active (inside a `withTransaction` callback).
+ * The hook is NOT executed if the transaction rolls back.
+ *
+ * Typical use: cache invalidation, metrics, event publication.
+ *
+ * @throws if no transaction is currently active (calling outside a transaction is a bug)
+ */
+export async function runPostCommit(hook: () => Promise<void>): Promise<void> {
+  const context = transactionContextStorage.getStore()
+  if (!context) {
+    // No active transaction — execute immediately so cache invalidation
+    // still works outside a transaction boundary.
+    await hook()
+    return
+  }
+  context.postCommitHooks.push(hook)
+}
+
+/**
+ * Register a compensating hook that runs when the current transaction rolls back.
+ * Must be called while a transaction is active (inside a `withTransaction` callback).
+ * The hook is NOT executed if the transaction commits successfully.
+ *
+ * Typical use: compensating actions, logging, operational signals.
+ */
+export async function runRollback(hook: () => Promise<void>): Promise<void> {
+  const context = transactionContextStorage.getStore()
+  if (!context) {
+    // No active transaction — nothing to compensate.
+    return
+  }
+  context.rollbackHooks.push(hook)
+}
+
 
 const originalPoolQuery = Pool.prototype.query
 Pool.prototype.query = function (this: Pool, ...args: any[]): any {
@@ -246,14 +286,16 @@ export class TransactionManager {
       return await fn(activeClient);
     }
 
-    const context: TransactionContext = {
-      postCommitHooks: [],
-      rollbackHooks: [],
-    };
-
     let attempts = 0;
 
     while (true) {
+      // A fresh context per attempt prevents hooks registered in a rolled-back
+      // retry from emitting events for a transition that never committed.
+      const context: TransactionContext = {
+        correlationId: randomUUID(),
+        postCommitHooks: [],
+        rollbackHooks: [],
+      };
       const client = await this.pool.connect();
       const startTime = Date.now();
       const savepointCountRef = { count: 0 };
@@ -271,14 +313,14 @@ export class TransactionManager {
         // Propagate tenant id into the transaction so Postgres RLS policies
         // that rely on `current_setting('app.tenant_id', true)` can enforce
         // row-level isolation per-tenant.
-        try {
-          const tenantId = getTenantId();
-          if (tenantId) {
-            // Use a parameterized setting to avoid injection; cast to uuid in policies.
-            await client.query(`SET LOCAL app.tenant_id = '${tenantId}'`);
-          }
-        } catch (err) {
-          // Swallow: setting may not be needed in some environments
+        const tenantId = getTenantId();
+        if (tenantId) {
+          // Use set_config with a bind parameter to avoid SQL injection while
+          // keeping the setting local to this transaction for RLS scoping.
+          await client.query(
+            'SELECT set_config($1, $2, true)',
+            ['app.tenant_id', tenantId],
+          );
         }
 
         const budgetedClient = createBudgetedClient(client, startTime, maxDurationMs, maxSavepoints, savepointCountRef, tablesRef);
@@ -288,11 +330,18 @@ export class TransactionManager {
           initAttrs.op = op;
         }
 
-        const result = await withSpan(DbSpans.TX, async (span) => {
-          const r = await fn(budgetedClient);
-          span.setAttribute('table_count', tablesRef.tables.size);
-          return r;
-        }, initAttrs);
+        // Propagate the transaction context and active client via AsyncLocalStorage
+        // so that runPostCommit / runRollback can register hooks, and pool.query()
+        // calls are redirected to the transaction client.
+        const result = await transactionContextStorage.run(context, () =>
+          transactionStorage.run(budgetedClient, () =>
+            withSpan(DbSpans.TX, async (span) => {
+              const r = await fn(budgetedClient);
+              span.setAttribute('table_count', tablesRef.tables.size);
+              return r;
+            }, initAttrs),
+          ),
+        );
 
         await client.query("COMMIT");
 
@@ -363,11 +412,4 @@ export function withExtendedTxnBudget(options: { maxDurationMs?: number; maxSave
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Placeholder for getTenantId to avoid compilation errors (this function should be defined elsewhere).
- */
-function getTenantId(): string | undefined {
-  return undefined;
 }

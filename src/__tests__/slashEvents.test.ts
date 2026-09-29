@@ -78,6 +78,20 @@ describe('SlashEventsRepository', () => {
     expect(found!.reason).toBe('Test')
   })
 
+  it('scopes identity and slash-event reads to the active tenant', () => {
+    const otherIdentity = identities.create({ address: '0xOTHER', tenantId: 'other-tenant' })
+    slashEvents.create({ identity_id: otherIdentity.id, amount: '9', reason: 'other', tenantId: 'other-tenant' })
+    vi.mocked(getTenantId).mockReturnValue('test-tenant')
+
+    const currentIdentity = new IdentitiesRepository(db).findById(identityId)
+    const hiddenIdentity = new IdentitiesRepository(db).findById(otherIdentity.id)
+    const currentEvents = new SlashEventsRepository(db).findAll()
+
+    expect(currentIdentity?.tenant_id).toBe('test-tenant')
+    expect(hiddenIdentity).toBeUndefined()
+    expect(currentEvents).toHaveLength(0)
+  })
+
   it('should return undefined for non-existent slash event ID', () => {
     const found = slashEvents.findById(999)
     expect(found).toBeUndefined()

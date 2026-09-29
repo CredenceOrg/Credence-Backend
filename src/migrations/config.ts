@@ -5,6 +5,8 @@
  * It loads settings from environment variables and provides sensible defaults.
  */
 
+import { existsSync } from 'node:fs'
+
 export interface MigrationConfig {
   /** PostgreSQL connection string */
   databaseUrl: string
@@ -38,12 +40,29 @@ export function loadMigrationConfig(): MigrationConfig {
 
   return {
     databaseUrl,
-    migrationsDir: process.env.MIGRATIONS_DIR ?? 'src/migrations',
+    migrationsDir: resolveMigrationsDir(),
     migrationsTable: process.env.MIGRATIONS_TABLE ?? 'pgmigrations',
     migrationsSchema: process.env.MIGRATIONS_SCHEMA ?? 'public',
     transactional: process.env.MIGRATIONS_TRANSACTIONAL !== 'false',
     createSchema: process.env.MIGRATIONS_CREATE_SCHEMA !== 'false',
   }
+}
+
+/**
+ * Resolve the migrations directory for the current runtime.
+ * Prefers MIGRATIONS_DIR, then compiled dist/migrations, then src/migrations.
+ */
+export function resolveMigrationsDir(): string {
+  if (process.env.MIGRATIONS_DIR) {
+    return process.env.MIGRATIONS_DIR
+  }
+
+  const distDir = 'dist/migrations'
+  if (existsSync(distDir)) {
+    return distDir
+  }
+
+  return 'src/migrations'
 }
 
 /**

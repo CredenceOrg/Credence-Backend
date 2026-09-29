@@ -39,14 +39,18 @@ export enum AuditAction {
   LIST_FAILED_EVENTS = 'LIST_FAILED_EVENTS',
   REPLAY_EVENT = 'REPLAY_EVENT',
   REPLAY_REQUEST = 'REPLAY_REQUEST',
+  REPLAY_WEBHOOK = 'REPLAY_WEBHOOK',
+  RELOAD_CONFIG = 'RELOAD_CONFIG',
   LIST_OUTBOX_QUARANTINE = 'LIST_OUTBOX_QUARANTINE',
   OUTBOX_REINJECT = 'OUTBOX_REINJECT',
   OUTBOX_PAUSE = 'OUTBOX_PAUSE',
+  OUTBOX_RESUME = 'OUTBOX_RESUME',
   SET_RATE_LIMIT_OVERRIDE = 'SET_RATE_LIMIT_OVERRIDE',
   REMOVE_RATE_LIMIT_OVERRIDE = 'REMOVE_RATE_LIMIT_OVERRIDE',
   UPDATE_SETTINGS = 'UPDATE_SETTINGS',
   PURGE_CACHE = 'PURGE_CACHE',
   RESET_CACHE = 'RESET_CACHE',
+  CHAIN_REPAIR_REQUESTED = 'CHAIN_REPAIR_REQUESTED',
 }
 
 
@@ -64,6 +68,8 @@ export interface AuditLogInput {
   errorMessage?: string
   tenantId: string
   requestId?: string
+  /** Optional timestamp override — used in tests to simulate historical entries. */
+  occurredAt?: string
 }
 
 export interface AuditLogFilters {
@@ -150,6 +156,20 @@ export interface ChainViolation {
   type: 'prev_hash_mismatch' | 'row_hash_mismatch' | 'missing_row' | 'deleted_row'
 }
 
+/** Explicit operator authorization required to request a non-destructive repair. */
+export interface ChainRepairAuthorization {
+  operatorId: string
+  approvedBy: string
+  authorizationRef: string
+  reason: string
+}
+
+/** Evidence marker appended to the chain instead of rewriting historical rows. */
+export interface ChainRepairMarker {
+  marker: AuditLogEntry
+  authorization: ChainRepairAuthorization
+}
+
 /**
  * Single tenant request count entry in top talkers report
  */
@@ -170,4 +190,3 @@ export interface TopTalkersReport {
   totalRequests: number
   topTalkers: TopTalkerEntry[]
 }
-

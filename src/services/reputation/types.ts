@@ -27,3 +27,16 @@ export interface ReputationScore {
   attestationScore: number
   timeWeight: number
 }
+
+/**
+ * Configuration for reputation scoring weights and thresholds.
+ * All values externalized to env vars via src/config/index.ts.
+ */
+export interface ReputationModuleConfig {
+  bondMultiplier: number
+  maxBondScore: number
+  attestationMultiplier: number
+  maxAttestationWeight: number
+  maxDurationMs: number
+  decayRate: number
+}

@@ -18,7 +18,7 @@ interface BulkVerifyRequest {
 
 router.post(
   '/verify',
-  requireApiKey(ApiScope.ENTERPRISE),
+  requireApiKey(ApiScope.TRUST_READ),
   async (req: Request, res: Response, next): Promise<void> => {
     try {
       const { addresses } = req.body as BulkVerifyRequest

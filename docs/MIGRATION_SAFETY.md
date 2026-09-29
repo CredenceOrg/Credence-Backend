@@ -8,6 +8,7 @@ The migration system includes built-in guardrails to prevent potentially dangero
 
 - **Preflight checks** that analyze migrations before execution
 - **Runtime safeguards** that block unsafe operations
+- **Startup checksum validation** that rejects boot when applied migration files drift ([guide](./MIGRATION_CHECKSUM_VALIDATION.md))
 - **Online schema change patterns** for zero-downtime deployments
 - **Comprehensive guardrails** for long-running operations, batching, and rollback procedures
 

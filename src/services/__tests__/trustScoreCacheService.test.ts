@@ -8,6 +8,11 @@ vi.mock('../../db/pool.js', () => ({
   workerPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
   replicaPool: { query: vi.fn(), on: vi.fn(), connect: vi.fn() },
   withReplica: vi.fn(),
+  // reputationService imports middleware/metrics, which registers gauges over
+  // these caches at module load. Omitting them fails the whole suite on import.
+  apiPreparedStatementCache: new Map<string, string>(),
+  workerPreparedStatementCache: new Map<string, string>(),
+  replicaPreparedStatementCache: new Map<string, string>(),
 }))
 
 vi.mock('../../cache/redis.js', () => ({

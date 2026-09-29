@@ -12,12 +12,13 @@ import {
   bondCreationEventSchema,
   withdrawalEventSchema,
 } from '../../schemas/queue.js'
-import { logger } from '../../utils/logger.js'
+import { logger, runWithCorrelationIds } from '../../utils/logger.js'
 import {
   incrementOutboxDeadLetter,
   incrementOutboxPublished,
   incrementOutboxFailed,
   setOutboxPendingGauge,
+  setOutboxLifecycleGauges,
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
 } from '../../observability/index.js'
@@ -322,7 +323,7 @@ export class OutboxPublisher {
     // (crashed) consumer, skip publish and go straight to markPublished.
     if (event.publishIdempotencyKey) {
       logger.info(`[OutboxPublisher] Event ${event.id} already has publish idempotency key — skipping publish`)
-      await this.repository.markPublished(pool, event.id)
+      await this.repository.markPublished(pool, event.id, this.consumerId)
       incrementOutboxPublished(event.aggregateType)
       return
     }
@@ -330,10 +331,10 @@ export class OutboxPublisher {
     // Atomically set the idempotency key BEFORE publishing.  If another
     // consumer already set it (extremely rare race), treat as duplicate.
     const key = buildPublishIdempotencyKey(this.consumerId, event.id)
-    const acquired = await this.repository.trySetPublishIdempotencyKey(pool, event.id, key)
+    const acquired = await this.repository.trySetPublishIdempotencyKey(pool, event.id, key, this.consumerId)
     if (!acquired) {
       logger.info(`[OutboxPublisher] Event ${event.id} publish idempotency key already set — skipping publish`)
-      await this.repository.markPublished(pool, event.id)
+      await this.repository.markPublished(pool, event.id, this.consumerId)
       incrementOutboxPublished(event.aggregateType)
       return
     }
@@ -357,16 +358,23 @@ export class OutboxPublisher {
     try {
       await tracer.startActiveSpan('outbox.publish', { links, attributes: { 'outbox.event.id': event.id.toString(), 'outbox.event.type': event.eventType, 'outbox.aggregate.type': event.aggregateType, 'outbox.aggregate.id': event.aggregateId } }, async (span) => {
         try {
+          // Restore the correlation id captured at emit time so any logger
+          // calls made while publishing (including inside the webhook
+          // delivery HTTP client) are tagged with the id of the request
+          // that originally triggered this event.
+          const publishWithContext = () =>
+            runWithCorrelationIds({ correlationId: event.correlationId ?? undefined }, () =>
+              this.publisher.publish(event)
+            )
+
           // If we have a span context, set it as active context for publishing
           if (parentSpanContext) {
             const ctx = trace.setSpanContext(context.active(), parentSpanContext)
-            await context.with(ctx, async () => {
-              await this.publisher.publish(event)
-            })
+            await context.with(ctx, publishWithContext)
           } else {
-            await this.publisher.publish(event)
+            await publishWithContext()
           }
-          await this.repository.markPublished(pool, event.id)
+          await this.repository.markPublished(pool, event.id, this.consumerId)
           incrementOutboxPublished(event.aggregateType)
           logger.info(`[OutboxPublisher] Published event ${event.id} (${event.eventType})`)
           span.setStatus({ code: SpanStatusCode.OK })
@@ -379,7 +387,7 @@ export class OutboxPublisher {
           )
           try {
             // markFailed also clears the idempotency key so the event can be retried
-            const result = await this.repository.markFailed(pool, event.id, errorMessage)
+            const result = await this.repository.markFailed(pool, event.id, errorMessage, this.consumerId)
             if (result?.status === 'dead_letter') {
               // Normalize a short error code for metrics
               const code = (errorMessage.split(/\s+/)[0] || 'UNKNOWN')
@@ -497,6 +505,7 @@ export class OutboxPublisher {
     if (!this.running) return
     const stats = await this.getStats()
     setOutboxPendingGauge(stats.pending)
+    setOutboxLifecycleGauges({ pending: stats.pending, processing: stats.processing, retrying: stats.failed, deadLetter: stats.dead_letter })
   }
 
   /**

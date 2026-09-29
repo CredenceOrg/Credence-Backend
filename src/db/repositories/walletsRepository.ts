@@ -8,9 +8,21 @@ import {
 } from "../transaction.js";
 import { WalletTransactionsRepository } from "./walletTransactionsRepository.js";
 import {
+  addDecimals,
+  assertWithinNumericBounds,
   compareDecimals,
+  DecimalOverflowError,
+  DecimalScaleError,
   isValidPositiveDecimal,
 } from "../../lib/decimalMath.js";
+
+/**
+ * Precision and scale of the `wallets.balance` column
+ * (`NUMERIC(36, 18)` — see src/db/schema.ts). Kept in one place so the
+ * application-layer bounds check below can never drift from the schema.
+ */
+const BALANCE_PRECISION = 36;
+const BALANCE_SCALE = 18;
 
 /**
  * Thrown when a debit would reduce a wallet's balance below zero.
@@ -27,6 +39,59 @@ export class InsufficientBalanceError extends AppError {
       422,
       { walletId, available, requested },
     );
+  }
+}
+
+/**
+ * Thrown when an amount carries more fractional digits than the
+ * `wallets.balance` column's scale supports. Postgres would otherwise
+ * silently round the value on write rather than reject it.
+ */
+export class AmountScaleError extends AppError {
+  constructor(readonly amount: string, readonly maxScale: number) {
+    super(
+      `Amount "${amount}" has more than ${maxScale} fractional digits`,
+      ErrorCode.INVALID_FORMAT,
+      400,
+      { amount, maxScale },
+    );
+  }
+}
+
+/**
+ * Thrown when an amount (or the resulting balance) would exceed the
+ * magnitude representable by the `wallets.balance` column, matching
+ * Postgres's own `NUMERIC(36,18)` bound but rejected before any row lock
+ * or write is attempted.
+ */
+export class AmountOverflowError extends AppError {
+  constructor(readonly amount: string, readonly precision: number, readonly scale: number) {
+    super(
+      `Amount "${amount}" exceeds the maximum representable wallet balance`,
+      ErrorCode.VALUE_TOO_LARGE,
+      400,
+      { amount, precision, scale },
+    );
+  }
+}
+
+/**
+ * Validate that `amount` is exactly representable by the `wallets.balance`
+ * column (correct scale, no overflow) before any lock is acquired or state
+ * changed. Translates the pure {@link decimalMath} errors into typed,
+ * documented `AppError`s so callers never see a raw driver exception.
+ */
+function assertValidWalletAmount(amount: string): void {
+  try {
+    assertWithinNumericBounds(amount, BALANCE_PRECISION, BALANCE_SCALE);
+  } catch (error) {
+    if (error instanceof DecimalScaleError) {
+      throw new AmountScaleError(amount, BALANCE_SCALE);
+    }
+    if (error instanceof DecimalOverflowError) {
+      throw new AmountOverflowError(amount, BALANCE_PRECISION, BALANCE_SCALE);
+    }
+    throw error;
   }
 }
 
@@ -226,6 +291,10 @@ export class WalletsRepository {
       throw new Error(`Invalid credit amount: "${amount}"`);
     }
 
+    // Reject invalid scale or self-overflow before acquiring the row lock —
+    // an amount that doesn't fit the column on its own can never succeed.
+    assertValidWalletAmount(amount);
+
     return this.txManager.withTransaction(
       async (client) => {
         // Lock the row
@@ -245,11 +314,18 @@ export class WalletsRepository {
 
         const previousBalance = lockResult.rows[0].balance;
 
+        // Reject if crediting this amount would push the balance beyond the
+        // column's representable magnitude. Checked exactly, in application
+        // code, before any write — rather than surfacing a raw Postgres
+        // `22003 numeric_field_overflow` from the UPDATE below.
+        const projectedBalance = addDecimals(previousBalance, amount);
+        assertValidWalletAmount(projectedBalance);
+
         // Update balance
         const updateResult = await client.query<WalletRow>(
           `
           UPDATE wallets
-          SET balance = (balance::NUMERIC + $2::NUMERIC)::TEXT,
+          SET balance = balance + $2::NUMERIC,
               updated_at = NOW()
           WHERE id = $1
           RETURNING id, address, balance, currency, created_at, updated_at
@@ -317,6 +393,13 @@ export class WalletsRepository {
       throw new Error(`Invalid debit amount: "${amount}"`);
     }
 
+    // Reject invalid scale or overflow before acquiring the row lock. A
+    // debit can never increase the balance's magnitude, but an amount with
+    // more fractional digits than the column supports would still be
+    // silently rounded by Postgres — mismatching the exact amount recorded
+    // in the immutable ledger below.
+    assertValidWalletAmount(amount);
+
     return this.txManager.withTransaction(
       async (client) => {
         // Lock the row so concurrent debits queue up rather than racing.
@@ -348,7 +431,7 @@ export class WalletsRepository {
         const updateResult = await client.query<WalletRow>(
           `
           UPDATE wallets
-          SET balance = (balance::NUMERIC - $2::NUMERIC)::TEXT,
+          SET balance = balance - $2::NUMERIC,
               updated_at = NOW()
           WHERE id = $1
           RETURNING id, address, balance, currency, created_at, updated_at

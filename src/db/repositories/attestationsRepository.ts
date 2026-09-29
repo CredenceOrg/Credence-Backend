@@ -65,7 +65,19 @@ const mapAttestation = (row: AttestationRow): Attestation => ({
 export class AttestationsRepository extends BaseRepository {
 
   async create(input: CreateAttestationInput): Promise<Attestation> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
+    const bondCheck = await this.db.query<{ exists: boolean }>(
+      `
+      SELECT EXISTS (
+        SELECT 1 FROM bonds WHERE id = $1 AND tenant_id = $2
+      ) AS exists
+      `,
+      [input.bondId, tenantId],
+    );
+    if (!bondCheck.rows[0]?.exists) {
+      throw new Error("Bond not found for current tenant");
+    }
+
     const result = await this.db.query<AttestationRow>(
       `
       INSERT INTO attestations (bond_id, attester_address, subject_address, score, note)
@@ -85,29 +97,31 @@ export class AttestationsRepository extends BaseRepository {
   }
 
   async findById(id: number): Promise<Attestation | null> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const result = await this.db.query<AttestationRow>(
       `
       SELECT id, bond_id, attester_address, subject_address, score, note, created_at
       FROM attestations
       WHERE id = $1
+        AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)
       `,
-      [id],
+      [id, tenantId],
     );
 
     return result.rows[0] ? mapAttestation(result.rows[0]) : null;
   }
 
   async listBySubject(subjectAddress: string): Promise<Attestation[]> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const result = await this.db.query<AttestationRow>(
       `
       SELECT id, bond_id, attester_address, subject_address, score, note, created_at
       FROM attestations
       WHERE subject_address = $1
+        AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)
       ORDER BY created_at DESC, id DESC
       `,
-      [subjectAddress],
+      [subjectAddress, tenantId],
     );
 
     return result.rows.map(mapAttestation);
@@ -117,25 +131,27 @@ export class AttestationsRepository extends BaseRepository {
     subjectAddress: string,
     options: ListAttestationsPageOptions,
   ): Promise<AttestationPage> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const [items, count] = await Promise.all([
       this.db.query<AttestationRow>(
         `
         SELECT id, bond_id, attester_address, subject_address, score, note, created_at
         FROM attestations
         WHERE subject_address = $1
+          AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $4)
         ORDER BY created_at DESC, id DESC
         LIMIT $2 OFFSET $3
         `,
-        [subjectAddress, options.limit, options.offset],
+        [subjectAddress, options.limit, options.offset, tenantId],
       ),
       this.db.query<{ total: string | number }>(
         `
         SELECT COUNT(*) AS total
         FROM attestations
         WHERE subject_address = $1
+          AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)
         `,
-        [subjectAddress],
+        [subjectAddress, tenantId],
       ),
     ]);
 
@@ -146,43 +162,46 @@ export class AttestationsRepository extends BaseRepository {
   }
 
   async listByBond(bondId: number): Promise<Attestation[]> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const result = await this.db.query<AttestationRow>(
       `
       SELECT id, bond_id, attester_address, subject_address, score, note, created_at
       FROM attestations
       WHERE bond_id = $1
+        AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)
       ORDER BY created_at DESC, id DESC
       `,
-      [bondId],
+      [bondId, tenantId],
     );
 
     return result.rows.map(mapAttestation);
   }
 
   async updateScore(id: number, score: number): Promise<Attestation | null> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const result = await this.db.query<AttestationRow>(
       `
       UPDATE attestations
       SET score = $2
       WHERE id = $1
+        AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $3)
       RETURNING id, bond_id, attester_address, subject_address, score, note, created_at
       `,
-      [id, score],
+      [id, score, tenantId],
     );
 
     return result.rows[0] ? mapAttestation(result.rows[0]) : null;
   }
 
   async delete(id: number): Promise<boolean> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     const result = await this.db.query(
       `
       DELETE FROM attestations
       WHERE id = $1
+        AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)
       `,
-      [id],
+      [id, tenantId],
     );
 
     return (result.rowCount ?? 0) > 0;
@@ -199,13 +218,13 @@ export class AttestationsRepository extends BaseRepository {
     subjectAddress: string,
     options: CursorPaginationOptions,
   ): Promise<AttestationCursorPage> {
-    this.assertTenant();
+    const tenantId = this.assertTenant();
     
     // Fetch limit + 1 to determine if there are more results
     const fetchLimit = options.limit + 1;
-    const values: any[] = [subjectAddress, fetchLimit];
-    let whereClause = "WHERE subject_address = $1";
-    let paramIndex = 3;
+    const values: any[] = [subjectAddress, tenantId, fetchLimit];
+    let whereClause = "WHERE subject_address = $1 AND bond_id IN (SELECT id FROM bonds WHERE tenant_id = $2)";
+    let paramIndex = 4;
 
     if (options.cursor) {
       whereClause += ` AND (created_at, id) < ($${paramIndex}, $${paramIndex + 1})`;
@@ -218,7 +237,7 @@ export class AttestationsRepository extends BaseRepository {
       FROM attestations
       ${whereClause}
       ORDER BY created_at DESC, id DESC
-      LIMIT $2
+      LIMIT $3
       `,
       values,
     );

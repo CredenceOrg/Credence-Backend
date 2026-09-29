@@ -1,4 +1,4 @@
-export { runHealthChecks, buildDegradationSummary } from './checks.js'
+export { runHealthChecks, buildDegradationSummary, CRITICAL_DEPS } from './checks.js'
 export type {
   DependencyHealth,
   DependencyReason,

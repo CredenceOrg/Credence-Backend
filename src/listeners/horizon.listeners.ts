@@ -25,6 +25,10 @@
 //
 import { dbRepository } from '../db/repository.js'
 import type { Queryable } from '../db/repositories/queryable.js'
+import {
+  resolveIngestionTransition,
+  HorizonIngestionTransitionError,
+} from './horizonTransitions.js'
 
 // ---------------------------------------------------------------------------
 // Public event model — unchanged from the original implementation.
@@ -284,9 +288,24 @@ export class LeaseManager {
 // HorizonListener — backwards-compatible plus lease-aware variant.
 // ---------------------------------------------------------------------------
 
+/**
+ * Repository contract required to enforce ingestion lifecycle transitions.
+ *
+ * `getNodeStatus` is the read half of the read-validate-write invariant in
+ * `HorizonListener.handleEvent`: an event can only move a node along a legal
+ * lifecycle transition (see `src/listeners/horizonTransitions.ts`), and a
+ * `slash`/`withdrawal` for a node that has never been ingested is rejected
+ * instead of materializing phantom state.
+ */
+export interface HorizonIngestionRepository {
+  upsertNode(nodeId: string, amount: string): Promise<boolean>
+  updateNodeStatus(nodeId: string, status: string, amount?: string): Promise<boolean>
+  getNodeStatus(nodeId: string): Promise<string | null>
+}
+
 export class HorizonListener {
   // Inject dependency for easy mocking
-  constructor(private db = dbRepository) {}
+  constructor(private db: HorizonIngestionRepository = dbRepository) {}
 
   async handleEvent(event: HorizonEvent): Promise<void> {
     if (!event.nodeId || !event.type) {
@@ -296,6 +315,9 @@ export class HorizonListener {
     try {
       switch (event.type) {
         case 'bond':
+          // A `bond` event is the only way a node comes into existence; the
+          // upsert is idempotent by nature (create-or-refresh into `active`),
+          // so repeated redelivery is a safe no-op at the repository level.
           if (!event.amount)
             throw new Error('Malformed event payload: missing required fields')
           await this.db.upsertNode(event.nodeId, event.amount)
@@ -303,10 +325,16 @@ export class HorizonListener {
         case 'slash':
           if (!event.penalty)
             throw new Error('Malformed event payload: missing required fields')
-          await this.db.updateNodeStatus(event.nodeId, 'slashed', event.penalty)
+          // Read-validate-write: the transition is enforced before any write,
+          // so rejected / replayed events leave zero partial state.
+          if (await this.isAppliedTransition(event.nodeId, 'slashed', event.type)) {
+            await this.db.updateNodeStatus(event.nodeId, 'slashed', event.penalty)
+          }
           break
         case 'withdrawal':
-          await this.db.updateNodeStatus(event.nodeId, 'withdrawn')
+          if (await this.isAppliedTransition(event.nodeId, 'withdrawn', event.type)) {
+            await this.db.updateNodeStatus(event.nodeId, 'withdrawn')
+          }
           break
         default:
           console.log(`Ignored unknown event type: ${event.type}`)
@@ -315,6 +343,43 @@ export class HorizonListener {
     } catch (error) {
       throw error // Re-throw to allow tests to catch DB failures
     }
+  }
+
+  /**
+   * Read-validate-write enforcement of the ingestion lifecycle.
+   *
+   * Returns `true` only for a **legal state change** (the caller must then
+   * persist the new state):
+   *
+   *  - Unknown node (`getNodeStatus` → `null`) → rejected with
+   *    `HorizonIngestionTransitionError` (`NODE_NOT_INGESTED`); no write.
+   *  - Same-state redelivery (replay) → accepted as a no-op; returns `false`
+   *    so no redundant write is issued.
+   *  - Illegal change (stale / out-of-order) → rejected with
+   *    `HorizonIngestionTransitionError` (`INVALID_STATE_TRANSITION`); no
+   *    write.
+   *
+   * Both the rejected and no-op paths leave zero partial state.
+   */
+  private async isAppliedTransition(
+    nodeId: string,
+    requested: 'slashed' | 'withdrawn',
+    eventType: string,
+  ): Promise<boolean> {
+    const current = await this.db.getNodeStatus(nodeId)
+    const decision = resolveIngestionTransition(current, requested)
+
+    if (decision.status === 'rejected') {
+      throw new HorizonIngestionTransitionError({
+        code: decision.code,
+        nodeId,
+        eventType,
+        current: decision.current,
+        requested: decision.requested,
+      })
+    }
+
+    return decision.status === 'applied'
   }
 }
 

@@ -4,6 +4,7 @@ import {
   incrementOutboxPublished,
   incrementOutboxFailed,
   setOutboxPendingGauge,
+  setOutboxLifecycleGauges,
   incrementOutboxLeaseRenew,
   incrementOutboxQuarantine,
   _resetOutboxMetricsCacheForTests,
@@ -60,6 +61,18 @@ describe('Outbox Metrics (#329)', () => {
     const metrics2 = await promClient.register.getMetricsAsJSON()
     const metric2 = metrics2.find(m => m.name === 'outbox_pending_gauge')
     expect(metric2?.values[0].value).toBe(10)
+  })
+
+  it('tracks pending, processing, retrying, and dead-letter states separately', async () => {
+    setOutboxLifecycleGauges({ pending: 3, processing: 2, retrying: 4, deadLetter: 1 })
+    const metrics = await promClient.register.getMetricsAsJSON()
+    const metric = metrics.find(m => m.name === 'outbox_lifecycle_gauge')
+    expect(metric?.values).toEqual(expect.arrayContaining([
+      expect.objectContaining({ value: 3, labels: { state: 'pending' } }),
+      expect.objectContaining({ value: 2, labels: { state: 'processing' } }),
+      expect.objectContaining({ value: 4, labels: { state: 'retrying' } }),
+      expect.objectContaining({ value: 1, labels: { state: 'dead_letter' } }),
+    ]))
   })
 
   it('updates outbox_lease_renew_total correctly', async () => {

@@ -7,6 +7,9 @@ import { getVersionMetadata } from '../utils/version.js'
  * - GET /api/version -> git SHA, build timestamp, and Node version of the
  *   running process. Lets support/on-call confirm which build is deployed
  *   without shell access to the host. Always 200; no dependency checks.
+ *
+ * **CORS policy:** Open — `GET /api/version` accepts any `Origin`. See
+ * `docs/CORS_POLICY.md`.
  */
 export function createVersionRouter(): Router {
   const router = Router()
