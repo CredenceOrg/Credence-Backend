@@ -1,3 +1,4 @@
+
 /**
  * Centralized HTTP transport error normalization and retry classification.
  *
@@ -170,4 +171,81 @@ export function isRetryableTransportCode(code: TransportErrorCode): boolean {
   // All four transport codes (TIMEOUT, RESET, REFUSED, NETWORK) are retriable.
   // Non-idempotent callers that need to suppress this must check explicitly.
   return code === 'TIMEOUT' || code === 'RESET' || code === 'REFUSED' || code === 'NETWORK'
+}
+
+/**
+ * Returns true if `err` is a permission/authorization failure (HTTP 401/403 or
+ * Node.js EACCES/EPERM). These are never retried because retrying will not
+ * change the outcome and may lock out the caller.
+ */
+export function isPermissionError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const code = getNodeCode(err)
+  if (code === 'EACCES' || code === 'EPERM') return true
+  const status = getHttpStatus(err)
+  return status === 401 || status === 403
+}
+
+/**
+ * Returns true if `err` represents a stale/expired state (HTTP 409/410/412 or
+ * a stale-read marker). Stale errors are not retried blindly; callers must
+ * re-read state before retrying to avoid clobbering concurrent updates.
+ */
+export function isStaleError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false
+  const status = getHttpStatus(err)
+  if (status === 409 || status === 410 || status === 412) return true
+  const msg = err.message.toLowerCase()
+  return msg.includes('stale') || msg.includes('expired') || msg.includes('precondition failed')
+}
+
+/**
+ * Best-effort extraction of an HTTP status code from an arbitrary error value.
+ * Recognizes `status`, `statusCode`, and `response.status` shapes used by
+ * fetch wrappers, axios, got, and node-fetch.
+ */
+export function getHttpStatus(err: unknown): number | undefined {
+  if (err == null || typeof err !== 'object') return undefined
+  const rec = err as Record<string, unknown>
+  const direct = rec.status ?? rec.statusCode
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct
+  const response = rec.response
+  if (response != null && typeof response === 'object') {
+    const nested = (response as Record<string, unknown>).status
+    if (typeof nested === 'number' && Number.isFinite(nested)) return nested
+  }
+  return undefined
+}
+
+/**
+ * Classifies an error into a recovery decision. This is the single entry point
+ * callers should use to decide whether to retry, re-read state, or surface the
+ * failure. Deterministic for all inputs (including non-Error values).
+ *
+ * Invariants:
+ * - Permission errors are never retried.
+ * - Stale errors require a re-read before retry (never blind retry).
+ * - Transport errors are retried per `isRetryableTransportCode`.
+ * - Unknown errors are not retried (fail closed).
+ */
+export type RecoveryDecision =
+  | { readonly action: 'retry'; readonly reason: TransportErrorCode | 'HTTP_STATUS' }
+  | { readonly action: 'reread'; readonly reason: 'STALE' }
+  | { readonly action: 'fail'; readonly reason: 'PERMISSION' | 'UNKNOWN' }
+
+export function classifyRecovery(err: unknown): RecoveryDecision {
+  if (isPermissionError(err)) return { action: 'fail', reason: 'PERMISSION' }
+  if (isStaleError(err)) return { action: 'reread', reason: 'STALE' }
+
+  const transport = normalizeTransportError(err)
+  if (transport && isRetryableTransportCode(transport.code)) {
+    return { action: 'retry', reason: transport.code }
+  }
+
+  const status = getHttpStatus(err)
+  if (status !== undefined && isRetryableHttpStatus(status)) {
+    return { action: 'retry', reason: 'HTTP_STATUS' }
+  }
+
+  return { action: 'fail', reason: 'UNKNOWN' }
 }

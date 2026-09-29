@@ -6,6 +6,7 @@ import {
   isRetryableHttpStatus,
   isRetryableTransportCode,
 } from './httpErrors.js'
+import { normalizeError, isRetryableError, type AppError } from '../lib/errors.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -287,5 +288,213 @@ describe('body-read transport error classification (soroban regression)', () => 
     const badJson = new SyntaxError('Unexpected token } in JSON at position 42')
     const transport = normalizeTransportError(badJson)
     expect(transport).toBeNull()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// normalizeError: boundary and recovery coverage for src/lib/errors.ts
+// ---------------------------------------------------------------------------
+
+describe('normalizeError boundary cases', () => {
+  it('passes through an already-normalized AppError unchanged (idempotent)', () => {
+    const original: AppError = {
+      code: 'TIMEOUT',
+      message: 'request timed out',
+      retryable: true,
+    }
+    const result = normalizeError(original)
+    expect(result).toEqual(original)
+    expect(result).toBe(original)
+  })
+
+  it('is idempotent when applied twice to a raw Error', () => {
+    const raw = makeNodeError('ECONNRESET')
+    const once = normalizeError(raw)
+    const twice = normalizeError(once)
+    expect(twice).toEqual(once)
+  })
+
+  it('normalizes null to a deterministic non-retryable UNKNOWN error', () => {
+    const result = normalizeError(null)
+    expect(result.code).toBe('UNKNOWN')
+    expect(result.retryable).toBe(false)
+    expect(typeof result.message).toBe('string')
+    expect(result.message.length).toBeGreaterThan(0)
+  })
+
+  it('normalizes undefined to a deterministic non-retryable UNKNOWN error', () => {
+    const result = normalizeError(undefined)
+    expect(result.code).toBe('UNKNOWN')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('normalizes a thrown string without leaking it verbatim', () => {
+    const result = normalizeError('boom')
+    expect(result.code).toBe('UNKNOWN')
+    expect(result.retryable).toBe(false)
+    expect(result.message).not.toBe('boom')
+  })
+
+  it('normalizes a thrown number deterministically', () => {
+    const a = normalizeError(42)
+    const b = normalizeError(42)
+    expect(a).toEqual(b)
+    expect(a.code).toBe('UNKNOWN')
+  })
+
+  it('normalizes a thrown plain object deterministically', () => {
+    const a = normalizeError({ weird: true })
+    const b = normalizeError({ weird: true })
+    expect(a).toEqual(b)
+    expect(a.code).toBe('UNKNOWN')
+  })
+
+  it('classifies AbortError as TIMEOUT and retryable', () => {
+    const result = normalizeError(makeAbortError('DOMException'))
+    expect(result.code).toBe('TIMEOUT')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('classifies ECONNRESET as RESET and retryable', () => {
+    const result = normalizeError(makeNodeError('ECONNRESET'))
+    expect(result.code).toBe('RESET')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('classifies ECONNREFUSED as REFUSED and retryable', () => {
+    const result = normalizeError(makeNodeError('ECONNREFUSED'))
+    expect(result.code).toBe('REFUSED')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('classifies a SyntaxError as a non-retryable PARSE_ERROR', () => {
+    const result = normalizeError(new SyntaxError('Unexpected token < in JSON'))
+    expect(result.code).toBe('PARSE_ERROR')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('classifies a generic application Error as non-retryable UNKNOWN', () => {
+    const result = normalizeError(new Error('invalid address'))
+    expect(result.code).toBe('UNKNOWN')
+    expect(result.retryable).toBe(false)
+  })
+
+  it('does not expose the original error message verbatim for unknown errors', () => {
+    const secret = 'internal-token-abc123'
+    const result = normalizeError(new Error(secret))
+    expect(result.message).not.toContain(secret)
+  })
+
+  it('preserves the original error as cause for diagnosability', () => {
+    const orig = makeNodeError('ECONNRESET')
+    const result = normalizeError(orig)
+    expect(result.cause).toBe(orig)
+  })
+
+  it('handles a deeply nested undici wrapper without unbounded recursion', () => {
+    const inner = makeNodeError('ECONNRESET')
+    const mid = new TypeError('fetch failed')
+    ;(mid as any).cause = inner
+    const outer = new TypeError('fetch failed')
+    ;(outer as any).cause = mid
+    const result = normalizeError(outer)
+    expect(result.code).toBe('RESET')
+    expect(result.retryable).toBe(true)
+  })
+
+  it('handles a self-referential cause without infinite recursion', () => {
+    const cyclic = new TypeError('fetch failed')
+    ;(cyclic as any).cause = cyclic
+    const result = normalizeError(cyclic)
+    expect(result.code).toBe('NETWORK')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// isRetryableError: recovery semantics
+// ---------------------------------------------------------------------------
+
+describe('isRetryableError recovery semantics', () => {
+  it('returns true for transport errors (TIMEOUT/RESET/REFUSED/NETWORK)', () => {
+    expect(isRetryableError(normalizeError(makeAbortError('DOMException')))).toBe(true)
+    expect(isRetryableError(normalizeError(makeNodeError('ECONNRESET')))).toBe(true)
+    expect(isRetryableError(normalizeError(makeNodeError('ECONNREFUSED')))).toBe(true)
+    expect(isRetryableError(normalizeError(makeUndiciError()))).toBe(true)
+  })
+
+  it('returns false for parse errors', () => {
+    expect(isRetryableError(normalizeError(new SyntaxError('bad json')))).toBe(false)
+  })
+
+  it('returns false for unknown errors', () => {
+    expect(isRetryableError(normalizeError(new Error('nope')))).toBe(false)
+    expect(isRetryableError(normalizeError(null))).toBe(false)
+  })
+
+  it('agrees with the retryable flag on the normalized error', () => {
+    const samples: unknown[] = [
+      makeAbortError('DOMException'),
+      makeNodeError('ECONNRESET'),
+      new SyntaxError('bad json'),
+      new Error('nope'),
+      null,
+    ]
+    for (const sample of samples) {
+      const normalized = normalizeError(sample)
+      expect(isRetryableError(normalized)).toBe(normalized.retryable)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Determinism and concurrency: repeated normalization must be stable
+// ---------------------------------------------------------------------------
+
+describe('normalizeError determinism under repeated/concurrent use', () => {
+  it('produces structurally equal results across repeated calls', () => {
+    const raw = makeNodeError('ECONNRESET')
+    const results = Array.from({ length: 50 }, () => normalizeError(raw))
+    for (const r of results) {
+      expect(r.code).toBe('RESET')
+      expect(r.retryable).toBe(true)
+    }
+    const first = results[0]
+    for (const r of results) {
+      expect(r.code).toBe(first.code)
+      expect(r.retryable).toBe(first.retryable)
+      expect(r.message).toBe(first.message)
+    }
+  })
+
+  it('does not mutate the input error when normalizing', () => {
+    const raw = makeNodeError('ECONNRESET')
+    const before = { code: (raw as any).code, message: raw.message, name: raw.name }
+    normalizeError(raw)
+    expect((raw as any).code).toBe(before.code)
+    expect(raw.message).toBe(before.message)
+    expect(raw.name).toBe(before.name)
+  })
+
+  it('does not mutate an already-normalized AppError', () => {
+    const original: AppError = { code: 'TIMEOUT', message: 'x', retryable: true }
+    const snapshot = { ...original }
+    normalizeError(original)
+    expect(original).toEqual(snapshot)
+  })
+
+  it('handles concurrent normalization of distinct errors without cross-talk', async () => {
+    const inputs: unknown[] = [
+      makeAbortError('DOMException'),
+      makeNodeError('ECONNRESET'),
+      makeNodeError('ECONNREFUSED'),
+      new SyntaxError('bad json'),
+      new Error('nope'),
+      null,
+    ]
+    const expected = inputs.map((i) => normalizeError(i).code)
+    const results = await Promise.all(
+      inputs.map((i) => Promise.resolve().then(() => normalizeError(i).code))
+    )
+    expect(results).toEqual(expected)
   })
 })
