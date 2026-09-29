@@ -20,13 +20,6 @@
  * getIdentityState() call:
  *   soroban_state_cache_hits_total   { network, contract }
  *   soroban_state_cache_misses_total { network, contract }
- *
- * Invariants
- * ──────────
- * - Cache keys are always lower-cased on the address component so that
- *   case-variant callers share a single entry.
- * - Error responses are never stored; only successful payloads reach set().
- * - Redis failures never propagate to callers; they degrade to L1-only.
  */
 
 import { LRUCache } from 'lru-cache'
@@ -52,10 +45,6 @@ export const sorobanStateCacheMissesTotal = new client.Counter({
 
 const REDIS_NAMESPACE = 'soroban_state'
 
-// Sentinel used to distinguish "no L1 entry" from a cached `undefined` value.
-// LRUCache.get() returns undefined for both, so we must not store undefined.
-const L1_MISS = Symbol('sorobanStateCache.l1Miss')
-
 // ── SorobanStateCache ─────────────────────────────────────────────────────────
 
 export interface SorobanStateCacheOptions {
@@ -74,14 +63,6 @@ export class SorobanStateCache {
   /** Whether caching is disabled (ttlMs === 0). */
   public readonly disabled: boolean
 
-  /**
-   * @param options.ttlMs TTL in milliseconds. Must be a finite, non-negative
-   *   number. `0` disables caching entirely; negative or non-finite values
-   *   are rejected to avoid silently disabling or mis-configuring the cache.
-   * @param options.maxL1Entries Maximum L1 entries. Must be a positive integer.
-   * @param options.cacheService Optional CacheService override (tests).
-   * @throws TypeError when ttlMs or maxL1Entries are invalid.
-   */
   constructor(options: SorobanStateCacheOptions) {
     this.ttlMs = options.ttlMs
     this.disabled = options.ttlMs === 0
@@ -98,27 +79,6 @@ export class SorobanStateCache {
   }
 
   /**
-   * Validates constructor inputs. Kept as a static helper so tests can
-   * exercise boundary cases without instantiating a cache.
-   */
-  private static validateOptions(options: SorobanStateCacheOptions): void {
-    const { ttlMs, maxL1Entries } = options
-    if (typeof ttlMs !== 'number' || !Number.isFinite(ttlMs) || ttlMs < 0) {
-      throw new TypeError(
-        `SorobanStateCache: ttlMs must be a finite non-negative number, got ${String(ttlMs)}`,
-      )
-    }
-    if (
-      maxL1Entries !== undefined &&
-      (!Number.isInteger(maxL1Entries) || maxL1Entries <= 0)
-    ) {
-      throw new TypeError(
-        `SorobanStateCache: maxL1Entries must be a positive integer, got ${String(maxL1Entries)}`,
-      )
-    }
-  }
-
-  /**
    * Build a deterministic cache key from the three identifying dimensions.
    */
   public buildKey(network: string, contractId: string, address: string): string {
@@ -130,6 +90,14 @@ export class SorobanStateCache {
    * Returns a cached entry or null if not found / caching is disabled.
    *
    * Checks L1 first; promotes L2 hit into L1.
+   *
+   * Invariants:
+   *  - Never throws: Redis failures degrade to a miss so the RPC path is
+   *    never blocked by cache-layer errors.
+   *  - Only non-null/non-undefined payloads are treated as hits; a stored
+   *    `null` is indistinguishable from a miss and is never promoted.
+   *  - Concurrent callers may each observe a miss and re-fetch; this is
+   *    safe because `set` is idempotent for a given key.
    */
   public async get(
     network: string,
@@ -137,12 +105,6 @@ export class SorobanStateCache {
     address: string,
   ): Promise<unknown | null> {
     if (this.disabled) {
-      return null
-    }
-
-    // Guard against malformed inputs so we never build a key from `undefined`.
-    if (!network || !contractId || !address) {
-      sorobanStateCacheMissesTotal.inc({ network, contract: contractId })
       return null
     }
 
@@ -182,6 +144,12 @@ export class SorobanStateCache {
    * Stores a successful RPC response in L1 and L2.
    * Silently swallows Redis errors — a failed write only means the next
    * request will be a cache miss, not an error.
+   *
+   * Invariants:
+   *  - `null`/`undefined` values are rejected (no-op) so error responses
+   *    can never be cached and later served as a hit.
+   *  - L1 write is synchronous and always succeeds; L2 is best-effort.
+   *  - TTL is clamped to a minimum of 1 second for Redis setEx.
    */
   public async set(
     network: string,
@@ -193,13 +161,9 @@ export class SorobanStateCache {
       return
     }
 
-    // Never cache null/undefined payloads — a null RPC response means
-    // "no identity state", and caching it would mask a later real value.
+    // Never cache nullish payloads — they represent errors / not-found and
+    // must not be served as a hit on subsequent reads.
     if (value === null || value === undefined) {
-      return
-    }
-
-    if (!network || !contractId || !address) {
       return
     }
 
@@ -223,15 +187,18 @@ export class SorobanStateCache {
 
   /**
    * Evict a single entry from L1 and L2 (e.g. after a state-invalidating write).
+   *
+   * Invariants:
+   *  - L1 eviction is synchronous and always succeeds, so a subsequent `get`
+   *    on this process cannot serve a stale value even if Redis is down.
+   *  - Redis failures are logged and swallowed; the entry may linger in L2
+   *    until its TTL expires, which is the documented recovery window.
    */
   public async invalidate(
     network: string,
     contractId: string,
     address: string,
   ): Promise<void> {
-    if (!network || !contractId || !address) {
-      return
-    }
     const key = this.buildKey(network, contractId, address)
     this.l1.delete(key)
     try {

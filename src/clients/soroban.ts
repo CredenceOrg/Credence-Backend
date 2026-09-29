@@ -1,4 +1,3 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   getBackoffDelayMs,
   type ProviderRetryPolicies,
@@ -9,7 +8,6 @@ import {
   resolveExtendedProviderRetryPolicy,
   type ExtendedRetryPolicy,
 } from "./retryExecutor.js";
-import { SorobanStateCache } from "./sorobanStateCache.js";
 import {
   executeSorobanOperation,
   createMetricsAdapter,
@@ -19,7 +17,6 @@ import { createDefaultMetricsCollector } from "../observability/timeoutMetrics.j
 import { normalizeTransportError } from "./httpErrors.js";
 import { isRetryableRpcCode } from "../utils/retryClassifier.js";
 import { logger } from "../utils/logger.js";
-import { createSorobanClient } from "./soroban.js";
 import {
   noopRetryObserver,
   type RetryObserver,
@@ -764,30 +761,6 @@ export class SorobanClient {
       attempts,
       details: error,
     });
-  }
-
-  private isRetryable(error: SorobanClientError): boolean {
-    if (error.code === "NETWORK_ERROR" || error.code === "TIMEOUT_ERROR") {
-      return true;
-    }
-
-    if (error.code === "HTTP_ERROR") {
-      return (
-        error.status === 408 ||
-        error.status === 429 ||
-        (error.status !== undefined && error.status >= 500)
-      );
-    }
-
-    if (error.code === "RPC_ERROR") {
-      return isRetryableRpcCode(error.rpcCode);
-    }
-
-    return false;
-  }
-
-  private getDelayMs(attempt: number): number {
-    return getBackoffDelayMs(this.retryOptions, attempt, this.randomFn);
   }
 }
 
