@@ -70,7 +70,7 @@ export class PostgresAuditChainVerificationRepository implements AuditChainVerif
     }
     const result = await this.db.query<StatusRow>(
       `
-      INSERT INTO audit_chain_verification_status *
+      INSERT INTO audit_chain_verification_status (
         id,
         last_verified_height,
         verified_at,
@@ -79,8 +79,8 @@ export class PostgresAuditChainVerificationRepository implements AuditChainVerif
         violation_count,
         rows_checked,
         updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW)
-      ON CONFLICT (id) DU UPDATE SET
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      ON CONFLICT (id) DO UPDATE SET
         last_verified_height = EXCLUDED.last_verified_height,
         verified_at = EXCLUDED.verified_at,
         status = EXCLUDED.status,
@@ -116,7 +116,19 @@ export class PostgresAuditChainVerificationRepository implements AuditChainVerif
       throw new Error('Missing tenant context')
     }
     await this.db.query(
-      `\n      UPDATE audit_chain_verification_status\n      SET\n        last_verified_height = 0,\n        verified_at = NULL,\n        status = 'never_run',\n        first_break_seq = NULL,\n        violation_count = 0,\n        rows_checked = 0,\n        updated_at = NOW()\n      WHERE id = $1\n      `,\n      [tenantId],
+      `
+      UPDATE audit_chain_verification_status
+      SET
+        last_verified_height = 0,
+        verified_at = NULL,
+        status = 'never_run',
+        first_break_seq = NULL,
+        violation_count = 0,
+        rows_checked = 0,
+        updated_at = NOW()
+      WHERE id = $1
+      `,
+      [tenantId],
     )
   }
 }
