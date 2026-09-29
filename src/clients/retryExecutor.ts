@@ -33,7 +33,14 @@ export function isErrorRetryable(
 
   // 1. Check if the error message or code matches custom retryableErrors pattern
   if (config.retryableErrors && config.retryableErrors.length > 0) {
-    const errorStr = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+    let errorStr = 'Unknown Error'
+    try {
+      errorStr = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
+      errorStr = errorStr.slice(0, 2000) // Prevent DoS on giant strings
+    } catch {
+      // Ignore serialization issues (e.g. Symbol or bad toString)
+    }
+
     const errorCode = error?.code || error?.errorCode
     for (const pattern of config.retryableErrors) {
       if (
@@ -51,7 +58,7 @@ export function isErrorRetryable(
     return true
   }
 
-  // 3. Check HTTP status code
+  // 3. Check HTTP status code safely
   const status = error?.status ?? error?.statusCode
   if (typeof status === 'number') {
     if (config.retryableStatusCodes && config.retryableStatusCodes.length > 0) {
@@ -96,7 +103,7 @@ export async function executeWithRetry<T>(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const controller = new AbortController()
-    let timeoutId: any = null
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
 
     if (policy.timeoutMs !== undefined && policy.timeoutMs > 0) {
       timeoutId = setTimeout(() => controller.abort(), policy.timeoutMs)
@@ -178,8 +185,10 @@ export async function executeWithRetry<T>(
         errorCode,
       })
 
+      // Mask potentially sensitive error details in standard logs
+      const safeLogMsg = error instanceof Error ? error.message : 'Unknown Error'
       logger.info(
-        `Retrying outbound request provider=${provider} attempt=${attempt + 1}/${maxAttempts} delayMs=${delay} error=${error.message || error}`
+        `Retrying outbound request provider=${provider} attempt=${attempt + 1}/${maxAttempts} delayMs=${delay} error=${safeLogMsg}`
       )
 
       await sleepFn(delay)
@@ -235,4 +244,3 @@ export function resolveExtendedProviderRetryPolicy(
 
   return resolved
 }
-
