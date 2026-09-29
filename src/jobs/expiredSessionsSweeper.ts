@@ -9,6 +9,36 @@
  * The TTL applied when inserting rows is governed by `SESSION_TTL_SECONDS`
  * (see {@link config/constants}).  This sweeper only reads `expires_at` so
  * it stays correct regardless of how the TTL was set at write time.
+ *
+ * ## Invariants
+ *
+ * 1. **Single-flight.** At most one cleanup cycle runs concurrently within a
+ *    single sweeper instance. A concurrent `run()` call returns a no-op
+ *    result with `skipped = true` rather than deleting rows twice.
+ * 2. **Dry-run is read-only.** When `dryRun` is true no DELETE statement is
+ *    issued; `deletedCount` is always 0.
+ * 3. **Bounded batching.** Deletion proceeds in batches of at most
+ *    `batchSize` rows and terminates when a batch returns fewer rows than
+ *    `remaining` or when the database reports zero rows deleted (concurrent
+ *    deletion by another process), so the loop cannot spin forever.
+ * 4. **Fresh clock per batch.** Each batch uses `NOW()` so rows that expire
+ *    during a long sweep are still correctly reclaimed.
+ * 5. **Failure is surfaced.** Errors are logged and rethrown from `run()`;
+ *    the `running` flag is always reset in `finally`, allowing the next
+ *    scheduled tick to retry.
+ * 6. **No sensitive data in logs.** Log messages contain only counts, durations
+ *    and error messages.
+ *
+ * ## Boundary and recovery behavior
+
+ *
+ * - `expiredCount == 0`: no delete is attempted.
+ * - `expiredCount > 0` but `DELETE` affects 0 rows (concurrent deletion):
+ *   the loop exits immediately without lossing the remaining rows.
+ * - `DELETE` fails midway: the error is rethrown and `running` is reset,
+ *   so the next tick retries from the current database state.
+ * - `countResult.rows` is empty or malformed: treated as zero expired
+ *   rows rather than NaN or an exception.
  */
 
 import type { Queryable } from '../db/repositories/queryable.js'
@@ -33,6 +63,14 @@ export interface SweeperResult {
   dryRun: boolean
   /** Wall-clock duration in milliseconds. */
   durationMs: number
+  /** True when the cycle was skipped because another run was in flight. */
+  skipped: boolean
+}
+
+function parseCount(value: unknown): number {
+  if (typeof value !== 'string' && typeof value !== 'number') return 0
+  const parsed = typeof value === 'number' ? value : parseInt(value, 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0
 }
 
 /**
@@ -48,7 +86,7 @@ export interface SweeperResult {
  * })
  *
  * sweeper.start()
- * // …
+ * // ...
  * sweeper.stop()
  * ```
  */
@@ -64,8 +102,8 @@ export class ExpiredSessionsSweeper {
     private readonly db: Queryable,
     config: ExpiredSessionsSweeperConfig = {},
   ) {
-    this.intervalMs = config.intervalMs ?? 3_600_000
-    this.batchSize = config.batchSize ?? 5_000
+    this.intervalMs = config.intervalMs ?? 3 600 000
+    this.batchSize = config.batchSize ?? 5 500
     this.dryRun = config.dryRun ?? false
     this.logger = config.logger ?? (() => {})
   }
@@ -105,7 +143,13 @@ export class ExpiredSessionsSweeper {
   async run(): Promise<SweeperResult> {
     if (this.running) {
       this.logger('[ExpiredSessionsSweeper] Already running, skipping')
-      return { expiredCount: 0, deletedCount: 0, dryRun: this.dryRun, durationMs: 0 }
+      return {
+        expiredCount: 0,
+        deletedCount: 0,
+        dryRun: this.dryRun,
+        durationMs: 0,
+        skipped: true,
+      }
     }
 
     this.running = true
@@ -118,7 +162,7 @@ export class ExpiredSessionsSweeper {
          WHERE expires_at <= NOW()`,
       )
 
-      const expiredCount = parseInt(countResult.rows[0]?.count ?? '0', 10)
+      const expiredCount = parseCount(countResult.rows[0]?.count)
 
       this.logger(
         `[ExpiredSessionsSweeper] Found ${expiredCount} expired session rows${this.dryRun ? ' (dry-run)' : ''}`,
@@ -135,8 +179,9 @@ export class ExpiredSessionsSweeper {
              WHERE ctid IN (
                SELECT ctid FROM idempotent_job_attempts
                WHERE expires_at <= NOW()
-               LIMIT $1
-             )`,
+               LIMIT parameter_placeholder
+             )
+             RETURNING 1`,
             [this.batchSize],
           )
 
@@ -150,7 +195,16 @@ export class ExpiredSessionsSweeper {
             )
           }
 
-          if (batchDeleted < this.batchSize) break
+          // Stop when the database reports no more rows (concurrent deletion
+          // or empty result set) or when the batch was not full.
+          if (batchDeleted === 0 || batchDeleted < this.batchSize) {
+            if (batchDeleted === 0 && remaining > 0) {
+              this.logger(
+                `[ExpiredSessionsSweeper] No rows deleted in batch; ${remaining} rows may have been removed concurrently`,
+              )
+            }
+            break
+          }
         }
       }
 
@@ -160,7 +214,7 @@ export class ExpiredSessionsSweeper {
         `[ExpiredSessionsSweeper] Completed: expired=${expiredCount} deleted=${deletedCount} duration=${durationMs}ms`,
       )
 
-      return { expiredCount, deletedCount, dryRun: this.dryRun, durationMs }
+      return { expiredCount, deletedCount, dryRun: this.dryRun, durationMs, skipped: false }
     } catch (error) {
       const durationMs = Date.now() - startTime
       this.logger(
