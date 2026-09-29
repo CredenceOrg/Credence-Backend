@@ -36,8 +36,35 @@ function changedMigrationFiles(baseRef: string): string[] {
 export function lintChangedMigrations(paths: string[]): MigrationLintResult[] {
   const failures: MigrationLintResult[] = []
   for (const path of paths) {
+    // Stale state: file was in the diff but deleted/renamed before lint runs.
+    // Skipping keeps the gate deterministic and avoids false blockers.
     if (!existsSync(path)) continue
-    const content = readFileSync(path, 'utf8')
+    let content: string
+    try {
+      content = readFileSync(path, 'utf8')
+    } catch (error) {
+      // Recovery state: permission errors, transient I/O, or concurrent
+      // deletion between existsSync and read. Report a typed failure instead
+      // of throwing so one unreadable file cannot crash the gate or hide
+      // other blockers. Never include file content in the message.
+      const reason = error instanceof Error ? error.message : String(error)
+      failures.push({
+        ok: false,
+        code: 'READ_FAILURE',
+        message: `READ_FAILURE: unable to read ${path}: ${reason}`,
+        issues: [
+          {
+            type: 'unsafe',
+            code: 'READ_FAILURE',
+            message: `Unable to read migration file: ${reason}`,
+            suggestion: 'Ensure the file exists and is readable, then re-run the check',
+            migration: path,
+          },
+        ],
+        warnings: [],
+      })
+      continue
+    }
     const result = lintCiBlockingPatterns(content, path)
     if (!result.ok) {
       failures.push(result)
@@ -79,7 +106,19 @@ export function runCli(argv = process.argv.slice(2)): number {
   console.log(`migration-lint-ci: checking ${paths.length} changed migration(s):`)
   paths.forEach((p) => console.log(`  - ${p}`))
 
-  const failures = lintChangedMigrations(paths)
+  let failures: MigrationLintResult[]
+  try {
+    failures = lintChangedMigrations(paths)
+  } catch (error) {
+    // Defensive recovery: linting must never throw an unhandled exception
+    // that bypasses the typed exit-code contract (0 = pass/skip, 1 = block).
+    console.error(
+      `migration-lint-ci: failed to lint changed migrations: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    )
+    return 1
+  }
   if (failures.length === 0) {
     console.log('migration-lint-ci: OK — no ADD COLUMN NOT NULL / CREATE UNIQUE INDEX blockers')
     return 0
