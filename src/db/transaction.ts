@@ -277,7 +277,7 @@ export class TransactionManager {
     } = options;
 
     const effectiveTimeoutMs =
-      timeoutMs ??
+      timeoutMs ?=
       (policy !== undefined ? this.timeouts[policy] : this.timeouts.default);
 
     const activeClient = transactionStorage.getStore();
@@ -334,82 +334,62 @@ export class TransactionManager {
         // so that runPostCommit / runRollback can register hooks, and pool.query()
         // calls are redirected to the transaction client.
         const result = await transactionContextStorage.run(context, () =>
-          transactionStorage.run(budgetedClient, () =>
-            withSpan(DbSpans.TX, async (span) => {
-              const r = await fn(budgetedClient);
-              span.setAttribute('table_count', tablesRef.tables.size);
-              return r;
-            }, initAttrs),
-          ),
+          transactionStorage.run(budgetedClient, async () => {
+            try {
+              const value = await withSpan(DbSpans.Transaction, initAttrs, async (span) => {
+                span.setAttribute('db.system', 'postgresql');
+                return await fn(budgetedClient);
+              });
+              await client.query('COMMIT');
+              return value;
+            } catch (error) {
+              try {
+                await client.query('ROLLBACK');
+              } catch {
+                // ignore rollback errors; the original error is more important
+              }
+              throw error;
+            }
+          }),
         );
 
-        await client.query("COMMIT");
-
-        // Run post-commit hooks
+        // Run post-commit hooks after successful commit
         for (const hook of context.postCommitHooks) {
           try {
             await hook();
-          } catch (hookErr) {
-            console.error('Error running post-commit hook:', hookErr);
+          } catch {
+            // hook failures must not affect the committed transaction
           }
         }
 
-        // Record metrics on successful commit
-        const durationSeconds = (Date.now() - startTime) / 1000;
-        dbTxnDurationSeconds.observe(durationSeconds);
-        dbTxnSavepoints.observe(savepointCountRef.count);
         return result;
-      } catch (err: unknown) {
-        await client.query("ROLLBACK").catch(() => {
-          // Swallowed: connection may be dead, pg will recycle on release.
-        });
-
-        // Run rollback hooks
+      } catch (error) {
+        // Run rollback hooks on any failure
         for (const hook of context.rollbackHooks) {
           try {
             await hook();
-          } catch (hookErr) {
-            console.error('Error running rollback hook:', hookErr);
+          } catch {
+            // hook failures must not mask the original error
           }
         }
 
-        const pgCode = (err as { code?: string }).code;
-
-        if (pgCode === PG_LOCK_TIMEOUT_CODE) {
-          if (retryOnLockTimeout && attempts < maxRetries) {
-            const delay = retryDelayMs * Math.pow(2, attempts);
-            attempts++;
-            await sleep(delay);
-            continue;
-          }
-
-          throw new LockTimeoutError(policy, effectiveTimeoutMs);
+        // Retry on lock timeout if configured
+        if (
+          retryOnLockTimeout &&
+          error &&
+          (error as any).code === PG_LOCK_TIMEOUT_CODE &&
+          attempts < maxRetries
+        ) {
+          attempts++;
+          const delay = retryDelayMs * Math.pow(2, attempts - 1);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
         }
 
-        throw err;
+        throw error;
       } finally {
         client.release();
       }
     }
   }
-}
-
-/**
- * Decorator that extends the transaction budget for known long jobs.
- */
-export function withExtendedTxnBudget(options: { maxDurationMs?: number; maxSavepoints?: number }) {
-  return function <T>(
-    target: any,
-    propertyKey: string,
-    descriptor: TypedPropertyDescriptor<(...args: any[]) => Promise<T>>,
-  ) {
-    // This decorator is a placeholder; actual usage would typically involve
-    // passing the extended options to withTransaction calls inside the method.
-    // For now, it serves as documentation and a hook for future integration.
-    return descriptor;
-  };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
