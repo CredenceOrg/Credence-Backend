@@ -20,7 +20,7 @@ interface LeaseRecord {
 
 export interface InMemoryLeaseStore extends Queryable {
   /** Force the stored lease into an expired state — for drill scripts. */
-  expireLease(streamName: string): void
+  expireLease(streamName: string, now?: Date): void
   /** Direct read for assertions. */
   read(streamName: string): LeaseRecord | undefined
   /** Returns all rows (handy for diagnostics). */
@@ -155,10 +155,10 @@ export function createInMemoryLeaseStore(): InMemoryLeaseStore {
       throw new Error(`InMemoryLeaseStore: unsupported SQL\n${sql}`)
     },
 
-    expireLease(streamName: string): void {
+    expireLease(streamName: string, now?: Date): void {
       const r = rows.get(streamName)
       if (r) {
-        const past = new Date(Date.now() - 60_000)
+        const past = new Date((now ?? new Date()).getTime() - 1)
         r.lease_expires_at = past
         r.heartbeat_at = past
       }

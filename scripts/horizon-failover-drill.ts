@@ -37,24 +37,34 @@ const STREAM = 'bond_creation'
 const TTL_MS = 1_000
 const HEARTBEAT_MS = 300
 
-interface Check {
+export interface HorizonFailoverDrillCheck {
   name: string
   ok: boolean
   detail?: string
 }
 
-const results: Check[] = []
-const record = (name: string, ok: boolean, detail?: string): void => {
-  results.push({ name, ok, detail })
-  const icon = ok ? '✅' : '❌'
-  const tail = detail ? `  — ${detail}` : ''
-  console.log(`${icon} ${name}${tail}`)
+export interface HorizonFailoverDrillOptions {
+  now?: () => Date
+  wait?: (ms: number) => Promise<void>
+  store?: InMemoryLeaseStore
+  onCheck?: (check: HorizonFailoverDrillCheck) => void
 }
 
-async function main(): Promise<void> {
+async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
   console.log('▶ Horizon failover drill — stream:', STREAM)
 
-  const store = createInMemoryLeaseStore()
+  const store = options.store ?? createInMemoryLeaseStore()
+  const now = options.now ?? (() => new Date())
+  const wait = options.wait ?? sleep
+  const results: HorizonFailoverDrillCheck[] = []
+  const record = (name: string, ok: boolean, detail?: string): void => {
+    const check = { name, ok, detail }
+    results.push(check)
+    options.onCheck?.(check)
+    const icon = ok ? '✅' : '❌'
+    const tail = detail ? `  — ${detail}` : ''
+    console.log(`${icon} ${name}${tail}`)
+  }
   const processed: Array<{ owner: string; token: string }> = []
 
   // ---- 1. PRIMARY UP --------------------------------------------------
@@ -64,6 +74,7 @@ async function main(): Promise<void> {
       ownerId: 'primary',
       ttlMs: TTL_MS,
       heartbeatMs: HEARTBEAT_MS,
+      now,
     }),
     { inner: new NoopHorizonListener() },
   )
@@ -81,14 +92,23 @@ async function main(): Promise<void> {
   )
 
   // ---- 2. STANDBY JOINS, LOSES RACE ----------------------------------
+  let leaseExpiredDuringHandler = false
   const standby = new LeasedHorizonListener(
     new LeaseManager(store, {
       streamName: STREAM,
       ownerId: 'standby',
       ttlMs: TTL_MS,
       heartbeatMs: HEARTBEAT_MS,
+      now,
     }),
-    { inner: new NoopHorizonListener() },
+    {
+      inner: new NoopHorizonListener((nodeId) => {
+        if (nodeId === 'node-50') {
+          store.expireLease(STREAM, now())
+          leaseExpiredDuringHandler = true
+        }
+      }),
+    },
   )
   const firstClaim = await standby.start()
   record(
@@ -97,11 +117,26 @@ async function main(): Promise<void> {
   )
 
   // ---- 3. PAUSE PRIMARY, WAIT PAST TTL -------------------------------
-  console.log('… pausing primary, waiting for lease to expire')
-  await sleep(TTL_MS + 200)
+  console.log('… pausing primary until the lease expires')
+  if (options.now && options.wait) {
+    await wait(TTL_MS - 1)
+    const beforeExpiry = await standby.start()
+    record(
+      'standby remains blocked immediately before expiry',
+      !beforeExpiry.acquired && beforeExpiry.reason === 'held-by-other',
+    )
+    await wait(1)
+  } else {
+    await wait(TTL_MS + 200)
+  }
 
   const steal = await standby.start()
-  record('standby steals expired lease', steal.acquired)
+  record(
+    options.now && options.wait
+      ? 'standby steals lease at the expiry boundary'
+      : 'standby steals expired lease',
+    steal.acquired,
+  )
   record(
     'fencing token advanced on steal',
     (steal.lease?.fencingToken ?? 0) > (primaryStart.lease?.fencingToken ?? 0),
@@ -119,12 +154,18 @@ async function main(): Promise<void> {
   record('standby processes event 40 cleanly', ok40 === 'processed')
   if (ok40 === 'processed') processed.push({ owner: 'standby', token: '40' })
 
-  // Simulate standby's lease expiring mid-flight by forcibly aging it.
-  store.expireLease(STREAM)
+  // Expire the lease inside the handler so cursor persistence loses fencing.
   const midflight = await standby.process(mkEvent('50'))
+  record('lease expired during event handling', leaseExpiredDuringHandler)
   record(
     'expired-lease-while-processing: result reported as "skipped"',
     midflight === 'skipped',
+  )
+  const afterSkipped = await standby.lease.peek()
+  record(
+    'skipped event does not advance the cursor',
+    afterSkipped?.pagingToken === '40',
+    `cursor=${afterSkipped?.pagingToken}`,
   )
 
   // ---- 6. EDGE CASE C — in-flight replay -----------------------------
@@ -137,6 +178,7 @@ async function main(): Promise<void> {
       ownerId: 'standby-2',
       ttlMs: TTL_MS,
       heartbeatMs: HEARTBEAT_MS,
+      now,
     }),
     { inner: new NoopHorizonListener() },
   )
@@ -177,9 +219,12 @@ function mkEvent(pagingToken: string): HorizonEvent {
 
 /** No-op handler so the drill doesn't depend on a real repository. */
 class NoopHorizonListener extends HorizonListener {
-  constructor() {
+  constructor(onBond?: (nodeId: string) => void) {
     super({
-      upsertNode: async () => true,
+      upsertNode: async (nodeId) => {
+        onBond?.(nodeId)
+        return true
+      },
       updateNodeStatus: async () => true,
       // The drill only emits `bond` events (creation), which never consult
       // the current state; report a live node so the contract is satisfied.
