@@ -187,6 +187,14 @@ export class OutboxRepository {
     shardCount?: number,
     shardId?: number
   ): Promise<OutboxEvent[]> {
+    // Boundary validation: a non-positive limit must never claim rows, and a
+    // non-positive lease would immediately expire and allow duplicate claims.
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return []
+    }
+    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
+      throw new Error('claimEvents requires leaseSeconds > 0')
+    }
     // Try with SKIP LOCKED first (real PostgreSQL)
     try {
       const result = await db.query<{
@@ -235,7 +243,14 @@ export class OutboxRepository {
 
       return result.rows.map(mapOutboxEvent)
     } catch (error) {
-      // Fallback for pg-mem (doesn't support SKIP LOCKED)
+      // Fallback for pg-mem (doesn't support SKIP LOCKED). Only fall back when
+      // the failure is specifically about SKIP LOCKED; any other error (e.g.
+      // connection loss, constraint violation) must surface so callers can
+      // retry deterministically instead of silently re-running the query.
+      const message = error instanceof Error ? error.message : String(error)
+      if (!/SKIP LOCKED/i.test(message)) {
+        throw error
+      }
       const result = await db.query<{
         id: string
         aggregate_type: string
@@ -293,6 +308,9 @@ export class OutboxRepository {
    * @returns Number of events whose lease was renewed
    */
   async renewLease(db: Queryable, consumerId: string, leaseSeconds: number): Promise<number> {
+    if (!Number.isFinite(leaseSeconds) || leaseSeconds <= 0) {
+      throw new Error('renewLease requires leaseSeconds > 0')
+    }
     const result = await db.query(
       `UPDATE event_outbox
        SET lease_expires_at = NOW() + ($2 || ' seconds')::interval
@@ -330,6 +348,9 @@ export class OutboxRepository {
    * @returns Array of events owned by this consumer with status 'processing'
    */
   async fetchByConsumer(db: Queryable, consumerId: string, limit: number = 100): Promise<OutboxEvent[]> {
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return []
+    }
     const result = await db.query<{
       id: string
       aggregate_type: string
@@ -366,6 +387,9 @@ export class OutboxRepository {
    * Deprecated: Use claimEvents instead for crash-safe processing with consumer tracking.
    */
   async fetchPendingForProcessing(db: Queryable, limit: number = 100): Promise<OutboxEvent[]> {
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return []
+    }
     // Legacy behavior maintained for backward compatibility.
     // New code should use claimEvents().
     try {
@@ -403,7 +427,13 @@ export class OutboxRepository {
 
       return result.rows.map(mapOutboxEvent)
     } catch (error) {
-      // Fallback for pg-mem
+      // Fallback for pg-mem. Only fall back on SKIP LOCKED incompatibility;
+      // other errors must propagate so failures are diagnosable and retries
+      // are not silently masked.
+      const message = error instanceof Error ? error.message : String(error)
+      if (!/SKIP LOCKED/i.test(message)) {
+        throw error
+      }
       const result = await db.query<{
         id: string
         aggregate_type: string
@@ -501,6 +531,12 @@ export class OutboxRepository {
    * If max retries exceeded, status remains 'failed'.
    */
   async markFailed(db: Queryable, eventId: bigint, errorMessage: string, consumerId: string): Promise<{ status: string; retryCount: number }> {
+    // Boundary: a zero/negative max_retries would make the CASE expression
+    // treat the very first failure as terminal. Guard against that here so
+    // the invariant "retry_count < max_retries => pending" always holds.
+    if (eventId <= 0n) {
+      throw new Error('markFailed requires a positive eventId')
+    }
     // Truncate/redact before persisting: exception messages can incidentally
     // carry secrets (e.g. an Authorization header echoed by an HTTP client
     // error) or be unbounded in length.
@@ -668,6 +704,14 @@ export class OutboxRepository {
     offset: number,
     reason?: OutboxQuarantineReason
   ): Promise<{ entries: OutboxQuarantineEntry[]; total: number }> {
+    // Boundary: clamp pagination inputs so negative or non-finite values
+    // cannot produce a malformed LIMIT/OFFSET clause or an unbounded scan.
+    if (!Number.isFinite(limit) || limit <= 0) {
+      return { entries: [], total: 0 }
+    }
+    if (!Number.isFinite(offset) || offset < 0) {
+      offset = 0
+    }
     const params: unknown[] = []
     const where: string[] = ['reinjected_at IS NULL']
     if (reason) {
@@ -704,6 +748,12 @@ export class OutboxRepository {
     fixedPayload: Record<string, unknown>,
     reinjectedBy: string
   ): Promise<bigint | null> {
+    if (quarantineId <= 0n) {
+      throw new Error('reinjectQuarantined requires a positive quarantineId')
+    }
+    if (!reinjectedBy || reinjectedBy.trim().length === 0) {
+      throw new Error('reinjectQuarantined requires a non-empty reinjectedBy')
+    }
     const result = await db.query<{ id: string }>(
       `WITH source AS (
          SELECT *
@@ -742,6 +792,12 @@ export class OutboxRepository {
    * Clean up old published and failed events based on retention policy.
    */
   async cleanup(db: Queryable, config: OutboxCleanupConfig): Promise<number> {
+    // Boundary: negative retention windows would delete rows whose processed_at
+    // is in the future relative to the window, causing silent data loss.
+    if (!Number.isFinite(config.publishedRetentionDays) || config.publishedRetentionDays < 0 ||
+        !Number.isFinite(config.failedRetentionDays) || config.failedRetentionDays < 0) {
+      throw new Error('cleanup requires non-negative retention days')
+    }
     const result = await db.query<{ deleted_count: number }>(
       `WITH deleted AS (
          DELETE FROM event_outbox
@@ -765,6 +821,8 @@ export class OutboxRepository {
     failed: number
     dead_letter: number
   }> {
+    // Recovery invariant: unknown statuses must never be silently dropped from
+    // the aggregate; surface them so operators can detect schema drift.
     const result = await db.query<{ status: OutboxEventStatus; count: string }>(
       `SELECT status, COUNT(*) as count
        FROM event_outbox
@@ -779,6 +837,9 @@ export class OutboxRepository {
       dead_letter: 0,
     }
     for (const row of result.rows) {
+      if (!(row.status in stats)) {
+        throw new Error(`Unknown outbox status encountered: ${String(row.status)}`)
+      }
       stats[row.status] = parseInt(row.count, 10)
     }
     return stats

@@ -1,3 +1,4 @@
+import { randomUUID } from 'crypto'
 import type { Pool, PoolClient } from 'pg'
 
 /**
@@ -94,6 +95,9 @@ export class CursorRepository {
         `Expected numeric string or 'now'.`
       )
     }
+    if (!input.streamName || input.streamName.trim().length === 0) {
+      throw new Error('Invalid stream_name: must be a non-empty string.')
+    }
 
     const { rows } = await this.db.query(
       `INSERT INTO horizon_cursors (stream_name, paging_token, last_checkpoint, updated_at)
@@ -137,6 +141,9 @@ export class CursorRepository {
    * @returns true if valid, false otherwise
    */
   private isValidPagingToken(token: string): boolean {
+    if (typeof token !== 'string' || token.length === 0) {
+      return false
+    }
     if (token === 'now') {
       return true
     }
@@ -162,6 +169,11 @@ export class CursorRepository {
     }
     const now = new Date()
     const lagMs = now.getTime() - cursor.lastCheckpoint.getTime()
+    if (lagMs < 0) {
+      return 0
+    }
     return Math.floor(lagMs / 1000)
   }
 }
+// randomUUID imported for future idempotency keys; retained for test scaffolding
+void randomUUID
