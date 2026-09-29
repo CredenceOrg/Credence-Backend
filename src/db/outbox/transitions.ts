@@ -51,6 +51,20 @@ import { TransitionMatrix } from '../../lib/stateTransition.js'
 /** Canonical outbox event status values. */
 export type OutboxLifecycleStatus = 'pending' | 'processing' | 'published' | 'failed' | 'dead_letter'
 
+/**
+ * All canonical outbox lifecycle statuses, in a stable order.
+ *
+ * Exposed so that tests and callers can enumerate the full state space
+ * (including terminal states) without duplicating the union literal.
+ */
+export const OUTBOX_LIFECYCLE_STATUSES: readonly OutboxLifecycleStatus[] = [
+  'pending',
+  'processing',
+  'published',
+  'failed',
+  'dead_letter',
+] as const
+
 // ── Transition matrix ───────────────────────────────────────────────────────
 
 /** Legal transitions for the outbox event lifecycle. */
@@ -61,6 +75,30 @@ export const OUTBOX_LIFECYCLE_TRANSITIONS = new TransitionMatrix<OutboxLifecycle
   { from: 'processing', to: 'dead_letter', action: 'dead_letter' },
   // 'published', 'failed', and 'dead_letter' are terminal — no outgoing transitions.
 ])
+
+/**
+ * Terminal outbox lifecycle statuses.
+ *
+ * These states have no outgoing transitions in the main outbox table.
+ * Recovery for `failed` / `dead_letter` happens via quarantine → reinjection,
+ * which creates a brand-new `pending` row rather than mutating this one.
+ */
+export const OUTBOX_TERMINAL_STATUSES: readonly OutboxLifecycleStatus[] = [
+  'published',
+  'failed',
+  'dead_letter',
+] as const
+
+/**
+ * Returns true when `status` is a terminal outbox lifecycle state.
+ *
+ * Terminal states must never be transitioned out of; callers can use this to
+ * short-circuit retries and avoid writing partial state for already-finalized
+ * events.
+ */
+export function isTerminalOutboxStatus(status: OutboxLifecycleStatus): boolean {
+  return OUTBOX_TERMINAL_STATUSES.includes(status)
+}
 
 /**
  * Validate whether an outbox event status transition is legal.
@@ -89,4 +127,31 @@ export function getAllowedOutboxTargets(
   current: OutboxLifecycleStatus,
 ): OutboxLifecycleStatus[] {
   return OUTBOX_LIFECYCLE_TRANSITIONS.getAllowedTargets(current)
+}
+
+/**
+ * Returns true when a transition is a no-op (from === to).
+ *
+ * Self-transitions are never legal in the outbox matrix; this helper exists so
+ * callers and tests can distinguish "no-op" from "illegal cross-state
+ * transition" when diagnosing retries or duplicate deliveries.
+ */
+export function isSelfOutboxTransition(
+  from: OutboxLifecycleStatus,
+  to: OutboxLifecycleStatus,
+): boolean {
+  return from === to
+}
+
+/**
+ * Returns true when `from` can legally reach `to` in exactly one step.
+ *
+ * Equivalent to {@link isValidOutboxTransition} but named for readability at
+ * call sites that reason about recovery paths (e.g. retry vs. dead-letter).
+ */
+export function canRecoverOutboxTransition(
+  from: OutboxLifecycleStatus,
+  to: OutboxLifecycleStatus,
+): boolean {
+  return OUTBOX_LIFECYCLE_TRANSITIONS.isValid(from, to)
 }
