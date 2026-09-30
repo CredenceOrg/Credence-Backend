@@ -277,7 +277,7 @@ export class TransactionManager {
     } = options;
 
     const effectiveTimeoutMs =
-      timeoutMs ?=
+      timeoutMs ??
       (policy !== undefined ? this.timeouts[policy] : this.timeouts.default);
 
     const activeClient = transactionStorage.getStore();
@@ -336,10 +336,10 @@ export class TransactionManager {
         const result = await transactionContextStorage.run(context, () =>
           transactionStorage.run(budgetedClient, async () => {
             try {
-              const value = await withSpan(DbSpans.Transaction, initAttrs, async (span) => {
+              const value = await withSpan(DbSpans.Transaction, async (span) => {
                 span.setAttribute('db.system', 'postgresql');
                 return await fn(budgetedClient);
-              });
+              }, initAttrs);
               await client.query('COMMIT');
               return value;
             } catch (error) {
