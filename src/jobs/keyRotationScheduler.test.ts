@@ -69,7 +69,7 @@ describe('KeyRotationScheduler', () => {
     })
     scheduler.start()
 
-    await vi.advanceTimesByTimeAsync(150)
+    await vi.advanceTimersByTimeAsync(150)
     scheduler.stop()
 
     expect(rotateSpy).toHaveBeenCalled()
@@ -77,7 +77,7 @@ describe('KeyRotationScheduler', () => {
 
   it('logs and continues when keyManager.rotate() throws', async () => {
     vi.useFakeTimers()
-    vi.spyOn(keyManager, 'rotate').mockRejectedOnce(new Error('boom'))
+    vi.spyOn(keyManager, 'rotate').mockRejectedValueOnce(new Error('boom'))
 
     const scheduler = new KeyRotationScheduler({
       rotationIntervalMs: 50,
@@ -86,7 +86,7 @@ describe('KeyRotationScheduler', () => {
     })
     scheduler.start()
 
-    await vi.advanceTimerByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     scheduler.stop()
 
     expect(logs.some((l) => l.includes('rotation failed') && l.includes('boom'))).toBe(true)
@@ -104,7 +104,7 @@ describe('KeyRotationScheduler', () => {
     })
     scheduler.start()
 
-    await vi.advanceTimerByTimeAsync(500) // half the rotate interval
+    await vi.advanceTimersByTimeAsync(500) // half the rotate interval
     scheduler.stop()
 
     expect(rotateSpy).not.toHaveBeenCalled()
@@ -119,11 +119,11 @@ describe('KeyRotationScheduler', () => {
       logger: (m) => logs.push(m),
     })
     scheduler.start()
-    await vi.advanceTimesByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     scheduler.stop()
 
     const callCountAtStop = rotateSpy.mock.calls.length
-    await vi.advanceTimerByTimeAsync(500) // far past the interval
+    await vi.advanceTimersByTimeAsync(500) // far past the interval
     scheduler.stop() // idempotent
 
     expect(rotateSpy.mock.calls.length).toBe(callCountAtStop)
@@ -181,7 +181,7 @@ describe('KeyRotationScheduler', () => {
     vi.useFakeTimers()
     const rotateSpy = vi
       .spyOn(keyManager, 'rotate')
-      .mockRejectedOnce(new Error('transient'))
+      .mockRejectedValueOnce(new Error('transient'))
 
     const scheduler = new KeyRotationScheduler({
       rotationIntervalMs: 50,
@@ -191,11 +191,11 @@ describe('KeyRotationScheduler', () => {
     scheduler.start()
 
     // First tick fails.
-    await vi.advanceTimesByTimeAsync(50)
+    await vi.advanceTimersByTimeAsync(50)
     expect(logs.some((l) => l.includes('rotation failed'))).toBe(true)
 
     // Second tick succeeds — the scheduler must not have stopped.
-    await vi.advanceTimerByTimeAsync(50)
+    await vi.advanceTimersByTimeAsync(50)
     expect(rotateSpy.mock.calls.length).toBeGreaterThanOrEqual(2)
     expect(scheduler.isActive()).toBe(true)
 
@@ -222,7 +222,7 @@ describe('KeyRotationScheduler', () => {
     scheduler.start()
 
     // Advance well past multiple intervals while the first rotation is slow
-.    await vi.advanceTimerByTimeAsync(1000)
+    await vi.advanceTimersByTimeAsync(1000)
     scheduler.stop()
 
     expect(maxInFlight).toBe(1)
@@ -233,7 +233,7 @@ describe('KeyRotationScheduler', () => {
     vi.useFakeTimers()
     const pruneSpy = vi
       .spyOn(keyManager, 'pruneExpiredKeys' as any)
-      .mockRejectedOnce(new Error('prune boom'))
+      .mockRejectedValueOnce(new Error('prune boom'))
 
     const scheduler = new KeyRotationScheduler({
       rotationIntervalMs: 1000,
@@ -242,7 +242,7 @@ describe('KeyRotationScheduler', () => {
     })
     scheduler.start()
 
-    await vi.advanceTimesByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     expect(scheduler.isActive()).toBe(true)
     expect(pruneSpy).toHaveBeenCalled()
 
@@ -259,14 +259,14 @@ describe('KeyRotationScheduler', () => {
       logger: (m) => logs.push(m),
     })
     scheduler.start()
-    await ti.advanceTimerByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     scheduler.stop()
 
     const afterFirstStop = rotateSpy.mock.calls.length
 
     // Restart and verify the timer fires again exactly once per interval.
     scheduler.start()
-    await ti.advanceTimerByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     scheduler.stop()
 
     expect(rotateSpy.mock.calls.length).toBeGreaterThan(afterFirstStop)
@@ -284,7 +284,7 @@ describe('KeyRotationScheduler', () => {
   it('rotation failure logs do not leak raw key material', async () => {
     vi.useFakeTimers()
     const secret = 'SUPER_SECRET_KEY_MATERIAL'
-    vi.spyOn(keyManager, 'rotate').mockRejectedOnce(new Error('failed'))
+    vi.spyOn(keyManager, 'rotate').mockRejectedValueOnce(new Error('failed'))
 
     const scheduler = new KeyRotationScheduler({
       rotationIntervalMs: 50,
@@ -292,7 +292,7 @@ describe('KeyRotationScheduler', () => {
       logger: (m) => logs.push(m),
     })
     scheduler.start()
-    await vi.advanceTimerByTimeAsync(75)
+    await vi.advanceTimersByTimeAsync(75)
     scheduler.stop()
 
     expect(logs.join('\n')).not.toContain(secret)
