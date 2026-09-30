@@ -15,30 +15,115 @@ export interface InvalidationEvent {
 
 /**
  * Maximum accepted size of a serialized invalidation payload.
- * PostgreSQL NOTIFY payloads are capped at 8000 bytes by default; we
- * prevent events that would be silently dropped by the database from
- * being published at all.
+ * Postgres' NOTIFY payload limit is 8000 bytes; we reject anything
+ * larger so the failure is deterministic and observable rather than
+ * silently dropped by the database.
  */
-export const MAX_PAYLOAD_BYTES = 8000;
+export const MAX_PAYLOAD BYTES = 8000;
 
 /**
- * Maximum number of keys accepted in a single `InvalidationEvent`.
- * This bounds the work done by a single event and prevents a malicious
- * or buggy publisher from causing an unbounded fan-out of Redis deletes.
+ * Maximum number of keys allowed in a single `invalidate_multiple`
+ * event. Bounds the amount of work a single event can trigger and keeps
+ * the serialized payload well under the NOTIFY limit.
  */
-export const MAX_KEYS = 1000;
+export const MAX_BATCH_KEYS = 500;
 
 /**
- * Maximum length of a namespace or key string. Prevents bloated
- * payloads and accidental glob injection through overly long identifiers.
+ * Maximum length of a namespace, key, or pattern string. Prevents
+ * unbounded memory use and accidental cross-namespace wipes.
  */
-export const MAX_IDENTIFIER_LENGTH = 512;
+export const MAX_IDENTIFIER_LENGTH = 256;
+
+/**
+ * Base delay (ms) before reconnecting the LISTEN client. The actual
+ * delay grows exponentially with consecutive failures up to MAX_RECONNECT_DELAY.
+ */
+export const BASE_RECONNECT_DELAY = 1000;
+
+/**
+ * Upper bound on the reconnect backoff so a persistently down database
+ * does not cause unbounded retry speed.
+ */
+export const MAX_RECONNECT_DELAY = 30_000;
+
+/**
+ * Maximum number of consecutive reconnect attempts before the bus
+ * gives up and marks itself as failed. This prevents an infinite
+ * retry loop when the database is permanently unavailable.
+ */
+export const MAX_RECONNECT_ATTEMPS = 10;
+
+/**
+ * The current lifecycle state of the bus. Transitions are only
+ * allowed along the edges encoded in `allowedTransitions`.
+ */
+export type BusState = 'idle' | 'starting' | 'running' | 'reconnecting' | 'stopping' | 'stopped' | 'failed';
+
+const allowedTransitions: Record<BusState, BusState[]> = {
+  idle: ['starting'],
+  starting: ['running', 'stopping', 'failed'],
+  running: ['reconnecting', 'stopping', 'failed'],
+  reconnecting: ['running', 'stopping', 'failed'],
+  stopping: ['stopped'],
+  stopped: ['starting'],
+  failed: ['starting'],
+};
 
 export class InvalidationBusError extends Error {
   constructor(message: string, public readonly code: string) {
     super(message);
     this.name = 'InvalidationBusError';
   }
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0;
+}
+
+function validateIdentifier(value: unknown, field: string): void {
+  if (!isNonEmptyString(value)) {
+    throw new InvalidationBusError(`${field} must be a non-empty string`, 'INVALID_FIELD');
+  }
+  if (value.length > MAX_IDENTIFIER_LENGTH) {
+    throw new InvalidationBusError(
+      `${fiel} exceeds maximum length of ${MAX_IDENTIFIER_LENGTH}`,
+      'FIELD_TOO_LONG'
+    );
+  }
+}
+
+function validateEvent(event: unknown): InvalidationEvent {
+  if (!event || typeof event !== 'object') {
+    throw new InvalidationBusError('Event must be an object', 'INVALID_EVENT');
+  }
+  const e = event as Record<string, unknown>;
+  if (e.type !== 'invalidate' && e.type !== 'invalidate_multiple' && e.type !== 'invalidate_pattern') {
+    throw new InvalidationBusError(`Unknown event type: ${String(e.type)}`, 'INVALID_TYPE');
+  }
+  validateIdentifier(e.namespace, 'namespace');
+  if (e.type === 'invalidate') {
+    validateIdentifier(e.key, 'key');
+  } else if (e.type === 'invalidate_multiple') {
+    if (!Array.isArray(e.keys) || e.keys.length === 0) {
+      throw new InvalidationBusError('keys must be a non-empty array', 'INVALID_KEYS');
+    }
+    if (e.keys.length > MAX_BATCH_KEYS) {
+      throw new InvalidationBusError(
+        `keys exceeds maximum of ${MAX_BATCH_KEYS}`,
+        'TOO_MANY_KEYS'
+      );
+    }
+    for (const key of e.keys) {
+      validateIdentifier(key, 'keys[]');
+    }
+  } else {
+    validateIdentifier(e.pattern, 'pattern');
+  }
+  if (typeof e.timestamp !== 'number' || !Number.isFinite(e.timestamp)) {
+    throw new InvalidationBusError('timestamp must be a finite number', 'INVALID_TIMESTAMP');
+  }
+  validateIdentifier(e.source, 'source');
+  return e as unknown as InvalidationEvent;
 }
 
 export class InvalidationBus {
@@ -48,19 +133,13 @@ export class InvalidationBus {
   private running = false;
   private sourceId = Math.random().toString(36).slice(2, 10);
   private cache: CacheService;
-  /** Timer handle for the pending reconnect, if any. */
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  /** Number of consecutive reconnect attempts (for backoff). */
+  private state: BusState = 'idle';
   private reconnectAttempts = 0;
-  /** Gate that ensures only one connect attempt is in flight at a time. */
-  private connecting: Promise<void> | null = null;
-  /** Events that arrived while the bus was not running. */
-  private pendingEvents: InvalidationEvent[] = [];
-  /** Maximum number of events buffered while stopped. */
-  private readonly maxPendingEvents = 1000;
+  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private generation = 0;
 
   constructor(cache?: CacheService, nodeEnv?: string) {
-    const env = nodeEnv ??  process.env.NODE_ENV || 'development';
+    const env = nodeEnv ?? (process.env.NODE_ENV || 'development');
     this.channelName = `credence_cache_invalidate_${env}`;
     this.cache = cache || globalCache;
 
@@ -72,41 +151,74 @@ export class InvalidationBus {
     });
   }
 
-  /** Whether the bus is currently running. */
-  isRunning(): boolean {
-    return this.running;
+  /**
+   * The current lifecycle state. Exposed for observability and testing.
+   */
+  getState(): BusState {
+    return this.state;
   }
 
-  /** Exposed for testing: number of buffered events while stopped. */
-  getPendingEventCount(): number {
-    return this.pendingEvents.length;
+  /**
+   * Number of consecutive reconnect attempts since the last successful
+   * connection. Exposed for observability and testing.
+   */
+  getReconnectAttempts(): number {
+    return this.reconnectAttempts;
+  }
+
+  private transitionTo(next: BusState): void {
+    if (this.state === next) return;
+    const allowed = allowedTransitions[this.state];
+    if (!allowed.includes(next)) {
+      throw new InvalidationBusError(
+        `Invalid state transition ${this.state} -> ${next}`,
+        'INVALID_STATE_TRANSITION'
+      );
+    }
+    const prev = this.state;
+    this.state = next;
+    logger.debug({
+      message: '[InvalidationBus] State transition',
+      from: prev,
+      to: next
+    });
   }
 
   async start(): Promise<void> {
-    if (this.running) {
+    if (this.state === 'running' || this.state === 'starting') {
       return;
     }
+    if (this.state === 'stopping') {
+      throw new InvalidationBusError('Cannot start while stopping', 'INVALID_STATE');
+    }
 
+    this.transitionTo('starting');
     this.running = true;
     this.reconnectAttempts = 0;
+    this.generation += 1;
+    const gen = this.generation;
+
     logger.info({
       message: '[InvalidationBus] Starting',
       channel: this.channelName,
       sourceId: this.sourceId
     });
 
-    await this.connectListenClient();
+    await this.connectListenClient(gen);
   }
 
   async stop(): Promise<void> {
-    if (!this.running) {
+    if (this.state === 'stopped' || this.state === 'idle') {
+      return;
+    }
+    if (this.state === 'stopping') {
       return;
     }
 
+    this.transitionTo('stopping');
     this.running = false;
+    this.generation += 1;
 
-    // Cancel any pending reconnect timer so it cannot revive the client
-    // after we have deliberately stopped.
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -118,62 +230,34 @@ export class InvalidationBus {
       try {
         await client.query(`UNLISTEN "${this.channelName}"`);
       } catch (error) {
-        logger.error('[InvalidationBus] Error unlistening listen client', error);
+        logger.error('[InvalidationBus] Error unlistening', error);
       } finally {
         try {
           client.release();
-        } catch (error) {
-          logger.error('[InvalidationBus] Error releasing listen client', error);
+        } catch (releaseError) {
+          logger.error('[InvalidationBus] Error releasing listen client', releaseError);
         }
       }
     }
+
+    this.transitionTo('stopped');
     logger.info('[InvalidationBus] Stopped');
   }
 
-  /**
-   * Schedule a reconnect with exponential backoff. Only one timer may
-   * be pending at a time, and no timer is scheduled once the bus is
-   * stopped. This guarantees that `connectListenClient` cannot be called
-   * concurrently from multiple failure paths.
-   */
-  private scheduleReconnect(): void {
-    if (!this.running) return;
-    if (this.reconnectTimer) return;
+  private async connectListenClient(generation: number): Promise<void> {
+    if (!this.running || generation !== this.generation) return;
 
-    const attempt = this.reconnectAttempts++;
-    // 100ms, 200ms, 400ms, ... capped at 30s.
-    const delay = Math.min(100 * 2 ** attempt, 30_000);
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      if (!this.running) return;
-      void this.connectListenClient();
-    }, delay);
-    // Never keep the process alive just for a reconnect timer.
-    if (typeof this.reconnectTimer === 'object' && this.reconnectTimer !== null) {
-      (this.reconnectTimer as unknown as { unref??: () => void }).unref?.();
-    }
-  }
-
-  private async connectListenClient(): Promise<void> {
-    if (!this.running) return;
-    // Coalesce concurrent connect attempts into a single in-flight promise.
-    if (this.connecting) {
-      return this.connecting;
-    }
-    this.connecting = this.doConnect().finally(() => {
-      this.connecting = null;
-    });
-    return this.connecting;
-  }
-
-  private async doConnect(): Promise<void> {
     try {
       const client = await pool.connect();
 
-      // If the bus was stopped while we were awaiting the connection,
-      // release the client immediately instead of leaking it.
-      if (!this.running) {
-        client.release();
+      // If the bus was stopped or restarted while we were connecting,
+      // release the client immediately so we do not leak a connection.
+      if (!this.running || generation !== this.generation) {
+        try {
+          client.release();
+        } catch (error) {
+          logger.error('[InvalidationBus] Error releasing stale listen client', error);
+        }
         return;
       }
 
@@ -184,7 +268,8 @@ export class InvalidationBus {
         if (!msg.payload) return;
 
         try {
-          const event = JSON.parse(msg.payload) as InvalidationEvent;
+          const parsed = JSON.parse(msg.payload);
+          const event = validateEvent(parsed);
           if (event.source === this.sourceId) {
             return;
           }
@@ -196,27 +281,77 @@ export class InvalidationBus {
 
       client.on('error', (error) => {
         logger.error('[InvalidationBus] Listen client error', error);
-        // Drop the broken client so subsequent reconnects do not reuse it.
         if (this.listenClient === client) {
           this.listenClient = null;
         }
         try {
           client.release();
-        } catch (releaseError) {
+        } catch releaseError {
           logger.error('[InvalidationBus] Error releasing failed listen client', releaseError);
         }
-        this.scheduleReconnect();
+        this.scheduleReconnect(generation);
       });
 
       await client.query(`LISTEN "${this.channelName}"`);
+
+      // Another stop/restart may have happened while we were LISTENing.
+      if (!this.running || generation !== this.generation) {
+        if (this.listenClient === client) {
+          this.listenClient = null;
+        }
+        try {
+          await client.query(`UNLISTEN "${this.channelName}"`);
+        } catch {
+          // best effort
+        }
+        try {
+          client.release();
+        } catch releaseError {
+          logger.error('[InvalidationBus] Error releasing stale listen client', releaseError);
+        }
+        return;
+      }
+
       this.reconnectAttempts = 0;
+      this.transitionTo('running');
       logger.info({
         message: '[InvalidationBus] Connected and listening',
         channel: this.channelName
       });
     } catch (error) {
       logger.error('[InvalidationBus] Failed to connect listen client', error);
-      this.scheduleReconnect();
+      this.scheduleReconnect(generation);
+    }
+  }
+
+  private scheduleReconnect(generation: number): void {
+    if (!this.running || generation !== this.generation) return;
+    if (this.reconnectTimer) return;
+
+    if (this.reconnectAttempts >= MAX_RECONNECT_ATTEMPSS) {
+      logger.error({
+        message: '[InvalidationBus] Max reconnect attempts reached; giving up',
+        attempts: this.reconnectAttempts,
+        channel: this.channelName
+      });
+      this.running = false;
+      this.transitionTo('failed');
+      return;
+    }
+
+    const delay = Math.min(
+      BASE_RECONNECT_DELAY * Math.pow(2, this.reconnectAttempts),
+      MAX_RECONNECT_DELAY
+    );
+    this.reconnectAttempts += 1;
+    this.transitionTo('reconnecting');
+    this.reconnectTimer = setTimeout(() => {
+      this.reconnectTimer = null;
+      void this.connectListenClient(generation);
+    }, delay);
+    // Allow the process to exit while a reconnect is pending.
+    if (typeof this.reconnectTimer.unref === 'function') {
+      this.reconnectTimer.unref();
     }
   }
 
@@ -237,81 +372,21 @@ export class InvalidationBus {
     }
   }
 
-  /**
-   * Validate an outgoing event before it is serialized and published.
-   * Throws an `InvalidationBusError` when the event is malformed or
-   * would exceed the PostgreSQL NOTIFY size limit.
-   */
-  private validateEvent(event: Omit<InvalidationEvent, 'timestamp' | 'source'>): void {
-    if (!event || typeof event !== 'object') {
-      throw new InvalidationBusError('Invalidation event must be an object', 'INVALID_EVENT');
-    }
-    if (event.type !== 'invalidate' && event.type !== 'invalidate_multiple' && event.type !== 'invalidate_pattern') {
-      throw new InvalidationBusError(`Unsupported invalidation type: ${String((event as { type?: unknown }).type)}`, 'INVALID_TYPE');
-    }
-    if (typeof event.namespace !== 'string' || event.namespace.length === 0) {
-      throw new InvalidationBusError('namespace is required and must be a non-empty string', 'INVALID_NAMESPACE');
-    }
-    if (event.namespace.length > MAX_IDENTIFIER_LENGTH) {
-      throw new InvalidationBusError(`namespace exceeds ${MAX_IDENTIFIER_LENGTH} characters`, 'NAMESPACE_TOO_LONG');
-    }
-
-    switch (event.type) {
-      case 'invalidate':
-        if (typeof event.key !== 'string' || event.key.length === 0) {
-          throw new InvalidationBusError('key is required for invalidate events', 'MISSING_KEY');
-        }
-        if (event.key.length > MAX_IDENTIFIER_LENGTH) {
-          throw new InvalidationBusError(`key exceeds ${MAX_IDENTIFIER_LENGTH} characters`, 'KEY_TOO_LONG');
-        }
-        break;
-      case 'invalidate_multiple':
-        if (!Array.isArray(event.keys) || event.keys.length === 0) {
-          throw new InvalidationBusError('keys is required for invalidate_multiple events', 'MISSING_KEYS');
-        }
-        if (event.keys.length > MAX_KEYS) {
-          throw new InvalidationBusError(`keys exceeds the maximum of ${MAX_KEYS}`, 'TOO_MANY_KEYS');
-        }
-        for (const key of event.keys) {
-          if (typeof key !== 'string' || key.length === 0) {
-            throw new InvalidationBusError(`keys must be non-empty strings`, 'INVALID_KEY');
-          }
-          if (key.length > MAX_IDENTIFIER_LENGTH) {
-            throw new InvalidationBusError(`key exceeds ${MAX_IDENTIFIER_LENGTH} characters`, 'KEY_TOO_LONG');
-          }
-        }
-        break;
-      case 'invalidate_pattern':
-        if (typeof event.pattern !== 'string' || event.pattern.length === 0) {
-          throw new InvalidationBusError('pattern is required for invalidate_pattern events', 'MISSING_PATTERN');
-        }
-        if (event.pattern.length > MAX_IDENTIFIER_LENGTH) {
-          throw new InvalidationBusError(`pattern exceeds ${MAX_IDENTIFIER_LENGTH} characters`, 'PATTERN_TOO_LONG');
-        }
-        break;
-    }
-  }
-
-  /**
-   * Publish an invalidation event to the PostgreSQL notification channel.
-   *
-   * Throws an `InvalidationBusError` if the event is invalid or too
-   * large to be delivered. This is deliberate: silently dropping an
-   * invalidation event would leave peer nodes serving stale data.
-   */
   async publish(event: Omit<InvalidationEvent, 'timestamp' | 'source'>): Promise<void> {
-    this.validateEvent(event);
-
     const fullEvent: InvalidationEvent = {
       ...event,
       timestamp: Date.now(),
       source: this.sourceId
     };
 
+    // Validate the outgoing event before it hits the wire. This makes
+    // invalid input a deterministic rejection instead of a silent noop.
+    validateEvent(fullEvent);
+
     const payload = JSON.stringify(fullEvent);
-    if (Buffer.byteLength(payload, 'utf8') > MAX_PAYLOAD_BYTES) {
+    if (payload.length > MAX_PAYLOAD BYTES) {
       throw new InvalidationBusError(
-        `Payload exceeds ${MAX_PAYLOAD_BYTES} bytes; split the invalidation into smaller batches`,
+        `Payload exceeds ${MAX_PAYLOAD_BYTES} bytes`,
         'PAYLOAD_TOO_LARGE'
       );
     }
@@ -327,13 +402,7 @@ export class InvalidationBus {
     }
   }
 
-  /**
-   * Handle an incoming invalidation event locally. This is also used by
-   * the bus to apply events that were buffered while the bus was stopped.
-   * Exposed as a public method so tests and callers can replay events
-   * deterministically.
-   */
-  async handleInvalidation(event: InvalidationEvent): Promise<void> {
+  private async handleInvalidation(event: InvalidationEvent): Promise<void> {
     switch (event.type) {
       case 'invalidate':
         if (event.key) {
@@ -355,43 +424,6 @@ export class InvalidationBus {
       message: '[InvalidationBus] Handled invalidation',
       event
     });
-  }
-
-  /**
-   * Buffer an event that arrived while the bus was not running.
-   * The buffer is bounded to avoid unbounded memory growth in a stopped
-   * bus. Once full, oldest events are dropped and a warning is emitted.
-   */
-  bufferEvent(event: InvalidationEvent): void {
-    if (this.pendingEvents.length >= this.maxPendingEvents) {
-      const dropped = this.pendingEvents.shift();
-      logger.warn({
-        message: '[InvalidationBus] Pending event buffer full; dropping oldest event',
-        dropped
-      });
-    }
-    this.pendingEvents.push(event);
-  }
-
-  /**
-   * Drain and apply any events buffered while the bus was stopped.
-   * Returns the number of events applied. Errors from individual events
-   * are logged but do not abort the drain, so a single bad event cannot
-   * block recovery of the rest.
-   */
-  async drainPendingEvents(): Promise<number> {
-    const pending = this.pendingEvents;
-    this.pendingEvents = [];
-    let applied = 0;
-    for (const event of pending) {
-      try {
-        await this.handleInvalidation(event);
-        applied++;
-      } catch (error) {
-        logger.error('[InvalidationBus] Failed to apply buffered event', error);
-      }
-    }
-    return applied;
   }
 }
 
