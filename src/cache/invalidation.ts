@@ -65,10 +65,10 @@ export async function invalidateCache(
         if (staleCheck) {
           const isStale = verifyFn 
             ? verifyFn(staleCheck, freshData)
-            : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+            : computeStableHash(staleCheck) !== computeStableHash(freshData)
           if (isStale) {
             recordStaleCacheRead(namespace)
-            console.warn(`Stale cache detected for ${namespace}:${key}`)
+            logger.warn(`Stale cache detected for ${namespace}:${key}`)
           }
         }
       }
