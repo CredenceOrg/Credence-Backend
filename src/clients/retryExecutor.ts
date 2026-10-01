@@ -91,6 +91,15 @@ export async function executeWithRetry<T>(
   } = options
 
   const maxAttempts = policy.maxAttempts
+
+  // Defensive guard: a non-positive maxAttempts would skip the loop entirely
+  // and throw a confusing `null` error. Treat it as a misconfiguration.
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1) {
+    throw new Error(
+      `executeWithRetry: policy.maxAttempts must be an integer >= 1 (got ${String(maxAttempts)})`
+    )
+  }
+
   const startMs = Date.now()
   let lastError: any = null
 
@@ -235,4 +244,3 @@ export function resolveExtendedProviderRetryPolicy(
 
   return resolved
 }
-

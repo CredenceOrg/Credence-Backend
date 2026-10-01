@@ -20,6 +20,15 @@
  * getIdentityState() call:
  *   soroban_state_cache_hits_total   { network, contract }
  *   soroban_state_cache_misses_total { network, contract }
+ *
+ * Boundary & recovery invariants
+ * ──────────────────────────────
+ * - Empty / whitespace-only network, contractId, or address are rejected
+ *   before any cache or RPC interaction (fail-fast, no silent key collisions).
+ * - Redis L2 failures never propagate: reads fall through to RPC, writes
+ *   degrade to L1-only, deletes are best-effort.
+ * - Values that are `undefined` are never stored (would be indistinguishable
+ *   from a miss); `null` is stored as a legitimate cached payload.
  */
 
 import { LRUCache } from 'lru-cache'
@@ -56,6 +65,14 @@ export interface SorobanStateCacheOptions {
   cacheService?: CacheService
 }
 
+/** Thrown when a cache key component is empty or non-string. */
+export class SorobanStateCacheKeyError extends Error {
+  constructor(component: string) {
+    super(`sorobanStateCache: invalid ${component} (must be a non-empty string)`)
+    this.name = 'SorobanStateCacheKeyError'
+  }
+}
+
 export class SorobanStateCache {
   private readonly ttlMs: number
   private readonly l1: LRUCache<string, any>
@@ -87,9 +104,41 @@ export class SorobanStateCache {
   }
 
   /**
+   * Validate key components before any cache/RPC interaction.
+   *
+   * Rejects empty, whitespace-only, or non-string inputs so that distinct
+   * logical addresses can never collapse onto the same cache key (e.g.
+   * `""` vs `" "`), and so callers get a deterministic, diagnosable error
+   * instead of a silent cache hit/miss on a malformed key.
+   */
+  private assertKeyComponents(
+    network: string,
+    contractId: string,
+    address: string,
+  ): void {
+    if (typeof network !== 'string' || network.trim() === '') {
+      throw new SorobanStateCacheKeyError('network')
+    }
+    if (typeof contractId !== 'string' || contractId.trim() === '') {
+      throw new SorobanStateCacheKeyError('contractId')
+    }
+    if (typeof address !== 'string' || address.trim() === '') {
+      throw new SorobanStateCacheKeyError('address')
+    }
+  }
+
+  /**
    * Returns a cached entry or null if not found / caching is disabled.
    *
    * Checks L1 first; promotes L2 hit into L1.
+   *
+   * Invariants:
+   *  - Never throws: Redis failures degrade to a miss so the RPC path is
+   *    never blocked by cache-layer errors.
+   *  - Only non-null/non-undefined payloads are treated as hits; a stored
+   *    `null` is indistinguishable from a miss and is never promoted.
+   *  - Concurrent callers may each observe a miss and re-fetch; this is
+   *    safe because `set` is idempotent for a given key.
    */
   public async get(
     network: string,
@@ -99,6 +148,8 @@ export class SorobanStateCache {
     if (this.disabled) {
       return null
     }
+
+    this.assertKeyComponents(network, contractId, address)
 
     const key = this.buildKey(network, contractId, address)
     const labels = { network, contract: contractId }
@@ -136,6 +187,12 @@ export class SorobanStateCache {
    * Stores a successful RPC response in L1 and L2.
    * Silently swallows Redis errors — a failed write only means the next
    * request will be a cache miss, not an error.
+   *
+   * Invariants:
+   *  - `null`/`undefined` values are rejected (no-op) so error responses
+   *    can never be cached and later served as a hit.
+   *  - L1 write is synchronous and always succeeds; L2 is best-effort.
+   *  - TTL is clamped to a minimum of 1 second for Redis setEx.
    */
   public async set(
     network: string,
@@ -144,6 +201,12 @@ export class SorobanStateCache {
     value: unknown,
   ): Promise<void> {
     if (this.disabled) {
+      return
+    }
+
+    // Never cache nullish payloads — they represent errors / not-found and
+    // must not be served as a hit on subsequent reads.
+    if (value === null || value === undefined) {
       return
     }
 
@@ -167,12 +230,20 @@ export class SorobanStateCache {
 
   /**
    * Evict a single entry from L1 and L2 (e.g. after a state-invalidating write).
+   *
+   * Invariants:
+   *  - L1 eviction is synchronous and always succeeds, so a subsequent `get`
+   *    on this process cannot serve a stale value even if Redis is down.
+   *  - Redis failures are logged and swallowed; the entry may linger in L2
+   *    until its TTL expires, which is the documented recovery window.
    */
   public async invalidate(
     network: string,
     contractId: string,
     address: string,
   ): Promise<void> {
+    this.assertKeyComponents(network, contractId, address)
+
     const key = this.buildKey(network, contractId, address)
     this.l1.delete(key)
     try {

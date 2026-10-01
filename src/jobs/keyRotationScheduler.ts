@@ -66,7 +66,31 @@ export class KeyRotationScheduler {
   private rotating = false
   private pruning = false
 
-  constructor(private readonly options: KeyRotationSchedulerOptions) {}
+  constructor(private readonly options: KeyRotationSchedulerOptions) {
+    // Fail fast on invalid configuration at construction time, before any
+    // timer exists. A non-positive or non-finite interval would make
+    // `setInterval` fire as fast as the event loop allows, which is an
+    // unsafe configuration for a key rotation job — reject it explicitly
+    // rather than silently clamping. A missing logger is rejected too, so
+    // a misconfigured scheduler can never run silently.
+    if (
+      !Number.isFinite(options.rotationIntervalMs) ||
+      !Number.isFinite(options.pruneIntervalMs)
+    ) {
+      throw new Error('[KeyRotationScheduler] intervals must be finite numbers')
+    }
+    if (
+      options.rotationIntervalMs < MIN_INTERVAL_MS ||
+      options.pruneIntervalMs < MIN_INTERVAL_MS
+    ) {
+      throw new Error(
+        `[KeyRotationScheduler] intervals must be >= ${MIN_INTERVAL_MS}ms (rotation=${options.rotationIntervalMs}, prune=${options.pruneIntervalMs})`,
+      )
+    }
+    if (typeof options.logger !== 'function') {
+      throw new Error('[KeyRotationScheduler] logger must be a function')
+    }
+  }
 
   /**
    * Start the scheduler.  Idempotent: a repeated call while running
@@ -78,25 +102,8 @@ export class KeyRotationScheduler {
 
     const log = this.options.logger ?? (() => {})
 
-    // Validate intervals before committing to running.  A non-positive
-    // interval would cause `setInterval` to fire as fast as the event
-    // loop allows, which is an unsafe configuration for a key rotation
-    // job.  Reject it explicitly rather than silently clamping.
-    if (
-      !Number.isFinite(this.options.rotationIntervalMs) ||
-      !Number.isFinite(this.options.pruneIntervalMs)
-    ) {
-      throw new Error('[KeyRotationScheduler] intervals must be finite numbers')
-    }
-    if (
-      this.options.rotationIntervalMs < MIN_INTERVAL_MS ||
-      this.options.pruneIntervalMs < MIN_INTERVAL_MS
-    ) {
-      throw new Error(
-        `[KeyRotationScheduler] intervals must be >= ${MIN_INTERVAL_MS}ms (rotation=${this.options.rotationIntervalMs}, prune=${this.options.pruneIntervalMs})`,
-      )
-    }
-
+    // Interval and logger validation happens in the constructor, so start()
+    // can assume a valid configuration and only needs its idempotency guard.
     this.running = true
 
     log(

@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import crypto from 'crypto'
 import { KeyRotationWorker, reencryptRecord, type EvidenceStore } from './keyRotationWorker.js'
 import type { EvidenceRecord } from '../services/evidence/storage.js'
@@ -197,6 +197,147 @@ describe('KeyRotationWorker', () => {
     expect(result.reencrypted).toBe(1)
   })
 
+  it('records partial failure with error details and continues remaining records', async () => {
+    const records = [
+      encryptRecord('ev-1', 'data', oldKek),
+      encryptRecord('ev-2', 'data', oldKek),
+      encryptRecord('ev-3', 'data', oldKek),
+    ]
+    const store = makeStore(records) as EvidenceStore & { _db: Map<string, EvidenceRecord> }
+    let callCount = 0
+    const faultyStore: EvidenceStore = {
+      ...store,
+      async update(record) {
+        callCount++
+        if (callCount === 2) throw new Error('transient DB error')
+        await store.update(record)
+      },
+    }
+
+    const worker = new KeyRotationWorker(faultyStore)
+    const result = await worker.run(oldKek, newKek)
+
+    expect(result.failed).toBe(1)
+    expect(result.reencrypted).toBe(2)
+    // Failed record must remain on old version (no partial write)
+    const db = (store as any)._db as Map<string, EvidenceRecord>
+    const failed = [...db.values()].find((r) => r.evidence_id === 'ev-2')!
+    expect(failed.kek_version).toBe(1)
+  })
+
+  it('recovers on retry after a transient failure (idempotent re-run)', async () => {
+    const records = [
+      encryptRecord('ev-1', 'data', oldKek),
+      encryptRecord('ev-2', 'data', oldKek),
+    ]
+    const store = makeStore(records) as EvidenceStore & { _db: Map<string, EvidenceRecord> }
+    let failOnce = true
+    const flakyStore: EvidenceStore = {
+      ...store,
+      async update(record) {
+        if (failOnce && record.evidence_id === 'ev-2') {
+          failOnce = false
+          throw new Error('transient')
+        }
+        await store.update(record)
+      },
+    }
+
+    const worker = new KeyRotationWorker(flakyStore)
+    const first = await worker.run(oldKek, newKek)
+    expect(first.failed).toBe(1)
+    expect(first.reencrypted).toBe(1)
+
+    const second = await worker.run(oldKek, newKek)
+    expect(second.failed).toBe(0)
+    expect(second.reencrypted).toBe(1)
+    expect(second.skipped).toBe(1)
+
+    for (const [, rec] of (store as any)._db) {
+      expect(rec.kek_version).toBe(2)
+    }
+  })
+
+  it('does not double-rotate when run concurrently on the same store', async () => {
+    const records = Array.from({ length: 6 }, (_, i) =>
+      encryptRecord(`ev-${i}`, `data-${i}`, oldKek),
+    )
+    const store = makeStore(records) as EvidenceStore & { _db: Map<string, EvidenceRecord> }
+    const worker = new KeyRotationWorker(store, { batchSize: 3 })
+
+    const [a, b] = await Promise.all([
+      worker.run(oldKek, newKek),
+      worker.run(oldKek, newKek),
+    ])
+
+    // Combined reencrypted must not exceed total records
+    expect(a.reencrypted + b.reencrypted).toBeLessThanOrEqual(records.length)
+    // Every record ends on the new version exactly once
+    for (const [, rec] of (store as any)._db) {
+      expect(rec.kek_version).toBe(2)
+    }
+  })
+
+  it('aborts immediately when signal is already aborted before run', async () => {
+    const records = [encryptRecord('ev-1', 'data', oldKek)]
+    const store = makeStore(records) as EvidenceStore & { _db: Map<string, EvidenceRecord> }
+    const controller = new AbortController()
+    controller.abort()
+
+    const worker = new KeyRotationWorker(store)
+    const result = await worker.run(oldKek, newKek, controller.signal)
+
+    expect(result.interrupted).toBe(true)
+    expect(result.reencrypted).toBe(0)
+    const rec = [...(store as any)._db.values()][0]
+    expect(rec.kek_version).toBe(1)
+  })
+
+  it('handles a single-record store at the batch boundary', async () => {
+    const store = makeStore([encryptRecord('ev-only', 'data', oldKek)])
+    const worker = new KeyRotationWorker(store, { batchSize: 1 })
+
+    const result = await worker.run(oldKek, newKek)
+
+    expect(result.total).toBe(1)
+    expect(result.reencrypted).toBe(1)
+    expect(result.failed).toBe(0)
+    expect(result.interrupted).toBe(false)
+  })
+
+  it('handles batchSize larger than total record count', async () => {
+    const records = Array.from({ length: 3 }, (_, i) =>
+      encryptRecord(`ev-${i}`, `data-${i}`, oldKek),
+    )
+    const store = makeStore(records)
+    const worker = new KeyRotationWorker(store, { batchSize: 1000 })
+
+    const result = await worker.run(oldKek, newKek)
+
+    expect(result.reencrypted).toBe(3)
+    expect(result.failed).toBe(0)
+  })
+
+  it('does not leak plaintext or key material into logs on failure', async () => {
+    const records = [encryptRecord('ev-1', 'top-secret-plaintext', oldKek)]
+    const store = makeStore(records)
+    const faultyStore: EvidenceStore = {
+      ...store,
+      async update() {
+        throw new Error('write failed')
+      },
+    }
+    const logs: string[] = []
+    const worker = new KeyRotationWorker(faultyStore, { logger: (m) => logs.push(m) })
+
+    await worker.run(oldKek, newKek)
+
+    const joined = logs.join('\n')
+    expect(joined).not.toContain('top-secret-plaintext')
+    expect(joined).not.toContain(oldKek.keyMaterial.toString('hex'))
+    expect(joined).not.toContain(newKek.keyMaterial.toString('hex'))
+  })
+
   it('respects AbortSignal and marks result as interrupted', async () => {
     const records = Array.from({ length: 10 }, (_, i) =>
       encryptRecord(`ev-${i}`, `data-${i}`, oldKek),
@@ -268,6 +409,22 @@ describe('KeyRotationWorker', () => {
     expect(listPageSpy).toHaveBeenCalledTimes(4)
   })
 
+  it('does not re-process records that were already rotated in an earlier page', async () => {
+    const records = Array.from({ length: 12 }, (_, i) =>
+      encryptRecord(`ev-${i}`, `data-${i}`, oldKek),
+    )
+    const store = makeStore(records) as EvidenceStore & { _db: Map<string, EvidenceRecord> }
+    const worker = new KeyRotationWorker(store, { batchSize: 5 })
+
+    const result = await worker.run(oldKek, newKek)
+
+    expect(result.reencrypted).toBe(12)
+    expect(result.skipped).toBe(0)
+    for (const [, rec] of (store as any)._db) {
+      expect(rec.kek_version).toBe(2)
+    }
+  })
+
   it('logs progress via logger option', async () => {
     const records = [encryptRecord('ev-1', 'data', oldKek)]
     const store = makeStore(records)
@@ -277,6 +434,27 @@ describe('KeyRotationWorker', () => {
     await worker.run(oldKek, newKek)
 
     expect(logs.some((l) => l.includes('Starting rotation'))).toBe(true)
+    expect(logs.some((l) => l.includes('Rotation complete'))).toBe(true)
+  })
+
+  it('reports failure counts in logs without aborting the batch', async () => {
+    const records = [
+      encryptRecord('ev-1', 'data', oldKek),
+      encryptRecord('ev-2', 'data', oldKek),
+    ]
+    const store = makeStore(records)
+    const faultyStore: EvidenceStore = {
+      ...store,
+      async update() {
+        throw new Error('boom')
+      },
+    }
+    const logs: string[] = []
+    const worker = new KeyRotationWorker(faultyStore, { logger: (m) => logs.push(m) })
+
+    const result = await worker.run(oldKek, newKek)
+
+    expect(result.failed).toBe(2)
     expect(logs.some((l) => l.includes('Rotation complete'))).toBe(true)
   })
 })

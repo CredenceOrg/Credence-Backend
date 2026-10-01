@@ -111,12 +111,24 @@ export function createCacheInvalidationHook(
         )
 
         let succeeded = 0
+        let failed = 0
         for (const r of results) {
           if (r.status === 'fulfilled' && r.value) succeeded++
+          if (r.status === 'rejected') failed++
         }
 
         const durationMs = Date.now() - startMs
-        invalidationHookExecutionsTotal.inc({ hook_name: name, status: 'success' })
+        const status = failed > 0 ? 'error' : 'success'
+        invalidationHookExecutionsTotal.inc({ hook_name: name, status })
+
+        if (failed > 0) {
+          // Report counts only; rejection values and cache keys may contain sensitive data.
+          const error = `${failed} of ${keys.length} cache invalidations failed`
+          logger.error(
+            `[InvalidationHook:${displayName}] ${error} in ${durationMs}ms (ns:${namespace})`,
+          )
+          return { name, keysAttempted: keys.length, keysInvalidated: succeeded, durationMs, error }
+        }
 
         logger.debug(
           `[InvalidationHook:${displayName}] Invalidated ${succeeded}/${keys.length} keys in ${durationMs}ms (ns:${namespace})`,

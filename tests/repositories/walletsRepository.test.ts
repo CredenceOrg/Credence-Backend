@@ -63,28 +63,52 @@ interface MockWalletRow {
   updated_at: Date;
 }
 
+interface MockPoolOptions {
+  lockTimeoutFailures?: number;
+  ledgerFailures?: number;
+}
+
 /**
  * Build a mock Pool whose connected clients intercept the exact SQL patterns
  * emitted by WalletsRepository.debit() and credit().
  */
-function makeMockPool(walletStore: Map<string, MockWalletRow>): Pool {
+function makeMockPool(
+  walletStore: Map<string, MockWalletRow>,
+  options: MockPoolOptions = {},
+): Pool {
+  let remainingLockTimeoutFailures = options.lockTimeoutFailures ?? 0;
+  let remainingLedgerFailures = options.ledgerFailures ?? 0;
+
   const makeClient = (): PoolClient => {
+    let transactionSnapshot: Map<string, MockWalletRow> | undefined;
     const query = vi.fn().mockImplementation(
       async (text: string | { text: string }, values?: unknown[]) => {
         const sql = (typeof text === 'string' ? text : text.text).trim();
 
         // Transaction lifecycle + lock-timeout commands
-        if (
-          /^BEGIN/i.test(sql) ||
-          /^SET LOCAL/i.test(sql) ||
-          /^COMMIT/i.test(sql) ||
-          /^ROLLBACK/i.test(sql)
-        ) {
+        if (/^BEGIN/i.test(sql)) {
+          transactionSnapshot = new Map<string, MockWalletRow>(
+            [...walletStore.entries()].map(([id, row]) => [id, { ...row }]),
+          );
+          return { rows: [], rowCount: 0 };
+        }
+        if (/^ROLLBACK/i.test(sql)) {
+          walletStore.clear();
+          for (const [id, row] of transactionSnapshot ?? []) {
+            walletStore.set(id, { ...row });
+          }
+          return { rows: [], rowCount: 0 };
+        }
+        if (/^COMMIT/i.test(sql) || /^SET LOCAL/i.test(sql)) {
           return { rows: [], rowCount: 0 };
         }
 
         // SELECT … FOR UPDATE (lock the row)
         if (/SELECT.*FROM wallets/is.test(sql) && /FOR UPDATE/i.test(sql)) {
+          if (remainingLockTimeoutFailures > 0) {
+            remainingLockTimeoutFailures -= 1;
+            throw Object.assign(new Error('lock timeout'), { code: '55P03' });
+          }
           const id = values![0] as string;
           const row = walletStore.get(id);
           return { rows: row ? [{ ...row }] : [], rowCount: row ? 1 : 0 };
@@ -108,6 +132,10 @@ function makeMockPool(walletStore: Map<string, MockWalletRow>): Pool {
 
         // INSERT INTO wallet_transactions — upstream ledger recording added in the same tx
         if (/INSERT INTO wallet_transactions/i.test(sql)) {
+          if (remainingLedgerFailures > 0) {
+            remainingLedgerFailures -= 1;
+            throw new Error('ledger write failed');
+          }
           const [walletId, type, amount, previousBalance, newBalance] = values as string[];
           return {
             rows: [{
@@ -195,6 +223,40 @@ describe('WalletsRepository', () => {
 
     it('throws when wallet is not found', async () => {
       await expect(repo.debit('missing-id', '1')).rejects.toThrow('not found');
+    });
+
+    it('retries a transient lock timeout in a fresh transaction', async () => {
+      seedWallet(store, { id: 'w1', balance: '100' });
+      pool = makeMockPool(store, { lockTimeoutFailures: 1 });
+      repo = new WalletsRepository({} as any, pool);
+
+      const result = await repo.debit('w1', '25');
+
+      expect(result.newBalance).toBe('75');
+      expect(pool.connect).toHaveBeenCalledTimes(2);
+    });
+
+    it('surfaces an exhausted lock timeout retry without changing balance', async () => {
+      seedWallet(store, { id: 'w1', balance: '100' });
+      pool = makeMockPool(store, { lockTimeoutFailures: 3 });
+      repo = new WalletsRepository({} as any, pool);
+
+      await expect(repo.debit('w1', '25')).rejects.toMatchObject({
+        code: '55P03',
+      });
+
+      expect(store.get('w1')?.balance).toBe('100');
+      expect(pool.connect).toHaveBeenCalledTimes(3);
+    });
+
+    it('rolls back the balance when ledger recording fails', async () => {
+      seedWallet(store, { id: 'w1', balance: '100' });
+      pool = makeMockPool(store, { ledgerFailures: 1 });
+      repo = new WalletsRepository({} as any, pool);
+
+      await expect(repo.debit('w1', '25')).rejects.toThrow('ledger write failed');
+
+      expect(store.get('w1')?.balance).toBe('100');
     });
 
     it('throws InsufficientBalanceError when amount > balance', async () => {

@@ -371,3 +371,49 @@ export function buildCursorPaginationLinks(
 
   return links
 }
+
+/**
+ * Options for building an RFC 5988 Link header string.
+ */
+export interface BuildLinkHeaderOptions {
+  baseUrl: string
+  page: number
+  limit: number
+  total: number
+}
+
+/**
+ * Build an RFC 5988 Link header string for offset/page-based responses.
+ *
+ * Returns `null` when `total` is zero (no results → no pagination links).
+ *
+ * @param options - The pagination parameters.
+ * @returns A Link header string, or null when there are no results.
+ */
+export function buildLinkHeader(options: BuildLinkHeaderOptions): string | null {
+  const { baseUrl, page, limit, total } = options
+
+  if (total <= 0) return null
+
+  const totalPages = Math.max(1, Math.ceil(total / limit))
+
+  const parts: string[] = []
+
+  // first
+  parts.push(`<${baseUrl}?page=1&limit=${limit}>; rel="first"`)
+
+  // prev
+  if (page > 1) {
+    parts.push(`<${baseUrl}?page=${page - 1}&limit=${limit}>; rel="prev"`)
+  }
+
+  // next
+  if (page < totalPages) {
+    parts.push(`<${baseUrl}?page=${page + 1}&limit=${limit}>; rel="next"`)
+  }
+
+  // last
+  parts.push(`<${baseUrl}?page=${totalPages}&limit=${limit}>; rel="last"`)
+
+  return parts.join(', ')
+}

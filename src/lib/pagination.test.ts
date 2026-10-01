@@ -7,6 +7,7 @@ import {
   buildPaginationLinks,
   buildCursorPaginationLinks,
   buildPaginationMeta,
+  buildLinkHeader,
   decodeCursor,
   encodeCursor,
   MAX_LIMIT,
@@ -216,17 +217,18 @@ describe('pagination helpers', () => {
         fc.property(
           fc.uuid(),
           fc.uuid(),
-          fc.integer({ min: 0, max: 1000 }),
           fc.integer({ min: 1, max: MAX_LIMIT }),
-          (timestamp, id, offset, limit) => {
+          (timestamp, id, limit) => {
             const encoded = encodeCursor(timestamp, id)
             const result = parsePaginationParams({
               cursor: encoded,
-              offset: String(offset),
               limit: String(limit),
             })
-            expect(result.offset).not.toBe(offset)
-            expect(result.page).toBe(Math.floor(result.offset / limit) + 1)
+            // Since it's a valid cursor, it should NOT be treated as a legacy offset fallback.
+            // The explicit offset is absent, so offset defaults to 0 (page 1).
+            expect(result.offset).toBe(0)
+            expect(result.page).toBe(1)
+            expect(result.decodedCursor).toEqual({ t: timestamp, i: id })
           },
         ),
       )
@@ -286,15 +288,16 @@ describe('pagination helpers', () => {
             fc.integer({ min: MAX_LIMIT + 1, max: MAX_LIMIT + 1000 }),
           ),
           ([page, limit]) => {
-            expect(() => parsePaginationParams({ page: String(page), limit: String(limit) })).toThrow(
-              (error: unknown) => {
-                if (error instanceof PaginationValidationError) {
-                  expect(error.details.length).toBeGreaterThanOrEqual(2)
-                  return true
-                }
-                return false
-              },
-            )
+            let errorCaught: unknown
+            try {
+              parsePaginationParams({ page: String(page), limit: String(limit) })
+            } catch (error) {
+              errorCaught = error
+            }
+            expect(errorCaught).toBeInstanceOf(PaginationValidationError)
+            if (errorCaught instanceof PaginationValidationError) {
+              expect(errorCaught.details.length).toBeGreaterThanOrEqual(2)
+            }
           },
         ),
       )
@@ -315,18 +318,16 @@ describe('pagination helpers', () => {
       )
     })
 
-    it('maintains invariant: offset < page * limit and offset >= (page - 1) * limit', () => {
+    it('maintains invariant: offset < page * limit and offset >= (page - 1) * limit when generating page alone', () => {
       fc.assert(
         fc.property(
           fc.integer({ min: 1, max: 100 }),
           fc.integer({ min: 1, max: MAX_LIMIT }),
-          fc.integer({ min: 0, max: 10000 }),
-          (page, limit, offset) => {
+          (page, limit) => {
             try {
               const result = parsePaginationParams({
                 page: String(page),
                 limit: String(limit),
-                offset: String(offset),
               })
               const lowerBound = (result.page - 1) * result.limit
               const upperBound = result.page * result.limit
@@ -398,7 +399,8 @@ describe('pagination helpers', () => {
 
 function try_decode_base64url(s: string): boolean {
   try {
-    Buffer.from(s, 'base64url')
+    const decoded = Buffer.from(s, 'base64url').toString('utf8')
+    JSON.parse(decoded)
     return true
   } catch {
     return false

@@ -59,6 +59,19 @@ describe('invalidateTenantCache CLI', () => {
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('--tenant <uuid> is required'))
   })
 
+  it.each([
+    ['missing value', ['--tenant']],
+    ['empty value', ['--tenant', '']],
+    ['duplicate option', ['--tenant', VALID_TENANT_ID, '--tenant', VALID_TENANT_ID]],
+    ['unknown option', ['--verbose']],
+  ] as const)('rejects %s without invoking invalidation', async (_case, argv) => {
+    const code = await run([...argv])
+
+    expect(code).toBe(1)
+    expect(invalidateTenantCache).not.toHaveBeenCalled()
+    expect(errorSpy).toHaveBeenCalled()
+  })
+
   it('handles cache backend failures gracefully', async () => {
     vi.mocked(invalidateTenantCache).mockRejectedValue(
       new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
@@ -68,6 +81,33 @@ describe('invalidateTenantCache CLI', () => {
 
     expect(code).toBe(1)
     expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Cache backend is unavailable'))
+  })
+
+  it('can recover on a later invocation after a transient backend failure', async () => {
+    vi.mocked(invalidateTenantCache)
+      .mockRejectedValueOnce(new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated'))
+      .mockResolvedValueOnce({ tenantId: VALID_TENANT_ID, keysCleared: 2 })
+
+    expect(await run(['--tenant', VALID_TENANT_ID])).toBe(1)
+    expect(await run(['--tenant', VALID_TENANT_ID])).toBe(0)
+    expect(invalidateTenantCache).toHaveBeenCalledTimes(2)
+    expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('2 key(s) cleared'))
+  })
+
+  it('keeps concurrent invocations independent and deterministic', async () => {
+    vi.mocked(invalidateTenantCache).mockImplementation(async tenantId => ({
+      tenantId,
+      keysCleared: 1,
+    }))
+
+    const [first, second] = await Promise.all([
+      run(['--tenant', VALID_TENANT_ID]),
+      run(['--tenant', VALID_TENANT_ID]),
+    ])
+
+    expect([first, second]).toEqual([0, 0])
+    expect(invalidateTenantCache).toHaveBeenCalledTimes(2)
+    expect(logSpy).toHaveBeenCalledTimes(2)
   })
 
   it('never prints the raw error object for unexpected failures', async () => {
