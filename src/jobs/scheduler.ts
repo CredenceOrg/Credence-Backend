@@ -99,6 +99,17 @@ export class JobScheduler {
       enableIdempotency?: boolean
     }
   ) {
+    // Node coerces invalid/overflowing delays to 1ms. Reject them before
+    // they can accidentally turn a periodic job into a tight retry loop.
+    if (!Number.isInteger(options.intervalMs) || options.intervalMs < 1 || options.intervalMs > 2_147_483_647) {
+      throw new RangeError('intervalMs must be an integer between 1 and 2147483647')
+    }
+    if (options.lockTtlMs !== undefined && (!Number.isInteger(options.lockTtlMs) || options.lockTtlMs < 1 || options.lockTtlMs > 2_147_483_647)) {
+      throw new RangeError('lockTtlMs must be an integer between 1 and 2147483647')
+    }
+    if (options.enableIdempotency && !options.redisClient) {
+      throw new Error('enableIdempotency requires redisClient')
+    }
     this.intervalMs = options.intervalMs
     this.runOnStart = options.runOnStart ?? false
     this.logger = options.logger ?? (() => {})
@@ -121,13 +132,13 @@ export class JobScheduler {
 
     this.logger(`Starting scheduler with interval ${this.intervalMs}ms`)
 
-    if (this.runOnStart) {
-      this.runJob()
-    }
-
     this.intervalId = setInterval(() => {
-      this.runJob()
+      void this.runJob()
     }, this.intervalMs)
+
+    if (this.runOnStart) {
+      void this.runJob()
+    }
   }
 
   /**
@@ -169,73 +180,63 @@ export class JobScheduler {
       return
     }
 
-    // Scheduled jobs have no originating HTTP request, so there is no
-    // correlation id to inherit. Generate one per run so that any outbox
-    // events or webhook deliveries triggered by this job's business logic
-    // (via the shared tracing context) can still be traced back to the
-    // specific run that caused them.
-    const jobRunCorrelationId = randomUUID()
-    // Idempotency guard: check if job was recently completed
-    if (this.enableIdempotency && this.redisClient) {
-      const lastRun = await this.redisClient.get(this.idempotencyKeyBase)
-      if (lastRun) {
-        this.logger(
-          `[Idempotency] Skipping job "${this.lockKey}" — last run at ${lastRun} (within interval)`
-        )
-        return
-      }
-    }
-
-    if (this.distributedLock) {
-      const { executed, result } = await this.distributedLock.withLock(
-        this.lockKey,
-        async () => {
-          this.isRunning = true
-          try {
-            const result = await runWithCorrelationIds(
-              { correlationId: jobRunCorrelationId },
-              () => this.job.run()
-            )
-            this.logger(`Job completed: ${JSON.stringify(result)}`)
-            const jobResult = await this.job.run()
-            this.logger(`Job completed: ${JSON.stringify(jobResult)}`)
-            return jobResult
-          } finally {
-            this.isRunning = false
-          }
-        },
-        { ttlMs: this.lockTtlMs, logger: this.logger }
-      )
-
-      if (!executed) {
-        const metrics = this.distributedLock.getMetrics()
-        this.logger(
-          `Job skipped (lock held by another worker) — contentions: ${metrics.contentions}`
-        )
-        return
-      }
-
-      // Set idempotency marker after successful execution
-      if (this.enableIdempotency && this.redisClient) {
-        await this.redisClient.set(
-          this.idempotencyKeyBase,
-          new Date().toISOString(),
-          { PX: this.intervalMs }
-        )
-      }
-      return
-    }
-
+    // Reserve this invocation before any asynchronous operation. The guard
+    // includes Redis reads, lock acquisition, marker writes and lock release
+    // so overlapping ticks and shutdown drain checks see the same state.
     this.isRunning = true
+    let phase = 'lock acquisition'
     try {
-      const result = await runWithCorrelationIds(
-        { correlationId: jobRunCorrelationId },
-        () => this.job.run()
-      )
-      this.logger(`Job completed: ${JSON.stringify(result)}`)
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : 'Unknown error'
-      this.logger(`Job failed: ${errorMsg}`)
+      const execute = async () => {
+        // With a distributed lock this read and the completion write belong
+        // to the same critical section. Another replica cannot act on a
+        // stale pre-lock read after this worker publishes its marker.
+        if (this.enableIdempotency && this.redisClient) {
+          phase = 'idempotency read'
+          const lastRun = await this.redisClient.get(this.idempotencyKeyBase)
+          if (lastRun !== null) {
+            this.logger('[Idempotency] Skipping job — completed within interval')
+            return
+          }
+        }
+
+        phase = 'job execution'
+        // Generate a fresh correlation context for exactly one execution.
+        await runWithCorrelationIds({ correlationId: randomUUID() }, () => this.job.run())
+
+        if (this.enableIdempotency && this.redisClient) {
+          phase = 'idempotency write'
+          const acknowledgment = await this.redisClient.set(
+            this.idempotencyKeyBase,
+            new Date().toISOString(),
+            { PX: this.intervalMs }
+          )
+          if (acknowledgment !== 'OK') {
+            throw new Error('Completion marker was not acknowledged')
+          }
+        }
+        // Results and raw dependency errors can contain credentials or user
+        // data. Log the lifecycle and failing phase, not arbitrary payloads.
+        this.logger('Job completed')
+      }
+
+      if (this.distributedLock) {
+        const { executed } = await this.distributedLock.withLock(
+          this.lockKey,
+          execute,
+          { ttlMs: this.lockTtlMs, logger: this.logger }
+        )
+        if (!executed) {
+          this.logger(`Job skipped (lock held by another worker) — contentions: ${this.distributedLock.getMetrics().contentions}`)
+        }
+      } else {
+        await execute()
+      }
+    } catch {
+      // Fail closed when the guard cannot be read. A failed job never gets
+      // a completion marker; the next tick can retry after recovery. If the
+      // job completed but the marker write failed, retries are at-least-once:
+      // callers must keep business side effects idempotent.
+      this.logger(`Job failed during ${phase}; next interval may retry`)
     } finally {
       this.isRunning = false
     }
@@ -255,13 +256,19 @@ export class JobScheduler {
  * @returns Interval in milliseconds
  */
 export function parseCronToInterval(cronExpression: string): number {
-  const parts = cronExpression.split(' ')
+  const parts = cronExpression.trim().split(/\s+/)
   
   if (parts.length !== 5) {
     throw new Error('Invalid cron expression: must have 5 parts')
   }
 
-  const [minute, hour] = parts
+  const [minute, hour, day, month, weekday] = parts
+
+  // This interval scheduler only supports the three documented patterns.
+  // Silently ignoring calendar constraints would run jobs too frequently.
+  if (day !== '*' || month !== '*' || weekday !== '*') {
+    throw new Error(`Unsupported cron expression: ${cronExpression}`)
+  }
 
   // Every minute
   if (minute === '*' && hour === '*') {
@@ -302,6 +309,8 @@ export function createScheduler(
     distributedLock: options.distributedLock,
     lockKey: options.lockKey,
     lockTtlMs: options.lockTtlMs,
+    redisClient: options.redisClient,
+    enableIdempotency: options.enableIdempotency,
   })
 }
 

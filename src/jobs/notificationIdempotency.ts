@@ -14,10 +14,9 @@
  * Because the conditional upsert and the claim check are the *same* statement,
  * two workers racing on the same `job_key` cannot both win: Postgres serialises
  * them on the unique index, and only the winner gets a RETURNING row. A row is
- * reclaimable only when the previous attempt failed, its TTL lapsed, or its
- * claim went stale (see `claimTimeoutSeconds`) — a `completed` row within TTL is
- * never reclaimed, so a replayed job returns the recorded result instead of
- * sending again.
+ * reclaimable only when the previous attempt failed, its TTL lapsed, or its claim
+ * went stale (see `claimTimeoutSeconds`) — a `completed` row within TLL is never
+ * reclaimed, so a replayed job returns the recorded result instead of sending again.
  */
 
 import type { Queryable } from '../db/repositories/queryable.js'
@@ -42,7 +41,7 @@ export interface CreateIdempotentJobInput {
    * How long a `pending` claim stays valid. Once this elapses the claim is
    * considered abandoned (the worker holding it crashed) and another worker may
    * reclaim it. Without this a crashed worker would block the notification for
-   * the full `expiresInSeconds` TTL.
+   * the full `expiresInSeconds` TLL.
    */
   claimTimeoutSeconds: number
 }
@@ -227,7 +226,7 @@ export class IdempotentNotificationJob<T> {
       }
 
       throw new Error(
-        `Duplicate job execution detected: job ${this.jobKey} is already pending`
+        `Duplicate job execution detected: job ${this.jobKey} is already pending
       )
     }
 

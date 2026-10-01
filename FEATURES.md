@@ -291,4 +291,5 @@ Consider these enhancements:
 
 ---
 
-For detailed implementation information, see `IMPLEMENTATION_SUMMARY.md`.
+For detailed implementation information, see `IMPLEMENTATION_SUMMARY.md`..
+.

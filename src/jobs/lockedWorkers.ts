@@ -1,5 +1,4 @@
 import type { DistributedLock } from './distributedLock.js'
-import type { RedisClient } from '../cache/redis.js'
 import type { IdempotencyRedisClient } from './scheduler.js'
 import { InvoiceDueDateWorker, type InvoiceDueDateWorkerOptions, type InvoiceDueDateWorkerResult } from './invoiceDueDateWorker.js'
 import { ExportWorker, type ExportWorkerOptions, type ExportWorkerResult } from './exportWorker.js'
@@ -77,7 +76,7 @@ export class LockedInvoiceDueDateWorker {
     if (this.enableIdempotency && this.redisClient) {
       const lastRun = await this.redisClient.get(this.idempotencyKey)
       if (lastRun) {
-        this.logger(`[LockedInvoiceDueDateWorker] Skipped due date evaluation (idempotency — last run at ${lastRun})`)
+        this.logger(`[LockedInvoiceDueDateWorker] Skipped due date evaluation (idempotency marker exists)`)
         return null
       }
     }
@@ -85,16 +84,31 @@ export class LockedInvoiceDueDateWorker {
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
+        // The pre-lock read is only a fast path. Recheck under ownership so
+        // a delayed contender cannot repeat a run completed by another replica.
+        if (this.enableIdempotency && this.redisClient) {
+          const lastRun = await this.redisClient.get(this.idempotencyKey)
+          if (lastRun) {
+            this.logger(`[LockedInvoiceDueDateWorker] Skipped due date evaluation (idempotency marker exists)`)
+            return null
+          }
+        }
+
         this.logger(`[LockedInvoiceDueDateWorker] Starting due date evaluation`)
         const workerResult = await this.worker.run(nowUtc)
 
-        // Set idempotency marker after successful execution
+        // Resolved results can still report partial failure. Keep those runs
+        // retryable; the underlying worker owns per-item idempotency.
         if (this.enableIdempotency && this.redisClient) {
-          await this.redisClient.set(
-            this.idempotencyKey,
-            new Date().toISOString(),
-            { PX: this.lockTtlMs }
-          )
+          if (workerResult.errors === 0) {
+            await this.redisClient.set(
+              this.idempotencyKey,
+              new Date().toISOString(),
+              { PX: this.lockTtlMs }
+            )
+          } else {
+            this.logger(`[LockedInvoiceDueDateWorker] Incomplete due date evaluation; not marked complete`)
+          }
         }
 
         return workerResult
@@ -155,7 +169,7 @@ export class LockedExportWorker {
     if (this.enableIdempotency && this.redisClient) {
       const lastRun = await this.redisClient.get(this.idempotencyKey)
       if (lastRun) {
-        this.logger(`[LockedExportWorker] Skipped export (idempotency — last run at ${lastRun})`)
+        this.logger(`[LockedExportWorker] Skipped export (idempotency marker exists)`)
         return null
       }
     }
@@ -163,16 +177,31 @@ export class LockedExportWorker {
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
+        // The pre-lock read is only a fast path. Recheck under ownership so
+        // a delayed contender cannot repeat a run completed by another replica.
+        if (this.enableIdempotency && this.redisClient) {
+          const lastRun = await this.redisClient.get(this.idempotencyKey)
+          if (lastRun) {
+            this.logger(`[LockedExportWorker] Skipped export (idempotency marker exists)`)
+            return null
+          }
+        }
+
         this.logger(`[LockedExportWorker] Starting data export`)
         const workerResult = await this.worker.run()
 
-        // Set idempotency marker after successful execution
+        // Resolved results can still report partial failure. Keep those runs
+        // retryable; the underlying worker owns per-item idempotency.
         if (this.enableIdempotency && this.redisClient) {
-          await this.redisClient.set(
-            this.idempotencyKey,
-            new Date().toISOString(),
-            { PX: this.lockTtlMs }
-          )
+          if (workerResult.errors === 0) {
+            await this.redisClient.set(
+              this.idempotencyKey,
+              new Date().toISOString(),
+              { PX: this.lockTtlMs }
+            )
+          } else {
+            this.logger(`[LockedExportWorker] Incomplete export; not marked complete`)
+          }
         }
 
         return workerResult
@@ -233,7 +262,7 @@ export class LockedAnalyticsRefreshWorker {
     if (this.enableIdempotency && this.redisClient) {
       const lastRun = await this.redisClient.get(this.idempotencyKey)
       if (lastRun) {
-        this.logger(`[LockedAnalyticsRefreshWorker] Skipped analytics refresh (idempotency — last run at ${lastRun})`)
+        this.logger(`[LockedAnalyticsRefreshWorker] Skipped analytics refresh (idempotency marker exists)`)
         return null
       }
     }
@@ -241,16 +270,31 @@ export class LockedAnalyticsRefreshWorker {
     const { executed, result } = await this.distributedLock.withLock(
       this.lockKey,
       async () => {
+        // The pre-lock read is only a fast path. Recheck under ownership so
+        // a delayed contender cannot repeat a run completed by another replica.
+        if (this.enableIdempotency && this.redisClient) {
+          const lastRun = await this.redisClient.get(this.idempotencyKey)
+          if (lastRun) {
+            this.logger(`[LockedAnalyticsRefreshWorker] Skipped analytics refresh (idempotency marker exists)`)
+            return null
+          }
+        }
+
         this.logger(`[LockedAnalyticsRefreshWorker] Starting analytics refresh`)
         const workerResult = await this.worker.run()
 
-        // Set idempotency marker after successful execution
+        // Resolved results can still report partial failure. Keep those runs
+        // retryable; the underlying worker owns per-item idempotency.
         if (this.enableIdempotency && this.redisClient) {
-          await this.redisClient.set(
-            this.idempotencyKey,
-            new Date().toISOString(),
-            { PX: this.lockTtlMs }
-          )
+          if (workerResult.refreshed && workerResult.failedViews.length === 0 && !workerResult.error) {
+            await this.redisClient.set(
+              this.idempotencyKey,
+              new Date().toISOString(),
+              { PX: this.lockTtlMs }
+            )
+          } else {
+            this.logger(`[LockedAnalyticsRefreshWorker] Incomplete analytics refresh; not marked complete`)
+          }
         }
 
         return workerResult

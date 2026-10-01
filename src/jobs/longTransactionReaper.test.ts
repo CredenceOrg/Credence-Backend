@@ -56,6 +56,14 @@ describe("loadLongTransactionReaperConfig", () => {
       DEFAULT_LONG_TRANSACTION_REAPER_CONFIG.intervalMs,
     );
   });
+
+  it.each(["0", "0.5", "Infinity", "9007199254740992"])(
+    "rejects an unsafe age override of %s",
+    (value) => {
+      expect(loadLongTransactionReaperConfig({ DB_LONG_TRANSACTION_MAX_AGE_MS: value }).maxTransactionAgeMs)
+        .toBe(DEFAULT_LONG_TRANSACTION_REAPER_CONFIG.maxTransactionAgeMs);
+    },
+  );
 });
 
 describe("LongTransactionReaper.run", () => {
@@ -103,16 +111,31 @@ describe("LongTransactionReaper.run", () => {
     expect(result.dryRun).toBe(true);
   });
 
-  it("uses at least a 1-second floor for sub-second configured max ages", async () => {
+  it.each([500, 1499, 1500, 1501])("preserves the %ims age boundary", async (ageMs) => {
     const query = vi.fn().mockResolvedValue({ rows: [] });
     const reaper = new LongTransactionReaper(
       { query } as any,
-      { maxTransactionAgeMs: 500 },
+      { maxTransactionAgeMs: ageMs },
     );
 
     await reaper.run();
 
-    expect(query.mock.calls[0][1]).toEqual([1]);
+    expect(query.mock.calls[0][1]).toEqual([ageMs / 1000]);
+  });
+
+  it("does not count a backend that PostgreSQL declined to terminate or log its SQL", async () => {
+    const logger = vi.fn();
+    const query = vi.fn().mockResolvedValue({ rows: [overAgeRow({
+      terminated: false,
+      query: "secret transaction text",
+      usename: "secret user",
+    })] });
+    const result = await new LongTransactionReaper({ query } as any, { logger }).run();
+
+    expect(result).toMatchObject({ candidateCount: 1, terminatedCount: 0 });
+    expect(result.terminated[0].terminated).toBe(false);
+    expect(logger).toHaveBeenCalledWith(expect.stringContaining("termination failed"));
+    expect(logger.mock.calls.flat().join(" ")).not.toMatch(/secret transaction text|secret user/);
   });
 
   it("scopes the query to the current database, excludes its own backend, and only targets client backends", async () => {
@@ -133,6 +156,24 @@ describe("LongTransactionReaper.run", () => {
 
     await expect(reaper.run()).rejects.toBeInstanceOf(LongTransactionReaperError);
     await expect(reaper.run()).rejects.toThrow(/Long transaction reaper scan failed/);
+  });
+
+  it("redacts database error text and retries successfully after a failed scan", async () => {
+    const logger = vi.fn();
+    const failure = Object.assign(new Error("password=secret SQL text"), { code: "42501" });
+    const query = vi.fn()
+      .mockRejectedValueOnce(failure)
+      .mockResolvedValueOnce({ rows: [overAgeRow()] });
+    const reaper = new LongTransactionReaper({ query } as any, { logger });
+
+    await expect(reaper.run()).rejects.toMatchObject({
+      name: "LongTransactionReaperError",
+      message: "Long transaction reaper scan failed code=42501",
+      cause: failure,
+    });
+    expect((await reaper.run()).terminatedCount).toBe(1);
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(logger.mock.calls.flat().join(" ")).not.toContain("password=secret");
   });
 
   it("returns a zero-result and skips re-entrant runs while one is already in flight", async () => {
@@ -227,5 +268,26 @@ describe("LongTransactionReaper.start/stop", () => {
       expect.stringContaining("Already running"),
     );
     reaper.stop();
+  });
+
+  it("recovers on the next timer tick after the initial scan fails", async () => {
+    vi.useFakeTimers();
+    try {
+      const logger = vi.fn();
+      const query = vi.fn()
+        .mockRejectedValueOnce(new Error("secret connection detail"))
+        .mockResolvedValueOnce({ rows: [] });
+      const reaper = new LongTransactionReaper({ query } as any, { intervalMs: 1000, logger });
+
+      reaper.start();
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1000);
+      reaper.stop();
+
+      expect(query).toHaveBeenCalledTimes(2);
+      expect(logger.mock.calls.flat().join(" ")).not.toContain("secret connection detail");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

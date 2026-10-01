@@ -1,6 +1,18 @@
 /**
  * Retention policy enforcement tests for AuditLogRepository.
  *
+ * NOTE: This file is intentionally a *test-only* addition. It does not modify
+ * the production repository implementation; it pins down the observable
+ * contract of `purgeExpired` (success, boundary, dry-run, tenant scoping,
+ * batching, idempotency, and service-level authorization) so that future
+ * changes to `src/db/repositories/auditLogsRepository.ts` cannot silently
+ * regress retention semantics. Invariants asserted here:
+ *   1. Cutoff is strict (`occurredAt < NOW() - ttlDays`), boundary rows kept.
+ *   2. `ttlDays <= 0` is a no-op (keep forever) and issues no DB queries.
+ *   3. `dryRun` counts but never deletes.
+ *   4. Tenant scoping is enforced at the SQL/param level, not client-side.
+ *   5. Batch loops terminate on a short/empty batch and are idempotent.
+ *   6. Service refuses cross-tenant purge unless `allowSuperScope` is set.
  * Covers:
  *   - Success path: purging expired entries
  *   - Failure paths: zero TTL, dry run, tenant scoping enforcement
@@ -453,3 +465,4 @@ describe('AuditLogService - purgeExpired', () => {
     expect(result.deletedCount).toBe(2)
   })
 })
+
