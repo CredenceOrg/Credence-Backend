@@ -522,3 +522,33 @@ export async function withReplica<T>(
     throw err;
   }
 }
+
+/**
+ * Test-only helpers for exercising pool boundary and recovery behavior.
+ * These are exported so focused tests can deterministically simulate
+ * tenant budget exhaustion, release accounting, and replica fallback
+ * without touching production call sites.
+ * @internal Exported for testing only.
+ */
+export const __poolTestHooks = {
+  getTenantConnectionCount(tenantId: string): number {
+    return tenantConnectionCounts.get(tenantId) ?? 0;
+  },
+  setTenantConnectionCount(tenantId: string, count: number): void {
+    if (count <= 0) {
+      tenantConnectionCounts.delete(tenantId);
+    } else {
+      tenantConnectionCounts.set(tenantId, count);
+    }
+  },
+  clearTenantConnectionCounts(): void {
+    tenantConnectionCounts.clear();
+  },
+  getTenantConnectionBudget(): number {
+    return TENANT_CONNECTION_BUDGET;
+  },
+  getMaxReplicaLagMs(): number {
+    return MAX_REPLICA_LAG_MS;
+  },
+  checkPoolSaturation,
+};

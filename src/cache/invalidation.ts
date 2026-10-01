@@ -12,13 +12,22 @@ import { logger } from '../utils/logger.js'
 import { ValidationError, ServiceUnavailableError } from '../lib/errors.js'
 import { transactionContextStorage, runPostCommit, runRollback } from '../db/transaction.js'
 
-/**
- * Compute a deterministic, stable hash for comparing cached values.
- * Produces identical output for structurally equal objects regardless of
- * property insertion order, so it is safe to use for stale-read detection.
- */
 function computeStableHash(value: unknown): string {
-  return JSON.stringify(value, Object.keys(value as object).sort())
+  return JSON.stringify(
+    value,
+    (key, val) => {
+      if (typeof val === 'bigint') return val.toString() + 'n'
+      if (val === undefined) return '__UNDEFINED__'
+      
+      if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+        return Object.keys(val).sort().reduce((acc, k) => {
+          acc[k] = (val as any)[k]
+          return acc
+        }, {} as Record<string, any>)
+      }
+      return val
+    }
+  )
 }
 
 export interface InvalidationOptions {
@@ -310,7 +319,15 @@ export async function invalidateTenantCache(
     throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
   }
 
-  const keysCleared = await cache.clearNamespace(tenantId)
+  let keysCleared: number
+  try {
+    // Tenant support tooling must not turn a backend failure into a false
+    // zero-key success. Other cache callers retain the historical best-effort
+    // behavior of clearNamespace() by leaving throwOnError disabled.
+    keysCleared = await cache.clearNamespace(tenantId, { throwOnError: true })
+  } catch {
+    throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
+  }
 
   logger.info({
     message: 'Tenant cache invalidated',

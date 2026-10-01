@@ -50,6 +50,7 @@ export class SettlementReconciler {
     let checked = 0
     let discrepancies = 0
     let errors = 0
+    const findings: Array<{ id: string; createdAt: Date }> = []
 
     try {
       // Fetch settlements updated within the sliding window
@@ -90,27 +91,12 @@ export class SettlementReconciler {
 
         checked++
 
+        let chainStatus: 'settled' | 'failed'
         try {
-          // Fetch transaction from Stellar Horizon (Read-only query)
+          // Keep Horizon failures separate from database failures: only a Horizon 404
+          // establishes that a transaction is missing on chain.
           const tx = await this.horizonServer.transactions().transaction(hash).call()
-          const chainStatus = tx.successful ? 'settled' : 'failed'
-
-          if (settlement.status !== chainStatus) {
-            discrepancies++
-            this.log(
-              `[SettlementReconciler] Mismatch for settlement ${settlement.id}: internalStatus=${settlement.status}, chainStatus=${chainStatus}`
-            )
-
-            await this.recordFinding(settlement.id, 'state_mismatch', {
-              internalStatus: settlement.status,
-              chainStatus,
-              transactionHash: hash,
-              amount: settlement.amount,
-              updatedAt: settlement.updated_at
-            }, runId)
-
-            recordSettlementDrift('state_mismatch')
-          }
+          chainStatus = tx.successful ? 'settled' : 'failed'
         } catch (err: any) {
           // If transaction is not found (404)
           if (err?.response?.status === 404) {
@@ -119,33 +105,47 @@ export class SettlementReconciler {
               `[SettlementReconciler] Settlement ${settlement.id} exists internally but transaction ${hash} was not found on Stellar`
             )
 
-            await this.recordFinding(settlement.id, 'missing_on_chain', {
+            const finding = await this.recordFinding(settlement.id, 'missing_on_chain', {
               internalStatus: settlement.status,
               transactionHash: hash,
               amount: settlement.amount,
               updatedAt: settlement.updated_at,
               error: 'Transaction not found on Stellar Horizon'
-            }, runId)
+            })
+            if (finding) findings.push(finding)
+            else errors++
 
             recordSettlementDrift('missing_on_chain')
           } else {
             errors++
-            const errMsg = err?.message || String(err)
             this.log(
-              `[SettlementReconciler] Error querying transaction ${hash} for settlement ${settlement.id}: ${errMsg}`
+              `[SettlementReconciler] Error querying transaction for settlement ${settlement.id}: status=${err?.response?.status ?? 'unknown'}`
             )
           }
+          continue
+        }
+
+        if (settlement.status !== chainStatus) {
+          discrepancies++
+          this.log(
+            `[SettlementReconciler] Mismatch for settlement ${settlement.id}: internalStatus=${settlement.status}, chainStatus=${chainStatus}`
+          )
+          const finding = await this.recordFinding(settlement.id, 'state_mismatch', {
+            internalStatus: settlement.status,
+            chainStatus,
+            transactionHash: hash,
+            amount: settlement.amount,
+            updatedAt: settlement.updated_at
+          })
+          if (finding) findings.push(finding)
+          else errors++
+          recordSettlementDrift('state_mismatch')
         }
       }
     } catch (err: any) {
       errors++
-      this.log(`[SettlementReconciler] Unexpected error during reconciliation: ${err?.message || err}`)
+      this.log(`[SettlementReconciler] Unexpected error during reconciliation: code=${err?.code ?? 'unknown'}`)
     }
-
-    const durationMs = Date.now() - startMs
-    this.log(
-      `[SettlementReconciler] Reconciliation run finished. checked=${checked} discrepancies=${discrepancies} errors=${errors} duration=${durationMs}ms`
-    )
 
     // Persist run summary
     runId = await this.persistRunSummary(checked, discrepancies, errors)
@@ -153,9 +153,25 @@ export class SettlementReconciler {
     // Update linked findings with the run_id
     // (findings were inserted during the loop above without a run_id;
     //  we patch them now that we have the run row)
-    if (runId && discrepancies > 0) {
-      await this.linkFindingsToRun(runId)
+    if (runId && findings.length > 0) {
+      const linkErrors = await this.linkFindingsToRun(runId, findings)
+      if (linkErrors > 0) {
+        errors += linkErrors
+        try {
+          await this.db.query(
+            'UPDATE settlement_reconciliation_runs SET errors = $2 WHERE id = $1',
+            [runId, errors]
+          )
+        } catch {
+          this.log(`[SettlementReconciler] Failed to update error count for run ${runId}`)
+        }
+      }
     }
+
+    const durationMs = Date.now() - startMs
+    this.log(
+      `[SettlementReconciler] Reconciliation run finished. checked=${checked} discrepancies=${discrepancies} errors=${errors} duration=${durationMs}ms`
+    )
 
     // Update the Prometheus gauge
     setSettlementUnmatchedCount(discrepancies)
@@ -182,7 +198,7 @@ export class SettlementReconciler {
       return res.rows[0]?.id ?? null
     } catch (err: any) {
       this.log(
-        `[SettlementReconciler] Failed to persist run summary: ${err?.message || err}`
+        `[SettlementReconciler] Failed to persist run summary: code=${err?.code ?? 'unknown'}`
       )
       return null
     }
@@ -192,19 +208,25 @@ export class SettlementReconciler {
    * Links findings that were created during this run (with NULL run_id)
    * to the newly created run row.
    */
-  private async linkFindingsToRun(runId: string): Promise<void> {
-    try {
-      await this.db.query(
-        `UPDATE settlement_reconciliation_findings
-         SET run_id = $1
-         WHERE run_id IS NULL`,
-        [runId]
-      )
-    } catch (err: any) {
-      this.log(
-        `[SettlementReconciler] Failed to link findings to run ${runId}: ${err?.message || err}`
-      )
+  private async linkFindingsToRun(runId: string, findings: Array<{ id: string; createdAt: Date }>): Promise<number> {
+    let errors = 0
+    for (const finding of findings) {
+      try {
+        // A concurrent retry may have replaced this finding. Only link the
+        // version written by this run; never claim another run's observation.
+        await this.db.query(
+          `UPDATE settlement_reconciliation_findings
+           SET run_id = $1
+           WHERE id = $2 AND created_at = $3 AND run_id IS NULL`,
+          [runId, finding.id, finding.createdAt]
+        )
+      } catch (err: any) {
+        errors++
+        this.log(`[SettlementReconciler] Failed to link finding ${finding.id} to run ${runId}: code=${err?.code ?? 'unknown'}`)
+      }
     }
+
+    return errors
   }
 
   /**
@@ -214,20 +236,24 @@ export class SettlementReconciler {
     settlementId: string,
     findingType: 'state_mismatch' | 'missing_on_chain',
     details: Record<string, any>,
-    _runId: string | null
-  ): Promise<void> {
+  ): Promise<{ id: string; createdAt: Date } | null> {
     try {
-      await this.db.query(
+      const res = await this.db.query<{ id: string; created_at: Date }>(
         `INSERT INTO settlement_reconciliation_findings (settlement_id, finding_type, details)
          VALUES ($1, $2, $3)
          ON CONFLICT (settlement_id, finding_type) DO UPDATE
-         SET details = EXCLUDED.details, created_at = NOW()`,
+         SET details = EXCLUDED.details, created_at = NOW(), run_id = NULL
+         RETURNING id, created_at`,
         [settlementId, findingType, JSON.stringify(details)]
       )
+      const row = res.rows[0]
+      if (!row) this.log(`[SettlementReconciler] Finding write returned no row for settlement ${settlementId}`)
+      return row ? { id: row.id, createdAt: row.created_at } : null
     } catch (err: any) {
       this.log(
-        `[SettlementReconciler] Failed to save finding for settlement ${settlementId}: ${err?.message || err}`
+        `[SettlementReconciler] Failed to save finding for settlement ${settlementId}: code=${err?.code ?? 'unknown'}`
       )
+      return null
     }
   }
 }

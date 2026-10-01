@@ -18,7 +18,6 @@ export type RedisClient = RedisClientType
 export class RedisConnection {
   private static instance: RedisConnection
   private client: RedisClient
-  private isConnecting = false
   private connectionPromise: Promise<void> | null = null
 
   private constructor() {
@@ -29,8 +28,8 @@ export class RedisConnection {
       },
     })
 
-    this.client.on('error', (err: Error) => {
-      logger.error('Redis client error:', err)
+    this.client.on('error', () => {
+      logger.error('Redis client error')
     })
 
     this.client.on('connect', () => {
@@ -56,21 +55,19 @@ export class RedisConnection {
    * Connect to Redis (idempotent)
    */
   public async connect(): Promise<void> {
+    // Redis marks the socket open before connect() settles. All callers must
+    // share that pending attempt rather than treating an open socket as ready.
+    if (this.connectionPromise) {
+      return this.connectionPromise
+    }
     if (this.client.isOpen) {
       return
     }
 
-    if (this.isConnecting && this.connectionPromise) {
-      return this.connectionPromise
-    }
-
-    this.isConnecting = true
-    this.connectionPromise = this.client.connect().then(() => {})
-
     try {
+      this.connectionPromise = this.client.connect().then(() => {})
       await this.connectionPromise
     } finally {
-      this.isConnecting = false
       this.connectionPromise = null
     }
   }
@@ -94,7 +91,7 @@ export class RedisConnection {
       await this.client.ping()
       return true
     } catch (error) {
-      logger.error('Redis health check failed:', error)
+      logger.error('Redis health check failed')
       return false
     }
   }
@@ -125,6 +122,10 @@ export class CacheService {
   private redis: RedisConnection
   private metrics = createMetricsAdapter(createDefaultMetricsCollector())
   private l1Cache: LRUCache<string, any>
+  // A bounded generation fence prevents a delayed read/write from repopulating
+  // L1 after a mutation. It intentionally spans namespaces to avoid a growing
+  // per-key tombstone map; Redis remains authoritative when a fill is skipped.
+  private l1Generation = 0
 
   constructor(redis?: RedisConnection) {
     this.redis = redis || RedisConnection.getInstance()
@@ -157,8 +158,9 @@ export class CacheService {
     }
     
     return executeCacheOperation(
-      `cache.get.${namespace}.${key}`,
+      'cache.get',
       async () => {
+        const generation = this.l1Generation
         await this.redis.connect()
         const value = await this.redis.getClient().get(namespacedKey)
         
@@ -176,13 +178,19 @@ export class CacheService {
         }
 
         // Store in L1
-        this.l1Cache.set(namespacedKey, parsedValue)
-        recordCacheHit(isObjectStale(parsedValue))
+        if (generation === this.l1Generation) {
+          this.l1Cache.set(namespacedKey, parsedValue)
+        }
+        if (parsedValue === null) recordCacheMiss()
+        else recordCacheHit(isObjectStale(parsedValue))
         return parsedValue
       },
       { metrics: this.metrics }
     ).catch(error => {
-      logger.error(`Cache get failed for key ${namespacedKey}:`, error)
+      // The timeout executor cannot cancel the underlying Redis promise. Fence
+      // its late completion so a timed-out read cannot refill L1 afterward.
+      this.invalidateL1(namespacedKey)
+      logger.error('Cache get failed')
       recordCacheMiss()
       return null
     })
@@ -194,7 +202,7 @@ export class CacheService {
    * @param namespace - Cache namespace (e.g., 'trust', 'bond')
    * @param key - Cache key within namespace
    * @param value - Value to cache (will be JSON serialized)
-   * @param ttl - Time to live in seconds (optional)
+   * @param ttl - Positive safe-integer seconds; omit for a persistent Redis key
    * @returns True if set successfully, false on error
    */
   public async set<T = string>(
@@ -204,10 +212,19 @@ export class CacheService {
     ttl?: number
   ): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
-    const serializedValue = typeof value === 'string' ? value : JSON.stringify(value)
-    recordRedisKeySize(namespace, Buffer.byteLength(serializedValue, 'utf8'))
-
     try {
+      if (ttl !== undefined && (!Number.isSafeInteger(ttl) || ttl <= 0)) {
+        logger.error('Cache set rejected: invalid TTL')
+        return false
+      }
+      const serializedValue = typeof value === 'string' ? value : JSON.stringify(value)
+      if (serializedValue === undefined) {
+        logger.error('Cache set rejected: value is not serializable')
+        return false
+      }
+      recordRedisKeySize(namespace, Buffer.byteLength(serializedValue, 'utf8'))
+      this.invalidateL1(namespacedKey)
+      const generation = this.l1Generation
       await this.redis.connect()
       const client = this.redis.getClient()
 
@@ -217,16 +234,22 @@ export class CacheService {
         await client.set(namespacedKey, serializedValue)
       }
 
-      // Store in L1 with same TTL if provided (convert to ms)
-      if (ttl) {
-        this.l1Cache.set(namespacedKey, value, { ttl: ttl * 1000 })
-      } else {
-        this.l1Cache.set(namespacedKey, value)
+      const canPopulate = generation === this.l1Generation
+      this.invalidateL1(namespacedKey)
+      // A concurrent mutation can complete out of order; conservatively leave
+      // L1 empty so the next read observes Redis rather than a delayed reply.
+      if (canPopulate) {
+        if (ttl) {
+          this.l1Cache.set(namespacedKey, value, { ttl: ttl * 1000 })
+        } else {
+          this.l1Cache.set(namespacedKey, value)
+        }
       }
 
       return true
     } catch (error) {
-      logger.error(`Cache set failed for key ${namespacedKey}:`, error)
+      this.invalidateL1(namespacedKey)
+      logger.error('Cache set failed')
       return false
     }
   }
@@ -242,15 +265,17 @@ export class CacheService {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
     // Delete from L1
-    this.l1Cache.delete(namespacedKey)
+    this.invalidateL1(namespacedKey)
 
     try {
       await this.redis.connect()
       const result = await this.redis.getClient().del(namespacedKey)
       return result > 0
     } catch (error) {
-      logger.error(`Cache delete failed for key ${namespacedKey}:`, error)
+      logger.error('Cache delete failed')
       return false
+    } finally {
+      this.invalidateL1(namespacedKey)
     }
   }
 
@@ -260,6 +285,7 @@ export class CacheService {
    * @param pattern - Pattern to match (e.g., 'identity:*')
    */
   public clearL1Pattern(pattern: string): void {
+    this.l1Generation++
     const keysToDelete: string[] = []
     for (const key of this.l1Cache.keys()) {
       if (key.startsWith(pattern.replace('*', ''))) {
@@ -272,12 +298,16 @@ export class CacheService {
   }
 
   /**
-   * Clear all keys in a namespace
-   * 
+   * Clear all keys in a namespace.
+   *
    * @param namespace - Cache namespace to clear
+   * @param options - Whether backend errors should be propagated
    * @returns Number of keys deleted
    */
-  public async clearNamespace(namespace: string): Promise<number> {
+  public async clearNamespace(
+    namespace: string,
+    options: { throwOnError?: boolean } = {}
+  ): Promise<number> {
     const pattern = this.getNamespacedKey(namespace, '*')
 
     // Clear from L1
@@ -295,7 +325,12 @@ export class CacheService {
       return result
     } catch (error) {
       logger.error(`Cache clear namespace failed for ${namespace}:`, error)
+      if (options.throwOnError) {
+        throw error
+      }
       return 0
+    } finally {
+      this.clearL1Pattern(pattern)
     }
   }
 
@@ -319,7 +354,7 @@ export class CacheService {
       const result = await this.redis.getClient().exists(namespacedKey)
       return result === 1
     } catch (error) {
-      logger.error(`Cache exists check failed for key ${namespacedKey}:`, error)
+      logger.error('Cache exists check failed')
       return false
     }
   }
@@ -335,19 +370,23 @@ export class CacheService {
   public async expire(namespace: string, key: string, ttl: number): Promise<boolean> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
-    // Update L1 TTL
-    if (this.l1Cache.has(namespacedKey)) {
-      const value = this.l1Cache.get(namespacedKey)
-      this.l1Cache.set(namespacedKey, value, { ttl: ttl * 1000 })
+    if (!Number.isSafeInteger(ttl)) {
+      logger.error('Cache expire rejected: invalid TTL')
+      return false
     }
+    // Never extend local lifetime before Redis confirms EXPIRE. Eviction also
+    // handles zero/negative TTL (Redis deletes immediately) and failed updates.
+    this.invalidateL1(namespacedKey)
 
     try {
       await this.redis.connect()
       const result = await this.redis.getClient().expire(namespacedKey, ttl)
       return result === 1
     } catch (error) {
-      logger.error(`Cache expire failed for key ${namespacedKey}:`, error)
+      logger.error('Cache expire failed')
       return false
+    } finally {
+      this.invalidateL1(namespacedKey)
     }
   }
 
@@ -361,17 +400,14 @@ export class CacheService {
   public async ttl(namespace: string, key: string): Promise<number> {
     const namespacedKey = this.getNamespacedKey(namespace, key)
 
-    // Check L1 TTL
-    const l1Remaining = this.l1Cache.getRemainingTTL(namespacedKey)
-    if (l1Remaining > 0) {
-      return Math.floor(l1Remaining / 1000)
-    }
+    // L1's default eviction lifetime is not the Redis key's TTL. Query Redis
+    // so persistent keys retain -1 and deleted/expired keys retain -2.
 
     try {
       await this.redis.connect()
       return await this.redis.getClient().ttl(namespacedKey)
     } catch (error) {
-      logger.error(`Cache TTL check failed for key ${namespacedKey}:`, error)
+      logger.error('Cache TTL check failed')
       return -2
     }
   }
@@ -430,10 +466,9 @@ export class CacheService {
       const fresh = await fetchFn()
       // Fire-and-forget the cache set — a failure here should not bubble up
       // to callers (the value is still returned).
-      this.set(namespace, key, fresh, ttl).catch((err) => {
+      this.set(namespace, key, fresh, ttl).catch(() => {
         logger.error(
-          `getOrFetch: failed to cache namespace=${namespace} key=${key}:`,
-          err,
+          'getOrFetch: failed to cache value',
         )
       })
       return fresh
@@ -445,6 +480,11 @@ export class CacheService {
    */
   private getNamespacedKey(namespace: string, key: string): string {
     return `${namespace}:${key}`
+  }
+
+  private invalidateL1(key: string): void {
+    this.l1Generation++
+    this.l1Cache.delete(key)
   }
 }
 

@@ -59,6 +59,25 @@ describe('resolveProviderRetryPolicy', () => {
     expect(policy.maxDelayMs).toBe(RETRY_POLICY_HARD_CAPS.maxDelayMs)
     expect(policy.backoffMultiplier).toBe(RETRY_POLICY_HARD_CAPS.backoffMultiplier)
   })
+
+  it('normalizes non-finite policy values to safe defaults', () => {
+    const policy = resolveProviderRetryPolicy('webhook', defaultPolicy, {
+      overrides: {
+        maxAttempts: Number.NaN,
+        baseDelayMs: Number.POSITIVE_INFINITY,
+        maxDelayMs: Number.NaN,
+        backoffMultiplier: Number.NEGATIVE_INFINITY,
+      },
+    })
+
+    expect(policy).toEqual({
+      ...defaultPolicy,
+      maxAttempts: 1,
+      baseDelayMs: 1,
+      maxDelayMs: 1,
+      backoffMultiplier: 1,
+    })
+  })
 })
 
 describe('getBackoffDelayMs', () => {
@@ -107,6 +126,27 @@ describe('getBackoffDelayMs', () => {
     )
 
     expect(delay).toBe(100)
+  })
+
+  it.each([Number.NaN, Number.NEGATIVE_INFINITY, -1, 0])(
+    'recovers from invalid previous delay %s',
+    (previousDelayMs) => {
+      const delay = getBackoffDelayMs(
+        { ...defaultPolicy, jitterStrategy: 'decorrelated' },
+        2,
+        () => 0,
+        previousDelayMs,
+      )
+
+      expect(delay).toBe(defaultPolicy.baseDelayMs)
+    },
+  )
+
+  it('falls back to the first attempt for a non-finite attempt number', () => {
+    expect(getBackoffDelayMs(defaultPolicy, Number.NaN)).toBe(defaultPolicy.baseDelayMs)
+    expect(getBackoffDelayMs(defaultPolicy, Number.POSITIVE_INFINITY)).toBe(
+      defaultPolicy.baseDelayMs,
+    )
   })
 
   it('caps exponential growth at maxDelayMs', () => {

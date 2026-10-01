@@ -1,1 +1,168 @@
-aW1wb3J0IHsgU29yb2JhbkNsaWVudEVycm9yIH0gZnJvbSAnLi9zb3JvYmFuLmpzJwppbXBvcnQgY2xpZW50IGZyb20gJ3Byb20tY2xpZW50JwppbXBvcnQgewogIENJUkNVSVRfQlJFQUtFUl9ERUZBVUxUUywKICBD SVJDVUlUX0JSRUFLRVJfT1BFTl9XSU5ET1dfTVMsCiAgQ0lSQ1VJVF9CUkVBS0VSX0hBTEZfT1BFTl9BRlRFUl9NUywKICBD SVJDVUlUX0JSRUFLRVJfRkFJTFVSRV9USFJFU0hPTEQsCn0gZnJvbSAnLi4vY29uZmlnL3Nvcm9iYW5Db25zdGFudHMuanMnCgpleHBvcnQgdHlwZSBCcmVha2VyU3RhdGUgPSAnQ0xPU0VEJyB8ICdPUEVOJyB8ICdIQUxGX09QRU4nCgpleHBvcnQgaW50ZXJmYWNlIENpcmN1aXRCcmVha2VyQ29uZmlnIHsKICBmYWlsdXJlVGhyZXNob2xkOiBudW1iZXIKICBvcGVuV2luZG93TXM/OiBudW1iZXIKICBoYWxmT3BlbkFmdGVyTXM/OiBudW1iZXIKICAvKiogQGRlcHJlY2F0ZWQgKi8KICBjb29sZG93blBlcmlvZE1zPzogbnVtYmVyCn0KCmV4cG9ydCBjb25zdCBzb3JvYmFuQ2lyY3VpdFN0YXRlR2F1Z2UgPSBuZXcgY2xpZW50LkdhdWdlKHsKICBuYW1lOiAnc29yb2Jhbl9jaXJjdWl0X3N0YXRlJywKICBoZWxwOiAnU29yb2JhbiBjaXJjdWl0IGJyZWFrZXIgc3RhdGUgKDAgPSBDTE9TRUQsIDEgPSBPUEVOLCAyID0gSEFMRl9PUEVOKScsCiAgbGFiZWxOYW1lczogWydob3N0J10sCn0pCgpleHBvcnQgZnVuY3Rpb24gcmVnaXN0ZXJDaXJjdWl0QnJlYWtlck1ldHJpY3MocmVnaXN0cnk6IGNsaWVudC5SZWdpc3RyeSk6IHZvaWQgewogIGlmICghcmVnaXN0cnkuZ2V0U2luZ2xlTWV0cmljKCdzb3JvYmFuX2NpcmN1aXRfc3RhdGUnKSkgewogICAgcmVnaXN0cnkucmVnaXN0ZXJNZXRyaWMo c29yb2JhbkNpcmN1aXRTdGF0ZUdhdWdlKQogIH0KfQoKZXhwb3J0IGNsYXNzIENpcmN1aXRCcmVha2VyIHsKICBwcml2YXRlIHN0YXRlOiBCcmVha2VyU3RhdGUgPSAnQ0xPU0VEJwogIHByaXZhdGUgZmFpbHVyZUNvdW50ID0gMAogIHByaXZhdGUgb3BlbmVkQXQgPSAwCiAgcHJpdmF0ZSBhY3RpdmVQcm9iZXMgPSAwCgogIHByaXZhdGUgcmVhZG9ubHkgZmFpbHVyZVRocmVzaG9sZDogbnVtYmVyCiAgcHJpdmF0ZSByZWFkb25seSBvcGVuV2luZG93TXM6IG51bWJlcgogIHByaXZhdGUgcmVhZG9ubHkgaGFsZk9wZW5BZnRlck1zOiBudW1iZXIKCiAgY29uc3RydWN0b3IoCiAgICBwdWJsaWMgcmVhZG9ubHkgaG9zdDogc3RyaW5nLAogICAgY29uZmlnOiBDaXJjdWl0QnJlYWtlckNvbmZpZywKICApIHsKICAgIHRoaXMuZmFpbHVyZVRocmVzaG9sZCA9IGNvbmZpZy5mYWlsdXJlVGhyZXNob2xkCgogICAgY29uc3QgcmVzb2x2ZWRIYWxmT3BlbiA9CiAgICAgIGNvbmZpZy5oYWxmT3BlbkFmdGVyTXMgPz8KICAgICAgY29uZmlnLmNvb2xkb3duUGVyaW9kTXMgPz8KICAgICAgQ0lSQ1VJVF9CUkVBS0VSX0RFRkFVTFRTLmhhbGZPcGVuQWZ0ZXJNcwoKICAgIHRoaXMub3BlbldpbmRvd01zID0gY29uZmlnLm9wZW5XaW5kb3dNcyA/PyBD SVJDVUlUX0JSRUFLRVJfREVGQVVMVFMub3BlbldpbmRvd01zCiAgICB0aGlzLmhhbGZPcGVuQWZ0ZXJNcyA9IE1hdGgubWF4KHJlc29sdmVkSGFsZk9wZW4sIHRoaXMub3BlbldpbmRvd01zKQoKICAgIHRoaXMudXBkYXRlTWV0cmljcygpCiAgfQoKICBwdWJsaWMgZ2V0U3RhdGUoKTogQnJlYWtlclN0YXRlIHsKICAgIHRoaXMuY2hlY2tUaW1lcnMoKQogICAgcmV0dXJuIHRoaXMuc3RhdGUKICB9CgogIHB1YmxpYyBnZXRGYWlsdXJlQ291bnQoKTogbnVtYmVyIHsKICAgIHJldHVybiB0aGlzLmZhaWx1cmVDb3VudAogIH0KCiAgcHJpdmF0ZSBjaGVja1RpbWVycygpOiB2b2lkIHsKICAgIGlmICh0aGlzLnN0YXRlID09PSAnT1BFTicpIHsKICAgICAgY29uc3QgZWxhcHNlZCA9IERhdGUubm93KCkgLSB0aGlzLm9wZW5lZEF0CiAgICAgIGlmIChlbGFwc2VkID49IHRoaXMuaGFsZk9wZW5BZnRlck1zKSB7CiAgICAgICAgdGhpcy50cmFuc2l0aW9uVG8oJ0hBTEZfT1BFTicpCiAgICAgIH0KICAgIH0KICB9CgogIHB1YmxpYyBpc09wZW5XaW5kb3dFeHBpcmVkKCk6IGJvb2xlYW4gewogICAgaWYgKHRoaXMuc3RhdGUgIT09ICdPUEVOJykgcmV0dXJuIGZhbHNlCiAgICByZXR1cm4gRGF0ZS5ub3coKSAtIHRoaXMub3BlbmVkQXQgPj0gdGhpcy5vcGVuV2luZG93TXMKICB9CgogIHB1YmxpYyB0cmFuc2l0aW9uVG8obmV3U3RhdGU6IEJyZWFrZXJTdGF0ZSk6IHZvaWQgewogICAgdGhpcy5zdGF0ZSA9IG5ld1N0YXRlCiAgICBpZiAobmV3U3RhdGUgPT09ICdPUEVOJykgewogICAgICB0aGlzLm9wZW5lZEF0ID0gRGF0ZS5ub3coKQogICAgICB0aGlzLmFjdGl2ZVByb2JlcyA9IDAKICAgIH0gZWxzZSBpZiAobmV3U3RhdGUgPT09ICdDTE9TRUQnKSB7CiAgICAgIHRoaXMuZmFpbHVyZUNvdW50ID0gMAogICAgICB0aGlzLmFjdGl2ZVByb2JlcyA9IDAKICAgIH0gZWxzZSBpZiAobmV3U3RhdGUgPT09ICdIQUxGX09QRU4nKSB7CiAgICAgIHRoaXMuYWN0aXZlUHJvYmVzID0gMAogICAgfQogICAgdGhpcy51cGRhdGVNZXRyaWNzKCkKICB9CgogIHByaXZhdGUgdXBkYXRlTWV0cmljcygpOiB2b2lkIHsKICAgIGxldCB2YWwgPSAwCiAgICBpZiAodGhpcy5zdGF0ZSA9PT0gJ09QRU4nKSB2YWwgPSAxCiAgICBlbHNlIGlmICh0aGlzLnN0YXRlID09PSAnSEFMRl9PUEVOJykgdmFsID0gMgoKICAgIHRyeSB7CiAgICAgIHNvcm9iYW5DaXJjdWl0U3RhdGVHYXVnZS5zZXQoeyBob3N0OiB0aGlzLmhvc3QgfSwgdmFsKQogICAgfSBjYXRjaCB7CiAgICAgIC8vIElnbm9yZSBQcm9tZXRoZXVzIGVycm9ycyBpbiB0ZXN0IGVudmlyb25tZW50cyB3aGVyZSB0aGUgcmVnaXN0cnkgaXMgcmVzZXQKICAgIH0KICB9CgogIHB1YmxpYyBhc3luYyBleGVjdXRlPFQ+KGZuOiAoKSA9PiBQcm9taXNlPFQ+KTogUHJvbWlzZTxUPiB7CiAgICB0aGlzLmNoZWNrVGltZXJzKCkKCiAgICBpZiAodGhpcy5zdGF0ZSA9PT0gJ09QRU4nKSB7CiAgICAgIHRocm93IG5ldyBTb3JvYmFuQ2xpZW50RXJyb3IoewogICAgICAgIGNvZGU6ICdORVRXT1JLX0VSUk9SJywKICAgICAgICBtZXNzYWdlOiBgU29yb2JhbiBjaXJjdWl0IGJyZWFrZXIgaXMgT1BFTiBmb3IgaG9zdDogJHt0aGlzLmhvc3R9YCwKICAgICAgfSkKICAgIH0KCiAgICBpZiAodGhpcy5zdGF0ZSA9PT0gJ0hBTEZfT1BFTicpIHsKICAgICAgaWYgKHRoaXMuYWN0aXZlUHJvYmVzID49IDEpIHsKICAgICAgICB0aHJvdyBuZXcgU29yb2JhbkNsaWVudEVycm9yKHsKICAgICAgICAgIGNvZGU6ICdORVRXT1JLX0VSUk9SJywKICAgICAgICAgIG1lc3NhZ2U6IGBTb3JvYmFuIGNpcmN1aXQgYnJlYWtlciBpcyBIQUxGX09QRU4gZm9yIGhvc3Q6ICR7dGhpcy5ob3N0fSBhbmQgYSBwcm9iZSBpcyBhbHJlYWR5IGluIHByb2dyZXNzYCwKICAgICAgICB9KQogICAgICB9CiAgICAgIHRoaXMuYWN0aXZlUHJvYmVzICs9IDEKICAgIH0KCiAgICB0cnkgewogICAgICBjb25zdCByZXN1bHQgPSBhd2FpdCBmbigpCgogICAgICBpZiAodGhpcy5zdGF0ZSA9PT0gJ0hBTEZfT1BFTicpIHsKICAgICAgICB0aGlzLnRyYW5zaXRpb25UbygnQ0xPU0VEJykKICAgICAgfSBlbHNlIGlmICh0aGlzLnN0YXRlID09PSAnQ0xPU0VEJykgewogICAgICAgIHRoaXMuZmFpbHVyZUNvdW50ID0gMAogICAgICB9CiAgICAgIHJldHVybiByZXN1bHQKICAgIH0gY2F0Y2ggKGVycm9yKSB7CiAgICAgIHRoaXMucmVjb3JkRmFpbHVyZSgpCiAgICAgIHRocm93IGVycm9yCiAgICB9CiAgfQoKICBwcml2YXRlIHJlY29yZEZhaWx1cmUoKTogdm9pZCB7CiAgICBpZiAodGhpcy5zdGF0ZSA9PT0gJ0NMT1NFRCcpIHsKICAgICAgdGhpcy5mYWlsdXJlQ291bnQgKz0gMQogICAgICBpZiAodGhpcy5mYWlsdXJlQ291bnQgPj0gdGhpcy5mYWlsdXJlVGhyZXNob2xkKSB7CiAgICAgICAgdGhpcy50cmFuc2l0aW9uVG8oJ09QRU4nKQogICAgICB9CiAgICB9IGVsc2UgaWYgKHRoaXMuc3RhdGUgPT09ICdIQUxGX09QRU4nKSB7CiAgICAgIHRoaXMudHJhbnNpdGlvblRvKCdPUEVOJykKICAgIH0KICB9Cn0KCmNvbnN0IGJyZWFrZXJzID0gbmV3IE1hcDxzdHJpbmcsIENpcmN1aXRCcmVha2VyPigpCgpleHBvcnQgZnVuY3Rpb24gZ2V0Q2lyY3VpdEJyZWFrZXIoaG9zdDogc3RyaW5nLCBjb25maWc6IENpcmN1aXRCcmVha2VyQ29uZmlnKTogQ2lyY3VpdEJyZWFrZXIgewogIGxldCBicmVha2VyID0gYnJlYWtlcnMuZ2V0KGhvc3QpCiAgaWYgKCFicmVha2VyKSB7CiAgICBicmVha2VyID0gbmV3IENpcmN1aXRCcmVha2VyKGhvc3QsIGNvbmZpZykKICAgIGJyZWFrZXJzLnNldChob3N0LCBicmVha2VyKQogIH0KICByZXR1cm4gYnJlYWtlcgp9CgpleHBvcnQgZnVuY3Rpb24gcmVzZXRDaXJjdWl0QnJlYWtlcnMoKTogdm9pZCB7CiAgYnJlYWtlcnMuY2xlYXIoKQp9Cg==
+import { SorobanClientError } from './soroban.js'
+import client from 'prom-client'
+import {
+  CIRCUIT_BREAKER_DEFAULTS,
+  CIRCUIT_BREAKER_OPEN_WINDOW_MS,
+  CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
+  CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+} from '../config/sorobanConstants.js'
+
+export type BreakerState = 'CLOSED' | 'OPEN' | 'HALF_OPEN'
+
+export interface CircuitBreakerConfig {
+  failureThreshold: number
+  openWindowMs?: number
+  halfOpenAfterMs?: number
+  /** @deprecated */
+  cooldownPeriodMs?: number
+}
+
+export const sorobanCircuitStateGauge = new client.Gauge({
+  name: 'soroban_circuit_state',
+  help: 'Soroban circuit breaker state (0 = CLOSED, 1 = OPEN, 2 = HALF_OPEN)',
+  labelNames: ['host'],
+})
+
+export function registerCircuitBreakerMetrics(registry: client.Registry): void {
+  if (!registry.getSingleMetric('soroban_circuit_state')) {
+    registry.registerMetric(sorobanCircuitStateGauge)
+  }
+}
+
+export class CircuitBreaker {
+  private state: BreakerState = 'CLOSED'
+  private failureCount = 0
+  private openedAt = 0
+  private activeProbes = 0
+
+  private readonly failureThreshold: number
+  private readonly openWindowMs: number
+  private readonly halfOpenAfterMs: number
+
+  constructor(
+    public readonly host: string,
+    config: CircuitBreakerConfig,
+  ) {
+    this.failureThreshold = config.failureThreshold
+
+    const resolvedHalfOpen =
+      config.halfOpenAfterMs ??
+      config.cooldownPeriodMs ??
+      CIRCUIT_BREAKER_DEFAULTS.halfOpenAfterMs
+
+    this.openWindowMs = config.openWindowMs ?? CIRCUIT_BREAKER_DEFAULTS.openWindowMs
+    this.halfOpenAfterMs = Math.max(resolvedHalfOpen, this.openWindowMs)
+
+    this.updateMetrics()
+  }
+
+  public getState(): BreakerState {
+    this.checkTimers()
+    return this.state
+  }
+
+  public getFailureCount(): number {
+    return this.failureCount
+  }
+
+  private checkTimers(): void {
+    if (this.state === 'OPEN') {
+      const elapsed = Date.now() - this.openedAt
+      if (elapsed >= this.halfOpenAfterMs) {
+        this.transitionTo('HALF_OPEN')
+      }
+    }
+  }
+
+  public isOpenWindowExpired(): boolean {
+    if (this.state !== 'OPEN') return false
+    return Date.now() - this.openedAt >= this.openWindowMs
+  }
+
+  public transitionTo(newState: BreakerState): void {
+    this.state = newState
+    if (newState === 'OPEN') {
+      this.openedAt = Date.now()
+      this.activeProbes = 0
+    } else if (newState === 'CLOSED') {
+      this.failureCount = 0
+      this.activeProbes = 0
+    } else if (newState === 'HALF_OPEN') {
+      this.activeProbes = 0
+    }
+    this.updateMetrics()
+  }
+
+  private updateMetrics(): void {
+    let val = 0
+    if (this.state === 'OPEN') val = 1
+    else if (this.state === 'HALF_OPEN') val = 2
+
+    try {
+      sorobanCircuitStateGauge.set({ host: this.host }, val)
+    } catch {
+      // Ignore Prometheus errors in test environments where the registry is reset
+    }
+  }
+
+  public async execute<T>(fn: () => Promise<T>): Promise<T> {
+    this.checkTimers()
+
+    if (this.state === 'OPEN') {
+      throw new SorobanClientError({
+        code: 'NETWORK_ERROR',
+        message: `Soroban circuit breaker is OPEN for host: ${this.host}`,
+      })
+    }
+
+    if (this.state === 'HALF_OPEN') {
+      if (this.activeProbes >= 1) {
+        throw new SorobanClientError({
+          code: 'NETWORK_ERROR',
+          message: `Soroban circuit breaker is HALF_OPEN for host: ${this.host} and a probe is already in progress`,
+        })
+      }
+      this.activeProbes += 1
+    }
+
+    try {
+      const result = await fn()
+
+      if (this.state === 'HALF_OPEN') {
+        this.transitionTo('CLOSED')
+      } else if (this.state === 'CLOSED') {
+        this.failureCount = 0
+      }
+      return result
+    } catch (error) {
+      this.recordFailure()
+      throw error
+    }
+  }
+
+  private recordFailure(): void {
+    if (this.state === 'CLOSED') {
+      this.failureCount += 1
+      if (this.failureCount >= this.failureThreshold) {
+        this.transitionTo('OPEN')
+      }
+    } else if (this.state === 'HALF_OPEN') {
+      this.transitionTo('OPEN')
+    }
+  }
+}
+
+const breakers = new Map<string, CircuitBreaker>()
+
+export function getCircuitBreaker(host: string, config: CircuitBreakerConfig): CircuitBreaker {
+  let breaker = breakers.get(host)
+  if (!breaker) {
+    breaker = new CircuitBreaker(host, config)
+    breakers.set(host, breaker)
+  }
+  return breaker
+}
+
+export function resetCircuitBreakers(): void {
+  breakers.clear()
+}

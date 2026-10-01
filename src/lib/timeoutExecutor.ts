@@ -340,17 +340,35 @@ export async function executeWebhookDelivery<T>(
 }
 
 /**
+ * Builds the error used to reject {@link createAbortPromise}.
+ *
+ * Invariant: the returned error MUST satisfy the same `isAbortError()` contract
+ * as a real AbortController abort (an `Error` whose `name` is `'AbortError'`).
+ * The abort promise races the in-flight operation, so this error can win the race
+ * even when the underlying `fn` never settles. If it were a plain `Error`,
+ * `executeWithTimeoutConfig` would classify a genuine timeout as an unknown
+ * failure and skip the `TimeoutExceededError` branch entirely, which drops the
+ * timeout budget from the surfaced error and makes timeouts indistinguishable
+ * from connection failures in logs and metrics.
+ */
+function createTimeoutAbortError(message: string): Error {
+  const error = new Error(message)
+  error.name = 'AbortError'
+  return error
+}
+
+/**
  * Creates a promise that rejects when the signal is aborted.
  */
 function createAbortPromise(signal: AbortSignal, timeoutMs: number): Promise<never> {
   return new Promise((_, reject) => {
     if (signal.aborted) {
-      reject(new Error('Operation aborted'))
+      reject(createTimeoutAbortError('Operation aborted'))
       return
     }
 
     const handleAbort = () => {
-      reject(new Error(`Operation timed out after ${timeoutMs}ms`))
+      reject(createTimeoutAbortError(`Operation timed out after ${timeoutMs}ms`))
     }
 
     signal.addEventListener('abort', handleAbort, { once: true })
