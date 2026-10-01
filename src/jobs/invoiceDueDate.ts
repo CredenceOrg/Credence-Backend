@@ -148,21 +148,33 @@ export function evaluateDueDateActions(
   const now = parseTimestampWithZone(input.nowUtc ?? new Date())
   const currentTenantDay = zonedDayKey(now, input.tenantTimezone)
 
+  // Guard against duplicate rows for the same invoice. A repeated invoiceId must
+  // be selected at most once so callers cannot double-trigger its action.
+  const selectedInvoiceIds = new Set<string>()
+
   return input.invoices.filter((invoice) => {
     if (invoice.actionTriggeredAtUtc) {
+      return false
+    }
+
+    if (selectedInvoiceIds.has(invoice.invoiceId)) {
       return false
     }
 
     const dueAt = parseTimestampWithZone(invoice.dueAtUtc)
     const dueTenantDay = zonedDayKey(dueAt, input.tenantTimezone)
 
-    // Enhanced DST boundary handling: log transition periods for debugging
-    if (isDstTransitionPeriod(now, input.tenantTimezone) || 
-        isDstTransitionPeriod(dueAt, input.tenantTimezone)) {
-      // DST transitions are handled correctly by zonedDayKey, but we
-      // could add logging here for production debugging
+    // Note: DST transitions need no special handling here. zonedDayKey already
+    // resolves the tenant-local calendar day via the IANA database, which is
+    // correct across transitions. An earlier revision called
+    // isDstTransitionPeriod twice per invoice and discarded the result, which
+    // cost two Intl round-trips per row and could not change the outcome.
+
+    if (dueTenantDay <= currentTenantDay) {
+      selectedInvoiceIds.add(invoice.invoiceId)
+      return true
     }
 
-    return dueTenantDay <= currentTenantDay
+    return false
   })
 }

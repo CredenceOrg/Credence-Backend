@@ -1,4 +1,5 @@
 import crypto from 'crypto'
+import crypto from 'crypto'
 import type { EvidenceRecord } from '../services/evidence/storage.js'
 import type { KekVersion } from '../services/keyManager/types.js'
 
@@ -17,6 +18,7 @@ export interface RotationResult extends RotationProgress {
   newVersion: number
   oldVersion: number
   interrupted: boolean
+  errors: RotationError[]
 }
 
 /**
@@ -31,6 +33,12 @@ export interface EvidenceStore {
   count(): Promise<number>
 }
 
+export interface RotationError {
+  evidenceId: string
+  message: string
+  kekVersion: number
+}
+
 export interface RotationWorkerOptions {
   /** Records per batch. Default: 100. */
   batchSize?: number
@@ -40,6 +48,8 @@ export interface RotationWorkerOptions {
   onProgress?: (progress: RotationProgress) => void
   /** Logger function. Default: no-op. */
   logger?: (msg: string) => void
+  /** Maximum number of errors to retain in the result. Default: 100. */
+  maxErrors?: number
 }
 
 // ── Worker ───────────────────────────────────────────────────────────────────
@@ -62,6 +72,7 @@ export class KeyRotationWorker {
   private readonly progressInterval: number
   private readonly onProgress: (p: RotationProgress) => void
   private readonly logger: (msg: string) => void
+  private readonly maxErrors: number
 
   constructor(
     private readonly store: EvidenceStore,
@@ -71,6 +82,7 @@ export class KeyRotationWorker {
     this.progressInterval = options.progressInterval ?? 50
     this.onProgress = options.onProgress ?? (() => {})
     this.logger = options.logger ?? (() => {})
+    this.maxErrors = options.maxErrors ?? 100
   }
 
   /**
@@ -94,6 +106,7 @@ export class KeyRotationWorker {
     let failed = 0
     let offset = 0
     let interrupted = false
+    const errors: RotationError[] = []
 
     this.logger(`Starting rotation: v${oldKek.version} → v${newKek.version}, ${total} records`)
 
@@ -125,6 +138,16 @@ export class KeyRotationWorker {
           continue
         }
 
+        if (!isValidRecord(record)) {
+          failed++
+          const msg = `Invalid record shape for ${record.evidence_id}`
+          this.logger(msg)
+          if (errors.length < this.maxErrors) {
+            errors.push({ evidenceId: record.evidence_id, message: msg, kekVersion: record.kek_version })
+          }
+          continue
+        }
+
         try {
           const reencrypted_record = reencryptRecord(record, oldKek, newKek)
           await this.store.update(reencrypted_record)
@@ -133,6 +156,9 @@ export class KeyRotationWorker {
           failed++
           const msg = err instanceof Error ? err.message : String(err)
           this.logger(`Failed to re-encrypt ${record.evidence_id}: ${msg}`)
+          if (errors.length < this.maxErrors) {
+            errors.push({ evidenceId: record.evidence_id, message: msg, kekVersion: record.kek_version })
+          }
         }
 
         const processed = reencrypted + skipped + failed
@@ -162,6 +188,7 @@ export class KeyRotationWorker {
       newVersion: newKek.version,
       oldVersion: oldKek.version,
       interrupted,
+      errors,
     }
 
     this.logger(
@@ -175,6 +202,20 @@ export class KeyRotationWorker {
 // ── Pure helper ──────────────────────────────────────────────────────────────
 
 /**
+ * Validate that a record has the fields required for re-encryption.
+ * Guards against malformed rows that would otherwise throw deep inside crypto.
+ */
+function isValidRecord(record: EvidenceRecord): boolean {
+  if (!record || typeof record !== 'object') return false
+  if (typeof record.evidence_id !== 'string' || record.evidence_id.length === 0) return false
+  if (typeof record.encryptedBlob !== 'string' || record.encryptedBlob.length === 0) return false
+  if (typeof record.iv !== 'string' || record.iv.length === 0) return false
+  if (typeof record.authTag !== 'string' || record.authTag.length === 0) return false
+  if (typeof record.kek_version !== 'number' || !Number.isFinite(record.kek_version)) return false
+  return true
+}
+
+/**
  * Decrypt a record with `oldKek` and re-encrypt with `newKek`.
  * Returns a new record object; does not mutate the input.
  */
@@ -183,6 +224,10 @@ export function reencryptRecord(
   oldKek: KekVersion,
   newKek: KekVersion,
 ): EvidenceRecord {
+  if (!isValidRecord(record)) {
+    throw new Error(`Invalid record for re-encryption: ${record?.evidence_id ?? 'unknown'}`)
+  }
+
   const ALG = 'aes-256-gcm'
 
   // Decrypt
@@ -190,6 +235,10 @@ export function reencryptRecord(
   decipher.setAuthTag(Buffer.from(record.authTag, 'hex'))
   let plaintext = decipher.update(record.encryptedBlob, 'hex', 'utf8')
   plaintext += decipher.final('utf8')
+
+  if (plaintext.length === 0) {
+    throw new Error(`Empty plaintext after decryption for ${record.evidence_id}`)
+  }
 
   // Re-encrypt with new KEK
   const newIv = crypto.randomBytes(12)
@@ -202,6 +251,10 @@ export function reencryptRecord(
   const plaintextBuf = Buffer.from(plaintext, 'utf8')
   plaintextBuf.fill(0)
 
+  if (newCiphertext.length === 0 || newAuthTag.length === 0) {
+    throw new Error(`Re-encryption produced empty output for ${record.evidence_id}`)
+  }
+
   return {
     ...record,
     encryptedBlob: newCiphertext,
@@ -210,3 +263,4 @@ export function reencryptRecord(
     kek_version: newKek.version,
   }
 }
+

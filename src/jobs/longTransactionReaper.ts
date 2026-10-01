@@ -35,7 +35,7 @@ export const DEFAULT_LONG_TRANSACTION_REAPER_CONFIG: LongTransactionReaperConfig
 function parsePositiveMs(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw === "") return fallback;
   const n = Number(raw);
-  return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
+  return Number.isSafeInteger(n) && n > 0 ? n : fallback;
 }
 
 function parseBool(raw: string | undefined, fallback: boolean): boolean {
@@ -246,7 +246,9 @@ export class LongTransactionReaper {
     this.running = true;
     const startedAt = Date.now();
     const scannedAt = new Date().toISOString();
-    const maxAgeSeconds = Math.max(1, Math.round(this.config.maxTransactionAgeMs / 1000));
+    // Preserve millisecond precision: rounding to whole seconds can terminate
+    // a transaction before it has reached the configured age.
+    const maxAgeSeconds = this.config.maxTransactionAgeMs / 1000;
 
     try {
       const query = this.config.dryRun ? SCAN_QUERY : TERMINATE_QUERY;
@@ -263,13 +265,11 @@ export class LongTransactionReaper {
       }));
 
       for (const txn of terminated) {
-        this.logger(
-          `[LongTransactionReaper] ${this.config.dryRun ? "[dry-run] would terminate" : "terminated"} backend pid=${txn.pid} ageSeconds=${Math.round(
-            txn.ageSeconds,
-          )} usename=${txn.usename ?? "?"} application=${txn.applicationName ?? "?"} datname=${txn.datname ?? "?"} query=${JSON.stringify(
-            txn.query ?? "",
-          )}`,
-        );
+        const outcome = this.config.dryRun
+          ? "[dry-run] would terminate"
+          : txn.terminated ? "terminated" : "termination failed";
+        // Query text and account names can contain user data; keep them out of logs.
+        this.logger(`[LongTransactionReaper] ${outcome} backend pid=${txn.pid} ageSeconds=${Math.round(txn.ageSeconds)}`);
 
         if (txn.terminated) {
           terminatedTotal?.inc();
@@ -286,9 +286,12 @@ export class LongTransactionReaper {
         dryRun: this.config.dryRun,
       };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.logger(`[LongTransactionReaper] Error after ${Date.now() - startedAt}ms: ${message}`);
-      throw new LongTransactionReaperError(`Long transaction reaper scan failed: ${message}`, { cause: error });
+      const code = typeof error === "object" && error !== null && "code" in error &&
+        typeof error.code === "string" && /^[0-9A-Z]{5}$/.test(error.code)
+        ? ` code=${error.code}` : "";
+      // Database error messages can include SQL and connection details.
+      this.logger(`[LongTransactionReaper] Error after ${Date.now() - startedAt}ms${code}`);
+      throw new LongTransactionReaperError(`Long transaction reaper scan failed${code}`, { cause: error });
     } finally {
       this.running = false;
     }

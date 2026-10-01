@@ -1,7 +1,7 @@
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const PROJECT_ROOT = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -27,8 +27,10 @@ type JestConfigOutput = {
   };
 };
 
-function runJest(...args: string[]) {
-  const result = spawnSync(process.execPath, [JEST_BIN, "--showConfig", ...args], {
+type SpawnSync = typeof spawnSync;
+
+function runJestWith(spawn: SpawnSync, ...args: string[]) {
+  const result = spawn(process.execPath, [JEST_BIN, "--showConfig", ...args], {
     cwd: PROJECT_ROOT,
     encoding: "utf8",
     timeout: 60_000,
@@ -41,6 +43,10 @@ function runJest(...args: string[]) {
     stderr: result.stderr ?? "",
     error: result.error,
   };
+}
+
+function runJest(...args: string[]) {
+  return runJestWith(spawnSync, ...args);
 }
 
 function readResolvedConfig(stdout: string): JestConfigOutput {
@@ -105,5 +111,47 @@ describe("Jest configuration boundaries", () => {
     expect(config.testMatch).toEqual(["**/tests/**/*.test.ts"]);
     expectGlobalCoverageThresholds(output);
     expect(config.globals?.["ts-jest"]?.tsconfig?.module).toBeUndefined();
+  });
+
+  it("preserves spawn errors so a missing Jest binary is visible to the caller", () => {
+    const spawnError = Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" });
+    const spawn = vi.fn().mockReturnValue({
+      status: null,
+      stdout: null,
+      stderr: null,
+      error: spawnError,
+    }) as unknown as SpawnSync;
+
+    const result = runJestWith(spawn, "--config", "jest.config.ts");
+
+    expect(spawn).toHaveBeenCalledWith(
+      process.execPath,
+      [JEST_BIN, "--showConfig", "--config", "jest.config.ts"],
+      expect.objectContaining({ cwd: PROJECT_ROOT, timeout: 60_000 }),
+    );
+    expect(result).toEqual({ exitCode: null, stdout: "", stderr: "", error: spawnError });
+  });
+
+  it("preserves timeout errors and partial diagnostics for recovery decisions", () => {
+    const timeoutError = Object.assign(new Error("spawnSync timeout"), { code: "ETIMEDOUT" });
+    const spawn = vi.fn().mockReturnValue({
+      status: null,
+      stdout: "partial output",
+      stderr: "config load timed out",
+      error: timeoutError,
+    }) as unknown as SpawnSync;
+
+    const result = runJestWith(spawn, "--config", "jest.config.ts");
+
+    expect(result).toEqual({
+      exitCode: null,
+      stdout: "partial output",
+      stderr: "config load timed out",
+      error: timeoutError,
+    });
+  });
+
+  it("rejects truncated or invalid showConfig output instead of accepting partial config", () => {
+    expect(() => readResolvedConfig("{\"configs\":[")).toThrow(SyntaxError);
   });
 });

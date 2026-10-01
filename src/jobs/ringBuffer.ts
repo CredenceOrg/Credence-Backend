@@ -93,4 +93,18 @@ export class RingBuffer<T> {
     this.tail = 0
     this._size = 0
   }
+
+  /**
+   * Snapshot of the current items in FIFO order (oldest first).
+   *
+   * Returns a new array so callers cannot mutate internal state. Useful for
+   * diagnostics, metrics, and deterministic assertions in tests.
+   */
+  toArray(): T[] {
+    const out: T[] = []
+    for (let i = 0; i < this._size; i++) {
+      out.push(this.buffer[(this.head + i) % this.capacity] as T)
+    }
+    return out
+  }
 }

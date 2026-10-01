@@ -146,7 +146,7 @@ describe('JobScheduler', () => {
     expect(scheduler.isActive()).toBe(true) // Scheduler should still be active
   })
 
-  it('logs job results', async () => {
+  it('logs job completion without exposing job results', async () => {
     const logs: string[] = []
     scheduler = new JobScheduler(mockJob, {
       intervalMs: 60000,
@@ -158,7 +158,7 @@ describe('JobScheduler', () => {
     await new Promise(resolve => setImmediate(resolve))
 
     expect(logs.some(log => log.includes('Job completed'))).toBe(true)
-    expect(logs.some(log => log.includes('processed'))).toBe(true)
+    expect(logs.some(log => log.includes('processed'))).toBe(false)
   })
 
   it('does not start if already running', () => {

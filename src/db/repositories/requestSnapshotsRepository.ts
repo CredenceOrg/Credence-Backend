@@ -37,7 +37,7 @@ export class RequestSnapshotsRepository {
   async deleteOlderThan(days: number = 14): Promise<void> {
     await this.client.query(
       `
-      DELETE FROM request_snapshots WHERE created_at < now() - interval '1 day' * $1
+      DELETE FROM request_snapshots WHERE created_at < now() - ($1 || ' days')::interval
       `,
       [days]
     );
