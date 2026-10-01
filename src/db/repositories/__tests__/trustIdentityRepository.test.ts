@@ -7,7 +7,7 @@
  * trust endpoint depends on: missing identity rows, null bond_start, uint256
  * bonded amounts, address normalisation, and attestation counting.
  */
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { newDb, type IMemoryDb } from 'pg-mem'
 import type { Pool } from 'pg'
 import { PgTrustIdentityRepository } from '../trustIdentityRepository.js'
@@ -203,5 +203,71 @@ describe('PgTrustIdentityRepository', () => {
     ]) {
       await expect(repo.getIdentityForScoring(seeded)).resolves.toBeNull()
     }
+  })
+
+  it('propagates a transient query failure and recovers on a later read', async () => {
+    const error = new Error('database connection reset')
+    const query = vi
+      .fn<Pool['query']>()
+      .mockRejectedValueOnce(error)
+      .mockResolvedValueOnce({
+        rows: [
+          {
+            address: ADDRESS,
+            bonded_amount: '250',
+            bond_start: null,
+            attestation_count: '1',
+          },
+        ],
+        rowCount: 1,
+      } as never)
+    const recoveringRepo = new PgTrustIdentityRepository({ query } as unknown as Pool)
+
+    await expect(recoveringRepo.getIdentityForScoring(ADDRESS)).rejects.toBe(error)
+    await expect(recoveringRepo.getIdentityForScoring(ADDRESS)).resolves.toEqual({
+      address: ADDRESS,
+      bondedAmount: '250',
+      bondStart: null,
+      attestationCount: 1,
+    })
+    expect(query).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps concurrent lookups isolated while normalising each address', async () => {
+    const other = '0x70997970C51812dc3A010C7d01b50e0d17dc79C8'
+    insertIdentity(db, ADDRESS, '100', null)
+    insertIdentity(db, other, '200', null)
+
+    const query = vi.fn(async (_text: string, params?: readonly unknown[]) => {
+      const requested = params?.[0]
+      const row = requested === ADDRESS.toLowerCase()
+        ? { address: ADDRESS, bonded_amount: '100', bond_start: null, attestation_count: '1' }
+        : { address: other, bonded_amount: '200', bond_start: null, attestation_count: '2' }
+      return { rows: [row], rowCount: 1 } as never
+    })
+    const concurrentRepo = new PgTrustIdentityRepository({ query } as unknown as Pool)
+
+    const [first, second] = await Promise.all([
+      concurrentRepo.getIdentityForScoring(ADDRESS.toLowerCase()),
+      concurrentRepo.getIdentityForScoring(other.toUpperCase()),
+    ])
+
+    expect(first).toEqual({
+      address: ADDRESS,
+      bondedAmount: '100',
+      bondStart: null,
+      attestationCount: 1,
+    })
+    expect(second).toEqual({
+      address: other,
+      bondedAmount: '200',
+      bondStart: null,
+      attestationCount: 2,
+    })
+    expect(query).toHaveBeenCalledTimes(2)
+    expect(query.mock.calls.map((call) => call[1])).toEqual([
+      [ADDRESS.toLowerCase()],
+      [other.toLowerCase()],
+    ])
   })
 })

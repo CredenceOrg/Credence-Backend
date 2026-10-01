@@ -153,44 +153,48 @@ export class RequestSnapshotsSweeper {
 
       let deletedCount = 0
 
-      if (!this.dryRun && expiredCount > 0) {
-        // Delete in batches
-        let remaining = expiredCount
+      try {
+        if (!this.dryRun && expiredCount > 0) {
+          // Delete in batches
+          let remaining = expiredCount
 
-        while (remaining > 0) {
-          const deleteResult = await this.db.query(
-            `
-            DELETE FROM request_snapshots
-            WHERE ctid IN (
-              SELECT ctid FROM request_snapshots
-              WHERE created_at < now() - interval '1 day' * $1
-              LIMIT $2
+          while (remaining > 0) {
+            const deleteResult = await this.db.query(
+              `
+              DELETE FROM request_snapshots
+              WHERE ctid IN (
+                SELECT ctid FROM request_snapshots
+                WHERE created_at < now() - interval '1 day' * $1
+                LIMIT $2
+              )
+              `,
+              [this.retentionDays, this.batchSize]
             )
-            `,
-            [this.retentionDays, this.batchSize]
-          )
 
-          const batchDeleted = deleteResult.rowCount ?? 0
-          deletedCount += batchDeleted
-          remaining -= batchDeleted
+            const batchDeleted = deleteResult.rowCount ?? 0
+            deletedCount += batchDeleted
+            remaining -= batchDeleted
 
-          if (batchDeleted > 0) {
-            this.logger(
-              `[RequestSnapshotsSweeper] Deleted batch of ${batchDeleted} snapshots (total: ${deletedCount})`
-            )
-          }
+            if (batchDeleted > 0) {
+              this.logger(
+                `[RequestSnapshotsSweeper] Deleted batch of ${batchDeleted} snapshots (total: ${deletedCount})`
+              )
+            }
 
-          // Stop if we deleted fewer than batch size (no more expired snapshots)
-          if (batchDeleted < this.batchSize) {
-            break
+            // Stop if we deleted fewer than batch size (no more expired snapshots)
+            if (batchDeleted < this.batchSize) {
+              break
+            }
           }
         }
-
-        // Emit metric for deleted snapshots
-        this.onMetric({
-          name: 'request_snapshots_deleted_total',
-          value: deletedCount,
-        })
+      } finally {
+        if (deletedCount > 0) {
+          // Emit metric for deleted snapshots
+          this.onMetric({
+            name: 'request_snapshots_deleted_total',
+            value: deletedCount,
+          })
+        }
       }
 
       const durationMs = Date.now() - startTime

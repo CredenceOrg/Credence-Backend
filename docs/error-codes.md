@@ -18,6 +18,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 | --- | ---: | --- | --- |
 | `invalid_input` | 400 |  | Invalid input |
 | `unauthorized` | 401 | authentication | Authentication is required |
+| `cors_blocked` | 403 | authorization | Cross-origin request blocked by per-route CORS policy |
 | `crawler_blocked` | 403 | authorization | Automated crawling of admin surfaces is forbidden. |
 | `forbidden` | 403 | authorization | The authenticated caller is not allowed to perform this action |
 | `insufficient_credits` | 402 | business | Monthly credit budget exhausted |
@@ -52,7 +53,7 @@ This reference is generated from `src/lib/errorCatalog.ts` and is the source of 
 
 | Locale | Coverage | Notes |
 | --- | ---: | --- |
-| `en` | 33 messages | Catalog default messages for active codes. |
+| `en` | 34 messages | Catalog default messages for active codes. |
 
 ## Deprecated codes
 

@@ -362,162 +362,139 @@ export class OutboxPublisher {
           // calls made while publishing (including inside the webhook
           // delivery HTTP client) are tagged with the id of the request
           // that originally triggered this event.
-          const publishWithContext = () =>
-            runWithCorrelationIds({ correlationId: event.correlationId ?? undefined }, () =>
-              this.publisher.publish(event)
-            )
+          const publish = () => this.publisher.publish(event)
+          const withCorrelation = event.correlationId
+            ? runWithCorrelationIds({ correlationId: event.correlationId }, publish)
+            : publish()
 
-          // If we have a span context, set it as active context for publishing
-          if (parentSpanContext) {
-            const ctx = trace.setSpanContext(context.active(), parentSpanContext)
-            await context.with(ctx, publishWithContext)
-          } else {
-            await publishWithContext()
-          }
+          await withCorrelation
+
           await this.repository.markPublished(pool, event.id, this.consumerId)
           incrementOutboxPublished(event.aggregateType)
-          logger.info(`[OutboxPublisher] Published event ${event.id} (${event.eventType})`)
+          recordJobTerminalOutcome('outbox', 'success')
           span.setStatus({ code: SpanStatusCode.OK })
         } catch (error) {
-          const errorMessage = error instanceof Error ? error.message : String(error)
-          incrementOutboxFailed(event.aggregateType)
-          logger.error(
-            { message: `[OutboxPublisher] Failed to publish event ${event.id} (${event.eventType})`, error: errorMessage },
-            error
-          )
-          try {
-            // markFailed also clears the idempotency key so the event can be retried
-            const result = await this.repository.markFailed(pool, event.id, errorMessage, this.consumerId)
-            if (result?.status === 'dead_letter') {
-              // Normalize a short error code for metrics
-              const code = (errorMessage.split(/\s+/)[0] || 'UNKNOWN')
-                .toUpperCase()
-                .replace(/[^A-Z0-9_]/g, '_')
-                .slice(0, 50)
-              incrementOutboxDeadLetter(code)
-              // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts.
-              // `result.retryCount` is the FINAL attempt count of the event
-              // just moved to dead-letter: `markFailed` incremented retry_count
-              // and transitioned the row when `retry_count + 1 >= max_retries`,
-              // so the value here is exactly the budget the event consumed.
-              // Threading the real count (instead of 1) prevents the
-              // `jobs_terminal_attempt_count{domain="outbox"}` histogram
-              // from skewing toward the `1` bucket and misleading SREs.
-              const finalAttempts = result?.retryCount ?? 1
-              recordJobDeadLetter('outbox', code)
-              recordJobTerminalOutcome('outbox', 'dead_letter', finalAttempts)
-              logger.warn(`[OutboxPublisher] Event ${event.id} moved to dead-letter after ${finalAttempts} attempt(s)`)
-            }
-          } catch (err) {
-            logger.error('[OutboxPublisher] Error marking event failed', err)
-          }
-          span.setStatus({ code: SpanStatusCode.ERROR, message: errorMessage })
+          const message = error instanceof Error ? error.message : String(error)
           span.recordException(error as Error)
-          throw error
+          span.setStatus({ code: SpanStatusCode.ERROR, message })
+          await this.handlePublishFailure(event, message)
         } finally {
           span.end()
         }
       })
-    } catch (_) {
-      // Error already handled in the span's callback
+    } catch (error) {
+      // If the tracer itself throws before the inner handler runs, fall back
+      // to the same failure handling path so the event is not lost.
+      const message = error instanceof Error ? error.message : String(error)
+      await this.handlePublishFailure(event, message)
     }
   }
 
+  /**
+   * Handle a publish failure by either scheduling a retry or moving the
+   * event to the dead-letter state once retries are exhausted.
+   */
+  private async handlePublishFailure(event: OutboxEvent, message: string): Promise<void> {
+    const nextRetry = event.retryCount + 1
+    if (nextRetry >= event.maxRetries) {
+      await this.repository.markFailed(pool, event.id, message, true)
+      incrementOutboxDeadLetter(event.aggregateType)
+      recordJobDeadLetter('outbox')
+      recordJobTerminalOutcome('outbox', 'dead_letter')
+      logger.error(`[OutboxPublisher] Event ${event.id} exhausted retries — moved to dead letter`)
+    } else {
+      await this.repository.markFailed(pool, event.id, message, false)
+      incrementOutboxFailed(event.aggregateType)
+      recordJobTerminalOutcome('outbox', 'retry')
+      logger.warn(`[OutboxPublisher] Event ${event.id} failed (attempt ${nextRetry}/${event.maxRetries}): ${message}`)
+    }
+  }
+
+  /**
+   * Detect whether an event is a poison pill that should be quarantined
+   * instead of retried indefinitely.
+   */
   private detectPoisonPill(event: OutboxEvent): PoisonPillDetection | null {
     if (event.payloadParseError) {
-      return {
-        reason: 'malformed_json',
-        message: event.payloadParseError,
-      }
+      return { reason: 'malformed_json', message: event.payloadParseError }
     }
 
-    const serializedPayload = event.rawPayload ?? JSON.stringify(event.payload)
-    if (Buffer.byteLength(serializedPayload, 'utf8') > (this.config.maxPayloadBytes ?? DEFAULT_CONFIG.maxPayloadBytes!)) {
+    const maxBytes = this.config.maxPayloadBytes ?? DEFAULT_CONFIG.maxPayloadBytes!
+    if (typeof event.rawPayload === 'string' && Buffer.byteLength(event.rawPayload) > maxBytes) {
       return {
         reason: 'oversized_payload',
-        message: `Payload exceeds ${this.config.maxPayloadBytes ?? DEFAULT_CONFIG.maxPayloadBytes} bytes`,
+        message: `payload exceeds ${maxBytes} bytes`,
       }
     }
 
     if (!KNOWN_OUTBOX_EVENT_TYPES.has(event.eventType)) {
       return {
         reason: 'unknown_event_type',
-        message: `Unknown outbox event type: ${event.eventType}`,
+        message: `unknown event type ${event.eventType}`,
       }
     }
 
     const schema = QUEUE_EVENT_SCHEMAS[event.eventType]
-    if (!schema) {
-      return null
-    }
-
-    const result = schema.safeParse(event.payload)
-    if (!result.success) {
-      return {
-        reason: 'schema_invalid',
-        message: result.error.issues
-          .map(issue => `${issue.path.join('.') || '<root>'}: ${issue.message}`)
-          .join('; ')
-          .slice(0, 2000),
+    if (schema) {
+      const result = schema.safeParse(event.payload)
+      if (!result.success) {
+        return {
+          reason: 'schema_invalid',
+          message: result.error.issues.map(i => `${i.path}.join('.')}: ${i.message}`).join('; '),
+        }
       }
     }
 
     return null
   }
 
-  private async quarantineEvent(
-    event: OutboxEvent,
-    reason: OutboxQuarantineReason,
-    message: string
-  ): Promise<void> {
-    try {
-      await this.repository.quarantine(pool, event, reason, message)
-      incrementOutboxQuarantine(reason)
-      logger.warn({
-        message: `[OutboxPublisher] Event ${event.id} quarantined`,
-        eventType: event.eventType,
-        reason,
-        error: message,
-      })
-    } catch (error) {
-      logger.error('[OutboxPublisher] Error quarantining event', error)
-    }
+  /**
+   * Quarantine an event that cannot be published.
+   */
+  private async quarantineEvent(event: OutboxEvent, reason: OutboxQuarantineReason, message: string): Promise<void> {
+    await this.repository.quarantine(pool, event, reason, message)
+    incrementOutboxQuarantine(reason)
+    logger.warn(`[OutboxPublisher] Quarantined event ${event.id} (${reason}): ${message}`)
   }
 
   /**
-   * Run cleanup of old events based on retention policy.
+   * Run cleanup of old events.
    */
   private async runCleanup(): Promise<void> {
+    if (!this.running) {
+      return
+    }
+
     try {
-      const deletedCount = await this.repository.cleanup(pool, this.config.cleanup)
-      if (deletedCount > 0) {
-        logger.info(`[OutboxPublisher] Cleaned up ${deletedCount} old events`)
+      const deleted = await this.repository.cleanup(pool, this.config.cleanup)
+      if (deleted > 0) {
+        logger.info(`[OutboxPublisher] Cleaned up ${deleted} old events`)
       }
     } catch (error) {
-      logger.error('[OutboxPublisher] Cleanup error', error)
+      logger.error('[OutboxPublisher] Cleanup failed', error)
     }
   }
 
   /**
-   * Scrape and report outbox metrics.
+   * Scrape metrics for monitoring.
    */
   private async scrapeMetrics(): Promise<void> {
-    if (!this.running) return
-    const stats = await this.getStats()
-    setOutboxPendingGauge(stats.pending)
-    setOutboxLifecycleGauges({ pending: stats.pending, processing: stats.processing, retrying: stats.failed, deadLetter: stats.dead_letter })
-  }
+    if (!this.running) {
+      return
+    }
 
-  /**
-   * Get current statistics about the outbox.
-   */
-  async getStats(): Promise<{
-    pending: number
-    processing: number
-    published: number
-    failed: number
-    dead_letter: number
-  }> {
-    return this.repository.getStats(pool)
+    try {
+      const metrics = await this.repository.getMetrics(pool)
+      setOutboxPendingGauge(metrics.pending)
+      setOutboxLifecycleGauges({
+        pending: metrics.pending,
+        processing: metrics.processing,
+        published: metrics.published,
+        failed: metrics.failed,
+        deadLetter: metrics.deadLetter,
+      })
+    } catch (error) {
+      logger.error('[OutboxPublisher] Metrics scrape failed', error)
+    }
   }
 }

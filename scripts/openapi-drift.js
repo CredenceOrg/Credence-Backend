@@ -1,6 +1,12 @@
 #!/usr/bin/env node
 /**
  * OpenAPI Contract Drift Detector (pure Node.js - no external deps)
+ *
+ * All pure functions are exported so they can be unit-tested in isolation
+ * without spawning a child process. The `main()` function is also exported
+ * for integration-level tests that want to exercise the full orchestration
+ * path. The module still auto-runs `main()` when executed directly so the
+ * CLI contract is unchanged.
  */
 
 import fs from 'fs';
@@ -10,11 +16,11 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(__dirname, '..');
 
-function isAdminRoute(p) {
+export function isAdminRoute(p) {
   return p.startsWith('/api/admin');
 }
 
-function getRegisteredRoutes() {
+export function getRegisteredRoutes() {
   // Keep in sync with paths registered in scripts/generate-openapi.ts
   const routes = [
     { path: '/.well-known/jwks.json', method: 'get' },
@@ -47,11 +53,11 @@ function getRegisteredRoutes() {
   return routes.filter(r => !isAdminRoute(r.path));
 }
 
-function normalizePath(p) {
+export function normalizePath(p) {
   return p.replace(/\{([^}]+)\}/g, ':$1');
 }
 
-function parsePathsFromYaml(yamlContent) {
+export function parsePathsFromYaml(yamlContent) {
   const paths = {};
   const lines = yamlContent.split('\n');
   let inPaths = false;
@@ -76,13 +82,13 @@ function parsePathsFromYaml(yamlContent) {
   return paths;
 }
 
-function loadOpenApiPaths() {
+export function loadOpenApiPaths() {
   const specPath = path.join(ROOT, 'docs/openapi.yaml');
   const content = fs.readFileSync(specPath, 'utf-8');
   return parsePathsFromYaml(content);
 }
 
-function detectDrift(routes, specPaths) {
+export function detectDrift(routes, specPaths) {
   const errors = [];
 
   for (const route of routes) {
@@ -108,7 +114,7 @@ function detectDrift(routes, specPaths) {
   return errors;
 }
 
-function main() {
+export function main() {
   const routes = getRegisteredRoutes();
   const specPaths = loadOpenApiPaths();
   const drift = detectDrift(routes, specPaths);
@@ -123,4 +129,8 @@ function main() {
   process.exit(0);
 }
 
-main();
+// Auto-run when executed directly (node scripts/openapi-drift.js).
+// Skipped when imported as a module by tests.
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
+  main();
+}
