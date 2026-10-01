@@ -73,6 +73,14 @@ describe('isAbortError', () => {
     expect(isAbortError(null)).toBe(false)
     expect(isAbortError(42)).toBe(false)
   })
+
+  it('returns false for undefined', () => {
+    expect(isAbortError(undefined)).toBe(false)
+  })
+
+  it('returns false for a plain object with name AbortError but not an Error', () => {
+    expect(isAbortError({ name: 'AbortError' })).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -125,6 +133,14 @@ describe('isNetworkError', () => {
   it('returns false for non-Error values', () => {
     expect(isNetworkError(null)).toBe(false)
     expect(isNetworkError('boom')).toBe(false)
+  })
+
+  it('returns false for undefined', () => {
+    expect(isNetworkError(undefined)).toBe(false)
+  })
+
+  it('returns false for a plain object with a network-like code but not an Error', () => {
+    expect(isNetworkError({ code: 'ECONNRESET' })).toBe(false)
   })
 })
 
@@ -204,6 +220,14 @@ describe('normalizeTransportError', () => {
     expect(normalizeTransportError(42)).toBeNull()
   })
 
+  it('returns null for undefined', () => {
+    expect(normalizeTransportError(undefined)).toBeNull()
+  })
+
+  it('returns null for a plain object with a network-like code but not an Error', () => {
+    expect(normalizeTransportError({ code: 'ECONNRESET' })).toBeNull()
+  })
+
   it('includes cause on every result', () => {
     const orig = makeAbortError('Error')
     const result = normalizeTransportError(orig)
@@ -234,6 +258,13 @@ describe('normalizeTransportError', () => {
     const result = normalizeTransportError(makeNodeError('ECONNRESET', 'read ECONNRESET'))
     expect(result?.code).toBe('RESET')
   })
+
+  it('timeout+reset overlap: undici TypeError with ECONNRESET cause → RESET', () => {
+    // Reset arrives first; undici wraps it as TypeError("fetch failed") with
+    // an ECONNRESET cause. Must be classified as RESET, not TIMEOUT.
+    const result = normalizeTransportError(makeUndiciError('ECONNRESET'))
+    expect(result?.code).toBe('RESET')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -248,6 +279,12 @@ describe('isRetryableHttpStatus', () => {
   it.each([200, 201, 301, 400, 401, 403, 404, 422])('does not retry %d', (status) => {
     expect(isRetryableHttpStatus(status)).toBe(false)
   })
+
+  it('does not retry boundary statuses below the retryable set', () => {
+    expect(isRetryableHttpStatus(0)).toBe(false)
+    expect(isRetryableHttpStatus(199)).toBe(false)
+    expect(isRetryableHttpStatus(600)).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -261,6 +298,12 @@ describe('isRetryableTransportCode', () => {
       expect(isRetryableTransportCode(code)).toBe(true)
     }
   )
+
+  it('does not retry non-transport codes', () => {
+    expect(isRetryableTransportCode('PARSE_ERROR' as any)).toBe(false)
+    expect(isRetryableTransportCode('UNKNOWN' as any)).toBe(false)
+    expect(isRetryableTransportCode('' as any)).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -288,6 +331,13 @@ describe('body-read transport error classification (soroban regression)', () => 
     const badJson = new SyntaxError('Unexpected token } in JSON at position 42')
     const transport = normalizeTransportError(badJson)
     expect(transport).toBeNull()
+  })
+
+  it('ETIMEDOUT thrown from response.json() is a transport error, not a parse error', () => {
+    const timeoutDuringBodyRead = makeNodeError('ETIMEDOUT', 'connect ETIMEDOUT')
+    const transport = normalizeTransportError(timeoutDuringBodyRead)
+    expect(transport).not.toBeNull()
+    expect(transport?.code).toBe('TIMEOUT')
   })
 })
 
@@ -349,6 +399,14 @@ describe('normalizeError boundary cases', () => {
     expect(a.code).toBe('UNKNOWN')
   })
 
+  it('normalizes a thrown boolean deterministically', () => {
+    const a = normalizeError(true)
+    const b = normalizeError(true)
+    expect(a).toEqual(b)
+    expect(a.code).toBe('UNKNOWN')
+    expect(a.retryable).toBe(false)
+  })
+
   it('classifies AbortError as TIMEOUT and retryable', () => {
     const result = normalizeError(makeAbortError('DOMException'))
     expect(result.code).toBe('TIMEOUT')
@@ -408,6 +466,16 @@ describe('normalizeError boundary cases', () => {
     const result = normalizeError(cyclic)
     expect(result.code).toBe('NETWORK')
   })
+
+  it('handles a mutual cycle in cause chain without infinite recursion', () => {
+    const a = new TypeError('fetch failed')
+    const b = new TypeError('fetch failed')
+    ;(a as any).cause = b
+    ;(b as any).cause = a
+    const result = normalizeError(a)
+    expect(result.code).toBe('NETWORK')
+    expect(result.retryable).toBe(true)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -429,6 +497,12 @@ describe('isRetryableError recovery semantics', () => {
   it('returns false for unknown errors', () => {
     expect(isRetryableError(normalizeError(new Error('nope')))).toBe(false)
     expect(isRetryableError(normalizeError(null))).toBe(false)
+  })
+
+  it('returns false for undefined and thrown primitives', () => {
+    expect(isRetryableError(normalizeError(undefined))).toBe(false)
+    expect(isRetryableError(normalizeError('boom'))).toBe(false)
+    expect(isRetryableError(normalizeError(42))).toBe(false)
   })
 
   it('agrees with the retryable flag on the normalized error', () => {
@@ -496,5 +570,27 @@ describe('normalizeError determinism under repeated/concurrent use', () => {
       inputs.map((i) => Promise.resolve().then(() => normalizeError(i).code))
     )
     expect(results).toEqual(expected)
+  })
+
+  it('produces stable results for boundary inputs across repeated calls', () => {
+    const boundaryInputs: unknown[] = [null, undefined, 0, '', false, {}, []]
+    const first = boundaryInputs.map((i) => normalizeError(i))
+    const second = boundaryInputs.map((i) => normalizeError(i))
+    for (let idx = 0; idx < first.length; idx++) {
+      expect(second[idx]).toEqual(first[idx])
+      expect(first[idx].code).toBe('UNKNOWN')
+      expect(first[idx].retryable).toBe(false)
+    }
+  })
+
+  it('does not mutate a raw Error even when it has a cause chain', () => {
+    const inner = makeNodeError('ECONNRESET')
+    const outer = new TypeError('fetch failed')
+    ;(outer as any).cause = inner
+    const beforeOuterCause = (outer as any).cause
+    const beforeInnerCode = (inner as any).code
+    normalizeError(outer)
+    expect((outer as any).cause).toBe(beforeOuterCause)
+    expect((inner as any).code).toBe(beforeInnerCode)
   })
 })

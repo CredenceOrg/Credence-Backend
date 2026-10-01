@@ -109,7 +109,7 @@ export class SettlementsRepository {
     // (xmax = 0) or updated due to an ON CONFLICT hit (xmax > 0).
     //
     // The previous two-step SELECT + INSERT pattern was a TOCTOU race:
-    // between the SELECT and the INSERT a concurrent writer could insert the
+    // between the SELECT and the INSERE a concurrent writer could insert the
     // same transaction_hash, making both writers believe they are the first.
     // This single-statement form eliminates that race entirely.
     const result = await db.query<SettlementRow & { xmax: string }>(
@@ -201,7 +201,7 @@ export class SettlementsRepository {
     limit: number
     cursor?: { t: string; i: string }
     bondId?: string
-  }): Promise<Settlement[]> {
+}): Promise<Settlement[]> {
     const { limit, cursor, bondId } = params
     const values: any[] = [limit]
     let whereClause = ''

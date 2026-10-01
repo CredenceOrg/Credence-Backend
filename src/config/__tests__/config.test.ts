@@ -342,35 +342,183 @@ describe('envSchema', () => {
   })
 })
 
-// ─── Bond / attestation cache TTL ────────────────────────────────────────────
+// ─── Soroban circuit-breaker boundaries ───────────────────────────────────────
 
-describe('validateConfig – bond/attestation cache TTL', () => {
-  it('defaults bondCache.ttl and attestationCache.ttl to 300 seconds', () => {
+describe('validateConfig – sorobanCircuitBreaker boundaries', () => {
+  it('applies safe defaults when the breaker env vars are omitted', () => {
     const config = validateConfig(validEnv())
 
-    expect(config.bondCache.ttl).toBe(300)
-    expect(config.attestationCache.ttl).toBe(300)
+    expect(config.sorobanCircuitBreaker.failureThreshold).toBe(5)
+    expect(config.sorobanCircuitBreaker.cooldownPeriodMs).toBe(10_000)
   })
 
-  it('applies BOND_CACHE_TTL_SECONDS and ATTESTATION_CACHE_TTL_SECONDS overrides', () => {
-    const config = validateConfig(validEnv({
-      BOND_CACHE_TTL_SECONDS: '900',
-      ATTESTATION_CACHE_TTL_SECONDS: '120',
-    }))
+  it('accepts the minimum permitted threshold of 1', () => {
+    const config = validateConfig(
+      validEnv({
+        SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: '1',
+        SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: '1000',
+      }),
+    )
 
-    expect(config.bondCache.ttl).toBe(900)
-    expect(config.attestationCache.ttl).toBe(120)
+    expect(config.sorobanCircuitBreaker.failureThreshold).toBe(1)
+    expect(config.sorobanCircuitBreaker.cooldownPeriodMs).toBe(1000)
   })
 
-  it('rejects a non-numeric BOND_CACHE_TTL_SECONDS', () => {
+  it.each(['0', '-1', '1.5', 'abc', ''])(
+    'rejects SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD=%j',
+    (value) => {
+      // A zero/negative/malformed threshold would either disable the breaker or
+      // trip it on the first request, so it must fail validation at boot rather
+      // than silently degrade at runtime.
+      expect(() =>
+        validateConfig(
+          validEnv({ SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: value }),
+        ),
+      ).toThrow(ConfigValidationError)
+    },
+  )
+
+  it('rejects a cooldown below the 1000ms floor', () => {
+    // Below 1s the breaker would flap between OPEN and HALF_OPEN, letting a
+    // failing host be re-probed on essentially every request.
     expect(() =>
-      validateConfig(validEnv({ BOND_CACHE_TTL_SECONDS: 'not-a-number' })),
+      validateConfig(validEnv({ SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: '999' })),
     ).toThrow(ConfigValidationError)
   })
 
-  it('rejects an out-of-range ATTESTATION_CACHE_TTL_SECONDS', () => {
+  it('rejects a non-numeric cooldown', () => {
     expect(() =>
-      validateConfig(validEnv({ ATTESTATION_CACHE_TTL_SECONDS: '999999' })),
+      validateConfig(validEnv({ SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: 'soon' })),
     ).toThrow(ConfigValidationError)
+  })
+
+  it('reports both breaker fields when both are invalid', () => {
+    try {
+      validateConfig(
+        validEnv({
+          SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: '0',
+          SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS: '10',
+        }),
+      )
+      expect.fail('Expected error')
+    } catch (err) {
+      const error = err as ConfigValidationError
+      expect(error.message).toContain('SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD')
+      expect(error.message).toContain('SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS')
+    }
+  })
+
+  it('does not leak breaker config into unrelated sections', () => {
+    const config = validateConfig(
+      validEnv({ SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD: '3' }),
+    )
+
+    expect(config.sorobanCircuitBreaker.failureThreshold).toBe(3)
+    // The default retry budget is independent of the breaker threshold.
+    expect(config.outboundHttp.retry.defaults.maxAttempts).toBe(3)
+  })
+})
+
+// ─── Soroban timeout budget boundaries ────────────────────────────────────────
+
+describe('validateConfig – soroban timeout boundaries', () => {
+  it('defaults TIMEOUT_SOROBAN_MS to 5000', () => {
+    expect(validateConfig(validEnv()).timeouts.soroban).toBe(5000)
+  })
+
+  it('accepts the 100ms floor', () => {
+    expect(
+      validateConfig(validEnv({ TIMEOUT_SOROBAN_MS: '100' })).timeouts.soroban,
+    ).toBe(100)
+  })
+
+  it('accepts the 45000ms schema ceiling', () => {
+    expect(
+      validateConfig(validEnv({ TIMEOUT_SOROBAN_MS: '45000' })).timeouts.soroban,
+    ).toBe(45_000)
+  })
+
+  it('rejects a timeout below the floor', () => {
+    expect(() =>
+      validateConfig(validEnv({ TIMEOUT_SOROBAN_MS: '99' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects a non-numeric timeout rather than coercing it to NaN', () => {
+    // Number('abc') is NaN; without the int/min/max pipe this would reach the
+    // client as NaN and silently disable the abort timer.
+    expect(() =>
+      validateConfig(validEnv({ TIMEOUT_SOROBAN_MS: 'abc' })),
+    ).toThrow(ConfigValidationError)
+  })
+})
+
+// ─── Soroban retry override boundaries ────────────────────────────────────────
+
+describe('validateConfig – soroban retry override boundaries', () => {
+  it('omits the soroban provider entry when no override is set', () => {
+    // Absent means "use the client defaults", so a key must not be present with
+    // undefined members — that would mask a later default change.
+    const config = validateConfig(validEnv())
+
+    expect(config.outboundHttp.retry.providers?.soroban).toBeUndefined()
+  })
+
+  it('keeps a partial override partial so unspecified fields inherit', () => {
+    const config = validateConfig(
+      validEnv({ OUTBOUND_RETRY_SOROBAN_MAX_ATTEMPTS: '4' }),
+    )
+
+    expect(config.outboundHttp.retry.providers!.soroban).toEqual({
+      maxAttempts: 4,
+      baseDelayMs: undefined,
+      maxDelayMs: undefined,
+      backoffMultiplier: undefined,
+      jitterStrategy: undefined,
+    })
+  })
+
+  it('rejects a zero maxAttempts override', () => {
+    expect(() =>
+      validateConfig(validEnv({ OUTBOUND_RETRY_SOROBAN_MAX_ATTEMPTS: '0' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects an invalid jitter strategy', () => {
+    expect(() =>
+      validateConfig(
+        validEnv({ OUTBOUND_RETRY_SOROBAN_JITTER_STRATEGY: 'random' }),
+      ),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('accepts each supported jitter strategy', () => {
+    for (const strategy of ['none', 'full', 'equal']) {
+      const config = validateConfig(
+        validEnv({ OUTBOUND_RETRY_SOROBAN_JITTER_STRATEGY: strategy }),
+      )
+      expect(config.outboundHttp.retry.providers!.soroban).toMatchObject({
+        jitterStrategy: strategy,
+      })
+    }
+  })
+
+  it('leaves the webhook override independent of the soroban override', () => {
+    const config = validateConfig(
+      validEnv({
+        OUTBOUND_RETRY_SOROBAN_MAX_ATTEMPTS: '5',
+        OUTBOUND_RETRY_WEBHOOK_MAX_ATTEMPTS: '2',
+      }),
+    )
+
+    expect(config.outboundHttp.retry.providers!.soroban).toMatchObject({
+      maxAttempts: 5,
+    })
+    expect(config.outboundHttp.retry.providers!.webhook).toMatchObject({
+      maxAttempts: 2,
+    })
+    expect(config.outboundHttp.retry.providers!.webhook).not.toMatchObject({
+      jitterStrategy: expect.anything(),
+    })
   })
 })

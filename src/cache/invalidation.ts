@@ -12,11 +12,6 @@ import { logger } from '../utils/logger.js'
 import { ValidationError, ServiceUnavailableError } from '../lib/errors.js'
 import { transactionContextStorage, runPostCommit, runRollback } from '../db/transaction.js'
 
-/**
- * Compute a deterministic, stable hash for comparing cached values.
- * Produces identical output for structurally equal objects regardless of
- * property insertion order, so it is safe to use for stale-read detection.
- */
 function computeStableHash(value: unknown): string {
   if (value === null || typeof value !== 'object') {
     return JSON.stringify(value)

@@ -9,7 +9,7 @@ import {
   BackfillProgressRepository,
   type BackfillProgress,
 } from '../../db/repositories/backfillProgressRepository.js'
-import type { Pool, PoolClient } from 'pg'
+import type { Queryable } from '../../db/repositories/queryable.js'
 import type {
   BackfillBatchProcessor,
   ResumableBackfillOptions,
@@ -21,7 +21,7 @@ export class ResumableBackfillRunner {
   private readonly logger: (message: string) => void
 
   constructor(
-    db: Pool | PoolClient,
+    db: Queryable,
     private readonly processor: BackfillBatchProcessor,
     logger?: (message: string) => void,
   ) {
@@ -177,7 +177,7 @@ export class ResumableBackfillRunner {
  * Convenience helper to run a resumable backfill once.
  */
 export async function runResumableBackfill(
-  db: Pool | PoolClient,
+  db: Queryable,
   processor: BackfillBatchProcessor,
   options: ResumableBackfillOptions,
 ): Promise<ResumableBackfillResult> {

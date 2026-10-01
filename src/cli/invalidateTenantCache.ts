@@ -33,10 +33,29 @@ Options:
 `)
 }
 
-function parseTenantId(argv: string[]): string | undefined {
-  const idx = argv.indexOf('--tenant')
-  if (idx === -1) return undefined
-  return argv[idx + 1]
+function parseTenantId(argv: string[]): { tenantId?: string; error?: string } {
+  let tenantId: string | undefined
+
+  for (let idx = 0; idx < argv.length; idx += 1) {
+    const argument = argv[idx]
+    if (argument !== '--tenant') {
+      return { error: `ERROR: Unknown option: ${argument}` }
+    }
+
+    if (tenantId !== undefined) {
+      return { error: 'ERROR: --tenant may only be provided once' }
+    }
+
+    const value = argv[idx + 1]
+    if (!value || value.startsWith('-')) {
+      return { error: 'ERROR: --tenant <uuid> is required' }
+    }
+
+    tenantId = value
+    idx += 1
+  }
+
+  return { tenantId }
 }
 
 /**
@@ -49,15 +68,15 @@ export async function run(argv: string[]): Promise<number> {
     return 0
   }
 
-  const tenantId = parseTenantId(argv)
-  if (!tenantId) {
-    console.error('ERROR: --tenant <uuid> is required')
+  const parsed = parseTenantId(argv)
+  if (parsed.error || !parsed.tenantId) {
+    console.error(parsed.error ?? 'ERROR: --tenant <uuid> is required')
     printUsage()
     return 1
   }
 
   try {
-    const result = await invalidateTenantCache(tenantId)
+    const result = await invalidateTenantCache(parsed.tenantId)
 
     if (result.keysCleared === 0) {
       console.log(`No cached entries found for tenant ${result.tenantId}. Nothing to do.`)

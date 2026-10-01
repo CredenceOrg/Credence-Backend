@@ -31,17 +31,17 @@ export interface DbRepository {
  */
 export class InMemoryDbRepository implements DbRepository {
   private readonly nodes = new Map<string, { amount: string; status: NodeStatus; updatedAt: number }>();
-  private readonly locks = new Map<string, Promise<void>>(+;
+  private readonly locks = new Map<string, Promise<void>>();
 
   /** Allowed status transitions. A node may only move forward along this graph. */
   private static readonly ALLOWED: ReadonlyMap<NodeStatus, ReadonlySet<NodeStatus>> = new Map([
     ['pending', new Set(['confirmed', 'failed'])],
     ['confirmed', new Set(['completed', 'failed'])],
     ['completed', new Set()],
-    ['failed', new Set(['pending')]] // recovery re-drive
+    ['failed', new Set(['pending'])] // recovery re-drive
   ]);
 
-  private async withLock<T>(nodeId: string, fn(): () => Promise<T>): Promise<T> {
+  private async withLock<T>(nodeId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.locks.get(nodeId) ?? Promise.resolve();
     let release!: () => void;
     const next = new Promise<void>((res) => {

@@ -3,6 +3,7 @@ import { ReportWorker } from './reportWorker.js'
 import { ReportService } from '../services/reportService.js'
 import { ReportStorageService } from '../services/reportStorage.js'
 import { ReportJobStatus } from './types.js'
+import { workerPool } from '../db/pool.js'
 
 vi.mock('../cache/redis.js', () => ({
   cache: {
@@ -14,6 +15,12 @@ vi.mock('../cache/redis.js', () => ({
 
 vi.mock('../cache/invalidation.js', () => ({
   invalidateCache: vi.fn(),
+}))
+
+vi.mock('../db/pool.js', () => ({
+  workerPool: {
+    query: vi.fn(),
+  },
 }))
 
 describe('Report Worker — Integration', () => {
@@ -123,6 +130,50 @@ describe('Report Worker — Integration', () => {
     expect(content).toContain('Type: long-report')
     expect(content).toContain('--- Page 2 ---')
     expect(content).toContain('--- End of Report ---')
+  })
+
+  it('recovers only running jobs older than the five-minute lease and returns the recovered count', async () => {
+    vi.mocked(workerPool.query).mockResolvedValue({
+      rows: [{ id: 'stale-job-1' }, { id: 'stale-job-2' }],
+    } as any)
+
+    await expect(worker.recoverStuckJobs()).resolves.toBe(2)
+
+    expect(workerPool.query).toHaveBeenCalledWith(
+      expect.stringContaining("WHERE status = $2 AND updated_at < NOW() - INTERVAL '300 seconds' RETURNING id"),
+      [ReportJobStatus.QUEUED, ReportJobStatus.RUNNING],
+    )
+  })
+
+  it('returns zero when no running jobs are past the lease boundary', async () => {
+    vi.mocked(workerPool.query).mockResolvedValue({ rows: [] } as any)
+
+    await expect(worker.recoverStuckJobs()).resolves.toBe(0)
+  })
+
+  it('propagates recovery query failures so the scheduler can report and retry them', async () => {
+    const databaseError = new Error('Database unavailable')
+    vi.mocked(workerPool.query).mockRejectedValue(databaseError)
+
+    await expect(worker.recoverStuckJobs()).rejects.toBe(databaseError)
+  })
+
+  it('returns false without processing when the queue has no claimable job', async () => {
+    mockRepo.claimNextQueued = vi.fn().mockResolvedValue(null)
+
+    await expect(worker.processNextQueued()).resolves.toBe(false)
+    expect(mockRepo.claimNextQueued).toHaveBeenCalledOnce()
+  })
+
+  it('processes a claimed job once and returns true', async () => {
+    const claimedJob = { id: 'claimed-job-1', type: 'trust_score_summary' }
+    mockRepo.claimNextQueued = vi.fn().mockResolvedValue(claimedJob)
+    const processReport = vi.spyOn(worker, 'processReport').mockResolvedValue()
+
+    await expect(worker.processNextQueued()).resolves.toBe(true)
+
+    expect(processReport).toHaveBeenCalledOnce()
+    expect(processReport).toHaveBeenCalledWith(claimedJob.id, claimedJob.type)
   })
 })
 

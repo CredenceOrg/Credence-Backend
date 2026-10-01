@@ -8,9 +8,9 @@
  */
 
 import { dryRunMigration } from "../src/migrations/runner.js";
-import { exit } from "process";
+import { pathToFileURL } from "node:url";
 
-async function main() {
+export async function main(): Promise<void> {
   try {
     const result = await dryRunMigration({
       skipPreflight: true,
@@ -19,12 +19,14 @@ async function main() {
 
     if (!result.success) {
       console.error(`\n❌ Dry-run failed: ${result.error}`);
-      exit(1);
+      process.exit(1);
+      return;
     }
 
     if (result.applied.length === 0) {
       console.log("\n✅ No pending migrations");
-      exit(0);
+      process.exit(0);
+      return;
     }
 
     console.log(
@@ -34,11 +36,18 @@ async function main() {
     result.applied.forEach((migration, index) => {
       console.log(`  ${index + 1}. ${migration}`);
     });
-    exit(0);
+    process.exit(0);
   } catch (error) {
     console.error(`❌ Error during dry-run: ${error}`);
-    exit(1);
+    process.exit(1);
   }
 }
 
-main();
+// Only run when executed directly (not when imported by tests).
+const isDirectRun =
+  Boolean(process.argv[1]) &&
+  import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectRun) {
+  main();
+}

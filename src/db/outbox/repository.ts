@@ -1,3 +1,4 @@
+// Boundary and recovery invariants for outbox repository operations.
 import type { Queryable } from '../repositories/queryable.js'
 import type {
   OutboxEvent,
@@ -11,6 +12,34 @@ import { sanitizeErrorMessage } from './errorSanitizer.js'
 
 /** Upper bound on the exponential backoff delay between retry attempts. */
 const MAX_BACKOFF_SECONDS = 3600
+
+/** Hard upper bound on rows returned by a single claim/fetch call. */
+const MAX_CLAIM_LIMIT = 10_000
+
+/** Hard upper bound on lease duration (seconds) to prevent effectively-infinite leases. */
+const MAX_LEASE_SECONDS = 86_400
+
+/**
+ * Clamp a caller-supplied limit to a safe positive integer.
+ * Prevents unbounded scans and negative/NaN LIMIT values reaching SQL.
+ */
+function normalizeLimit(limit: number, fallback: number = 100): number {
+  if (!Number.isFinite(limit) || limit <= 0) {
+    return fallback
+  }
+  return Math.min(Math.floor(limit), MAX_CLAIM_LIMIT)
+}
+
+/**
+ * Validate a positive integer bound. Rejects NaN, Infinity, non-integers,
+ * and values outside [min, max] so callers cannot silently pass unsafe
+ * values (e.g. negative limits that would disable LIMIT semantics).
+ */
+function assertBoundedInt(value: number, name: string, min: number, max: number): void {
+  if (!Number.isInteger(value) || value < min || value > max) {
+    throw new RangeError(`${name} must be an integer in [${min}, ${max}], received ${value}`)
+  }
+}
 
 type OutboxEventRow = {
   id: string
@@ -187,6 +216,8 @@ export class OutboxRepository {
     shardCount?: number,
     shardId?: number
   ): Promise<OutboxEvent[]> {
+    const safeLimit = normalizeLimit(limit)
+    const safeLeaseSeconds = Number.isFinite(leaseSeconds) && leaseSeconds > 0 ? Math.floor(leaseSeconds) : 300
     // Try with SKIP LOCKED first (real PostgreSQL)
     try {
       const result = await db.query<{
@@ -229,13 +260,20 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
-        [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
+shard_count, shard_id, correlation_id, publish_idempotency_key`,
+        [safeLimit, consumerId, safeLeaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
       return result.rows.map(mapOutboxEvent)
     } catch (error) {
-      // Fallback for pg-mem (doesn't support SKIP LOCKED)
+      // Fallback for pg-mem (doesn't support SKIP LOCKED).
+      // Only fall back when the failure is specifically due to SKIP LOCKED
+      // being unsupported; re-throw anything else so real errors (connection
+      // loss, syntax errors, permission failures) are not silently masked
+      // and cannot produce an inconsistent claim result.
+      if (!isSkipLockedUnsupportedError(error)) {
+        throw error
+      }
       const result = await db.query<{
         id: string
         aggregate_type: string
@@ -275,8 +313,8 @@ export class OutboxRepository {
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status,
                    retry_count, max_retries, created_at, processed_at, error_message,
                    consumer_id, lease_expires_at, trace_id, span_id, tracestate,
-                   shard_count, shard_id, correlation_id, publish_idempotency_key`,
-        [limit, consumerId, leaseSeconds.toString(), shardCount ?? null, shardId ?? null]
+shard_count, shard_id, correlation_id, publish_idempotency_key`,
+        [safeLimit, consumerId, safeLeaseSeconds.toString(), shardCount ?? null, shardId ?? null]
       )
 
       return result.rows.map(mapOutboxEvent)
@@ -293,11 +331,12 @@ export class OutboxRepository {
    * @returns Number of events whose lease was renewed
    */
   async renewLease(db: Queryable, consumerId: string, leaseSeconds: number): Promise<number> {
+    const safeLeaseSeconds = Number.isFinite(leaseSeconds) && leaseSeconds > 0 ? Math.floor(leaseSeconds) : 300
     const result = await db.query(
       `UPDATE event_outbox
        SET lease_expires_at = NOW() + ($2 || ' seconds')::interval
        WHERE consumer_id = $1 AND status = 'processing'`,
-      [consumerId, leaseSeconds.toString()]
+      [consumerId, safeLeaseSeconds.toString()]
     )
     return (result as any).rowCount ?? 0
   }
@@ -330,6 +369,7 @@ export class OutboxRepository {
    * @returns Array of events owned by this consumer with status 'processing'
    */
   async fetchByConsumer(db: Queryable, consumerId: string, limit: number = 100): Promise<OutboxEvent[]> {
+    const safeLimit = normalizeLimit(limit)
     const result = await db.query<{
       id: string
       aggregate_type: string
@@ -356,7 +396,7 @@ export class OutboxRepository {
        WHERE consumer_id = $1 AND status = 'processing'
        ORDER BY created_at ASC
        LIMIT $2`,
-      [consumerId, limit]
+      [consumerId, safeLimit]
     )
 
     return result.rows.map(mapOutboxEvent)
@@ -366,6 +406,7 @@ export class OutboxRepository {
    * Deprecated: Use claimEvents instead for crash-safe processing with consumer tracking.
    */
   async fetchPendingForProcessing(db: Queryable, limit: number = 100): Promise<OutboxEvent[]> {
+    const safeLimit = normalizeLimit(limit)
     // Legacy behavior maintained for backward compatibility.
     // New code should use claimEvents().
     try {
@@ -397,13 +438,17 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate, correlation_id`,
-        [limit]
+trace_id, span_id, tracestate, correlation_id`,
+        [safeLimit]
       )
 
       return result.rows.map(mapOutboxEvent)
     } catch (error) {
-      // Fallback for pg-mem
+      // Fallback for pg-mem. Only fall back for the SKIP LOCKED case; any
+      // other error must propagate so callers can retry or surface it.
+      if (!isSkipLockedUnsupportedError(error)) {
+        throw error
+      }
       const result = await db.query<{
         id: string
         aggregate_type: string
@@ -431,8 +476,8 @@ export class OutboxRepository {
          )
          RETURNING id, aggregate_type, aggregate_id, event_type, payload, status, 
                    retry_count, max_retries, created_at, processed_at, error_message,
-                   trace_id, span_id, tracestate, correlation_id`,
-        [limit]
+trace_id, span_id, tracestate, correlation_id`,
+        [safeLimit]
       )
 
       return result.rows.map(mapOutboxEvent)
@@ -447,9 +492,13 @@ export class OutboxRepository {
     )
 
     const lagSeconds = result.rows[0]?.lag_seconds
-    return lagSeconds !== null && lagSeconds !== undefined
-      ? Number(lagSeconds)
-      : 0
+    if (lagSeconds === null || lagSeconds === undefined) {
+      return 0
+    }
+    const parsed = Number(lagSeconds)
+    // Guard against non-finite values (NaN/Infinity) so downstream lag
+    // alerting never receives a value that silently disables thresholds.
+    return Number.isFinite(parsed) ? parsed : 0
   }
 
   /**
@@ -500,12 +549,14 @@ export class OutboxRepository {
    * Mark an event as failed and increment retry count.
    * If max retries exceeded, status remains 'failed'.
    */
-  async markFailed(db: Queryable, eventId: bigint, errorMessage: string, consumerId: string): Promise<{ status: string; retryCount: number }> {
+async markFailed(db: Queryable, eventId: bigint, errorMessage: string, consumerId: string): Promise<{ status: string; retryCount: number }> {
     // Truncate/redact before persisting: exception messages can incidentally
     // carry secrets (e.g. an Authorization header echoed by an HTTP client
     // error) or be unbounded in length.
     const sanitizedMessage = sanitizeErrorMessage(errorMessage)
 
+    // Recovery invariant: a failed transition must be observable even when the
+    // row is concurrently claimed by another consumer (rowCount === 0).
     // Step 1: increment retry_count, set status and clear lease/consumer, clear next_attempt_at and idempotency key for now
     const upd = await db.query<{
       retry_count: number
@@ -538,6 +589,16 @@ export class OutboxRepository {
     return { status, retryCount }
   }
 
+/**
+ * Detect the specific error raised when a database (e.g. pg-mem) does not
+ * support `FOR UPDATE SKIP LOCKED`.  Any other error must be treated as a
+ * real failure so recovery paths do not mask it.
+ */
+function isSkipLockedUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error)
+  return /skip\s*locked/i.test(message)
+}
+
   /**
    * Get events for a specific aggregate, ordered by creation time.
    * Useful for maintaining ordering guarantees per aggregate.
@@ -548,6 +609,7 @@ export class OutboxRepository {
     aggregateId: string,
     limit: number = 100
   ): Promise<OutboxEvent[]> {
+    const safeLimit = normalizeLimit(limit)
     const result = await db.query<{
       id: string
       aggregate_type: string
@@ -574,7 +636,7 @@ export class OutboxRepository {
        WHERE aggregate_type = $1 AND aggregate_id = $2
        ORDER BY created_at DESC
        LIMIT $3`,
-      [aggregateType, aggregateId, limit]
+      [aggregateType, aggregateId, safeLimit]
     )
 
     return result.rows.map(mapOutboxEvent)
@@ -668,6 +730,8 @@ export class OutboxRepository {
     offset: number,
     reason?: OutboxQuarantineReason
   ): Promise<{ entries: OutboxQuarantineEntry[]; total: number }> {
+    const safeLimit = normalizeLimit(limit)
+    const safeOffset = Number.isFinite(offset) && offset > 0 ? Math.floor(offset) : 0
     const params: unknown[] = []
     const where: string[] = ['reinjected_at IS NULL']
     if (reason) {
@@ -675,9 +739,9 @@ export class OutboxRepository {
       where.push(`reason = $${params.length}`)
     }
 
-    params.push(limit)
+    params.push(safeLimit)
     const limitIdx = params.length
-    params.push(offset)
+    params.push(safeOffset)
     const offsetIdx = params.length
     const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : ''
 
@@ -704,6 +768,8 @@ export class OutboxRepository {
     fixedPayload: Record<string, unknown>,
     reinjectedBy: string
   ): Promise<bigint | null> {
+    // Recovery invariant: reinjection is idempotent — a second call for an
+    // already-reinjected entry returns null rather than duplicating the event.
     const result = await db.query<{ id: string }>(
       `WITH source AS (
          SELECT *
@@ -742,6 +808,8 @@ export class OutboxRepository {
    * Clean up old published and failed events based on retention policy.
    */
   async cleanup(db: Queryable, config: OutboxCleanupConfig): Promise<number> {
+    const publishedRetentionDays = Number.isFinite(config.publishedRetentionDays) && config.publishedRetentionDays >= 0 ? config.publishedRetentionDays : 0
+    const failedRetentionDays = Number.isFinite(config.failedRetentionDays) && config.failedRetentionDays >= 0 ? config.failedRetentionDays : 0
     const result = await db.query<{ deleted_count: number }>(
       `WITH deleted AS (
          DELETE FROM event_outbox
@@ -750,9 +818,9 @@ export class OutboxRepository {
          RETURNING id
        )
        SELECT COUNT(*) as deleted_count FROM deleted`,
-      [config.publishedRetentionDays, config.failedRetentionDays]
+      [publishedRetentionDays, failedRetentionDays]
     )
-    return result.rows[0]?.deleted_count ?? 0
+    return Number(result.rows[0]?.deleted_count ?? 0)
   }
 
   /**
@@ -779,7 +847,8 @@ export class OutboxRepository {
       dead_letter: 0,
     }
     for (const row of result.rows) {
-      stats[row.status] = parseInt(row.count, 10)
+      const parsed = parseInt(row.count, 10)
+      stats[row.status] = Number.isFinite(parsed) ? parsed : 0
     }
     return stats
   }
