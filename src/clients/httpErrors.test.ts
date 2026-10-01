@@ -97,6 +97,14 @@ describe('isNetworkError', () => {
     const hugeMessage = 'econnreset' + 'x'.repeat(5 * 1024 * 1024)
     expect(isNetworkError(new Error(hugeMessage))).toBe(true) // Slice ensures fast completion
   })
+
+  it('returns false for undefined', () => {
+    expect(isNetworkError(undefined)).toBe(false)
+  })
+
+  it('returns false for a plain object with a network-like code but not an Error', () => {
+    expect(isNetworkError({ code: 'ECONNRESET' })).toBe(false)
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -212,6 +220,13 @@ describe('classifyRecovery', () => {
       expect(res).toEqual({ action: 'retry', reason: 'RESET' })
     })
   })
+
+  it('ETIMEDOUT thrown from response.json() is a transport error, not a parse error', () => {
+    const timeoutDuringBodyRead = makeNodeError('ETIMEDOUT', 'connect ETIMEDOUT')
+    const transport = normalizeTransportError(timeoutDuringBodyRead)
+    expect(transport).not.toBeNull()
+    expect(transport?.code).toBe('TIMEOUT')
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -232,6 +247,14 @@ describe('normalizeError boundary cases', () => {
   it('normalizes a thrown plain object deterministically', () => {
     const a = normalizeError({ weird: true })
     expect(a.code).toBe('UNKNOWN')
+  })
+
+  it('normalizes a thrown boolean deterministically', () => {
+    const a = normalizeError(true)
+    const b = normalizeError(true)
+    expect(a).toEqual(b)
+    expect(a.code).toBe('UNKNOWN')
+    expect(a.retryable).toBe(false)
   })
 
   it('classifies AbortError as TIMEOUT and retryable', () => {

@@ -7,6 +7,9 @@
  * retriable errors.
  */
 
+/** Maximum depth to walk a `cause` chain before giving up (cycle/DoS guard). */
+const MAX_CAUSE_DEPTH = 8
+
 /** Structured transport error codes, independent of any client-specific error hierarchy. */
 export type TransportErrorCode = 'TIMEOUT' | 'RESET' | 'REFUSED' | 'NETWORK'
 
@@ -88,10 +91,17 @@ function getBoundedMessage(err: Error, limit = 1000): string {
  * explicit cancel). Handles all known variants.
  */
 export function isAbortError(err: unknown): boolean {
+  return isAbortErrorAtDepth(err, 0)
+}
+
+function isAbortErrorAtDepth(err: unknown, depth: number): boolean {
+  if (depth > MAX_CAUSE_DEPTH) return false
   if (err instanceof DOMException && err.name === 'AbortError') return true
   if (err instanceof Error && err.name === 'AbortError') return true
   // Unwrap one level of cause-chain (undici / Node.js fetch wrapping)
-  if (err instanceof Error && err.cause != null && isAbortError(err.cause)) return true
+  if (err instanceof Error && err.cause != null && isAbortErrorAtDepth(err.cause, depth + 1)) {
+    return true
+  }
   return false
 }
 
@@ -103,9 +113,10 @@ export function isAbortError(err: unknown): boolean {
 export function isNetworkError(err: unknown): boolean {
   if (isAbortError(err)) return false // timeout is its own category
   if (!(err instanceof Error)) return false
+  if (isPermissionError(err)) return false // permission is its own category
 
   const code = getNodeCode(err)
-  if (code && (RESET_CODES.has(code) || REFUSED_CODES.has(code) || TIMEOUT_CODES.has(code))) {
+  if (code && isTransportCode(code)) {
     return true
   }
 
@@ -114,10 +125,7 @@ export function isNetworkError(err: unknown): boolean {
     const cause = (err as Error & { cause?: unknown }).cause
     if (cause instanceof Error) {
       const causeCode = getNodeCode(cause)
-      if (
-        causeCode &&
-        (RESET_CODES.has(causeCode) || REFUSED_CODES.has(causeCode) || TIMEOUT_CODES.has(causeCode))
-      ) {
+      if (causeCode && isTransportCode(causeCode)) {
         return true
       }
     }
@@ -146,6 +154,8 @@ export function normalizeTransportError(err: unknown): TransportError | null {
   }
 
   if (!(err instanceof Error)) return null
+
+  if (isPermissionError(err)) return null
 
   const code = getNodeCode(err)
   if (code) {
@@ -204,7 +214,12 @@ export function isRetryableTransportCode(code: TransportErrorCode): boolean {
 export function isPermissionError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const code = getNodeCode(err)
-  if (code === 'EACCES' || code === 'EPERM') return true
+  if (code && PERMISSION_CODES.has(code)) return true
+  const cause = (err as Error & { cause?: unknown }).cause
+  if (cause instanceof Error) {
+    const causeCode = getNodeCode(cause)
+    if (causeCode && PERMISSION_CODES.has(causeCode)) return true
+  }
   const status = getHttpStatus(err)
   return status === 401 || status === 403
 }
@@ -215,6 +230,7 @@ export function isPermissionError(err: unknown): boolean {
  */
 export function isStaleError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
+  if (isPermissionError(err)) return false
   const status = getHttpStatus(err)
   if (status === 409 || status === 410 || status === 412) return true
   
@@ -244,6 +260,15 @@ export function getHttpStatus(err: unknown): number | undefined {
   return undefined
 }
 
+function isValidHttpStatus(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 100 &&
+    value <= 599
+  )
+}
+
 /**
  * Classifies an error into a recovery decision. 
  *
@@ -252,6 +277,9 @@ export function getHttpStatus(err: unknown): number | undefined {
  * - Stale errors require a re-read before retry (never blind retry).
  * - Transport errors are retried per `isRetryableTransportCode`.
  * - Unknown errors are not retried (fail closed).
+ * - Permission errors are checked before stale/transport so a wrapped
+ *   EACCES/EPERM or 401/403 can never be retried.
+ * - Non-Error values (null, undefined, strings, plain objects) fail closed.
  */
 export type RecoveryDecision =
   | { readonly action: 'retry'; readonly reason: TransportErrorCode | 'HTTP_STATUS' }

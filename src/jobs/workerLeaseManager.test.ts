@@ -3,8 +3,10 @@ import { WorkerLeaseManager, OUTBOX_LEADER_LOCK_KEY } from './workerLeaseManager
 
 function createMockClient() {
   return {
-    query: vi.fn().mockResolvedValue({ rows: [{ pg_advisory_lock: true }] }),
+    query: vi.fn().mockImplementation(async (sql: string) => ({ rows: sql.includes('pg_advisory_unlock') ? [{ unlocked: true }] : [{ acquired: true }] })),
     release: vi.fn(),
+    on: vi.fn(),
+    removeListener: vi.fn(),
   }
 }
 
@@ -49,7 +51,7 @@ describe('WorkerLeaseManager', () => {
     expect(onStateChange).toHaveBeenCalledWith('leader')
     expect(mgr.currentState).toBe('standby')
     expect(client.query).toHaveBeenCalledWith(
-      expect.stringContaining('pg_advisory_lock'),
+      expect.stringContaining('pg_try_advisory_lock'),
       [OUTBOX_LEADER_LOCK_KEY],
     )
   })
@@ -137,7 +139,7 @@ describe('WorkerLeaseManager', () => {
     const client = createMockClient()
     client.query
       .mockRejectedValueOnce(new Error('query failed'))
-      .mockResolvedValueOnce({ rows: [{ pg_advisory_lock: true }] })
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] })
 
     const pool = {
       connect: vi.fn().mockResolvedValue(client),
@@ -165,7 +167,7 @@ describe('WorkerLeaseManager', () => {
   it('heartbeat detects connection loss and reverts to standby', async () => {
     const client = createMockClient()
     client.query
-      .mockResolvedValueOnce({ rows: [{ pg_advisory_lock: true }] }) // acquire
+      .mockResolvedValueOnce({ rows: [{ acquired: true }] }) // acquire
       .mockRejectedValueOnce(new Error('connection lost')) // heartbeat SELECT 1
 
     const client2 = createMockClient()
@@ -226,7 +228,7 @@ describe('WorkerLeaseManager', () => {
     await mgr.start()
 
     expect(client.query).toHaveBeenCalledWith(
-      expect.stringContaining('pg_advisory_lock'),
+      expect.stringContaining('pg_try_advisory_lock'),
       [9999],
     )
 

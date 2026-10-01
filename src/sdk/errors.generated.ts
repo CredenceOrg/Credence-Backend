@@ -38,6 +38,7 @@ const DEFAULT_MESSAGES = {
   'unauthorized': "Authentication is required",
   'forbidden': "The authenticated caller is not allowed to perform this action",
   'crawler_blocked': "Automated crawling of admin surfaces is forbidden.",
+  'cors_blocked': "Cross-origin request blocked by per-route CORS policy",
   'not_found': "The requested resource was not found",
   'conflict': "The request conflicts with the current resource state",
   'optimistic_lock_conflict': "The resource was modified by another request. Fetch the latest version and retry.",
@@ -369,6 +370,20 @@ export class CrawlerBlockedCredenceError extends CredenceError {
   }
 }
 
+export class CorsBlockedCredenceError extends CredenceError {
+  static readonly errorCode = 'cors_blocked' as const
+
+  constructor(
+    message: string = DEFAULT_MESSAGES['cors_blocked'],
+    status: number = 403,
+    details?: unknown,
+    options?: CredenceErrorOptions,
+  ) {
+    super(message, 'cors_blocked', status, details, options)
+    this.name = 'CorsBlockedCredenceError'
+  }
+}
+
 export class NotFoundCredenceError extends CredenceError {
   static readonly errorCode = 'not_found' as const
 
@@ -627,6 +642,7 @@ export const CREDENCE_ERROR_REGISTRY = {
   'unauthorized': UnauthorizedCredenceError,
   'forbidden': ForbiddenCredenceError,
   'crawler_blocked': CrawlerBlockedCredenceError,
+  'cors_blocked': CorsBlockedCredenceError,
   'not_found': NotFoundCredenceError,
   'conflict': ConflictCredenceError,
   'optimistic_lock_conflict': OptimisticLockConflictCredenceError,

@@ -8,26 +8,83 @@ const anyObjectSchema = z.object({}).passthrough().openapi('AnyObject');
 import yaml from 'yaml';
 import fs from 'fs';
 import path from 'path';
-import { fileURLToPath } from 'url';
+import { fileURLToPath, pathToFileURL } from 'url';
 import * as schemas from '../src/schemas/index.js';
 
 extendZodWithOpenApi(z);
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+/** Default on-disk location of the generated spec. Overridable for tests. */
+export const DEFAULT_OUTPUT_PATH = path.resolve(__dirname, '../docs/openapi.yaml');
+
+/**
+ * Static document metadata, hoisted so the generated spec is a pure function
+ * of (component schemas, registered paths, these options). Nothing mutates it
+ * at runtime, so repeated runs cannot silently drift `info`/`servers`.
+ */
+export const OPENAPI_DOCUMENT_OPTIONS = {
+  openapi: '3.0.0',
+  info: { version: '1.0.0', title: 'Credence API', description: 'Generated OpenAPI documentation from Zod schemas' },
+  servers: [{ url: 'https://api.credence.org/v1' }],
+};
+
+/**
+ * Bearer token auth used by governance and dispute routes (requireUserAuth).
+ * Extracted so the security-scheme registration is a separately testable seam
+ * and so `bearerAuth` can be asserted against the scheme actually registered.
+ */
+export const BEARER_AUTH_SCHEME = {
+  type: 'http' as const,
+  scheme: 'bearer' as const,
+  description: 'API key sent as `Authorization: Bearer <key>`',
+};
+
+/** Security requirement referencing `BEARER_AUTH_SCHEME` by its component name. */
+export const bearerAuth = [{ bearerAuth: [] }];
+
+/**
+ * Selects the reusable component schemas from a module namespace.
+ *
+ * INVARIANT: the `instanceof z.ZodType` filter is load-bearing. The
+ * `src/schemas/index.js` barrel also re-exports plain runtime values (e.g. the
+ * REPORT_TYPES / PAYOUT_STATUS_ENUM const arrays). Without this filter those
+ * non-schemas would be handed to `registerComponent` and generation would fail
+ * with a TypeError instead of producing a spec.
+ */
+export const selectComponentSchemas = (source: Record<string, unknown>): [string, z.ZodType][] =>
+  Object.entries(source).filter((entry): entry is [string, z.ZodType] => entry[1] instanceof z.ZodType);
+
+/**
+ * Registers the bearer security scheme on a registry.
+ * Idempotent per registry: re-registering the same name on the *same* registry
+ * is a duplicate, so callers get a fresh registry per run.
+ */
+export const registerSecuritySchemes = (target: OpenAPIRegistry): void => {
+  target.registerComponent('securitySchemes', 'bearerAuth', BEARER_AUTH_SCHEME);
+};
+
+/**
+ * Registers every Zod schema found in `source` as an OpenAPI component.
+ *
+ * Non-Zod exports are skipped rather than throwing (see
+ * `selectComponentSchemas`), and an empty source is a valid no-op rather than
+ * an error — that keeps the generator usable while the schema barrel is being
+ * migrated, instead of failing with an opaque TypeError.
+ */
+export const registerComponentSchemas = (target: OpenAPIRegistry, source: Record<string, unknown> = schemas): void => {
+  for (const [key, schema] of selectComponentSchemas(source)) {
+    target.registerComponent('schemas', key, schema);
+  }
+};
+
 const registry = new OpenAPIRegistry();
 
 // Register reusable component schemas
-for (const [key, schema] of Object.entries(schemas)) {
-  if (schema instanceof z.ZodType) {
-    registry.registerComponent('schemas', key, schema);
-  }
-}
+registerComponentSchemas(registry);
 
 // Bearer token auth used by governance and dispute routes (requireUserAuth)
-registry.registerComponent('securitySchemes', 'bearerAuth', {
-  type: 'http',
-  scheme: 'bearer',
-  description: 'API key sent as `Authorization: Bearer <key>`',
-});
-const bearerAuth = [{ bearerAuth: [] }];
+registerSecuritySchemes(registry);
 
 // Health + JWKS (required by openapi-drift gate)
 registry.registerPath({
@@ -990,16 +1047,79 @@ registry.registerPath({
   },
 });
 
-const generator = new OpenApiGeneratorV3(registry.definitions);
+/**
+ * Renders an OpenAPI document from a registry's definitions.
+ *
+ * Exposed (rather than inlined at module scope) so tests can drive generation
+ * against an isolated registry and assert determinism without writing files.
+ */
+export const generateDocument = (source: OpenAPIRegistry = registry) =>
+  new OpenApiGeneratorV3(source.definitions).generateDocument(OPENAPI_DOCUMENT_OPTIONS);
 
-const document = generator.generateDocument({
-  openapi: '3.0.0',
-  info: { version: '1.0.0', title: 'Credence API', description: 'Generated OpenAPI documentation from Zod schemas' },
-  servers: [{ url: 'https://api.credence.org/v1' }],
-});
+/**
+ * Serialises a document to the YAML committed at docs/openapi.yaml.
+ *
+ * The `JSON.parse(JSON.stringify(...))` round-trip is load-bearing, not
+ * cosmetic. It guarantees the committed file is plain, JSON-serialisable data:
+ * it drops `undefined` values, reduces Dates to ISO strings before `yaml` ever
+ * sees them, and throws loudly on a cyclic document instead of writing out an
+ * unreadable spec.
+ *
+ * NOTE: the round-trip does NOT strip Zod internals. `@asteasolutions/
+ * zod-to-openapi@8` targets Zod v3 while this repo depends on Zod v4, so any
+ * component not referenced by a registered path is emitted as raw Zod internals
+ * (`def:`, `checks:`) instead of JSON Schema. The committed docs/openapi.yaml
+ * already contains ~940 such lines and the openapi-drift CI gate asserts the
+ * file is byte-identical, so changing this serialisation is deliberately out of
+ * scope here; it needs the dependency bump, and is pinned by a regression test.
+ */
+export const buildOpenApiYaml = (document: unknown): string =>
+  yaml.stringify(JSON.parse(JSON.stringify(document)));
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const docsPath = path.resolve(__dirname, '../docs/openapi.yaml');
-fs.mkdirSync(path.dirname(docsPath), { recursive: true });
-fs.writeFileSync(docsPath, yaml.stringify(JSON.parse(JSON.stringify(document))), 'utf-8');
-console.log('OpenAPI spec generated at docs/openapi.yaml');
+/**
+ * Writes generated YAML to disk, creating the parent directory if needed.
+ *
+ * Kept as a thin, separately testable wrapper around `fs` so permission / IO
+ * failures (EACCES on a read-only checkout, ENOSPC, EROFS) can be exercised
+ * without touching the real repo, and so a failure surfaces as a thrown error
+ * rather than a truncated or silently dropped spec file.
+ */
+export const writeOpenApiSpec = (outputPath: string, content: string): void => {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true });
+  fs.writeFileSync(outputPath, content, 'utf-8');
+};
+
+export interface RunGenerateOpenApiOptions {
+  outputPath?: string;
+  log?: (message: string) => void;
+}
+
+/**
+ * Orchestrates generate-then-write.
+ *
+ * INVARIANTS:
+ * - The success log is emitted only *after* the write succeeds, so a caller
+ *   (or CI) that sees "generated at ..." can trust the file is on disk and
+ *   complete. There is no partially-written success state.
+ * - The write is atomic from the caller's perspective: the document is fully
+ *   serialised in memory before `writeOpenApiSpec` is called, so a failure
+ *   while serialising never truncates an existing spec.
+ * - Output is deterministic: same inputs => byte-identical YAML, which is what
+ *   keeps `git diff --exit-code docs/openapi.yaml` and the openapi-drift gate
+ *   meaningful.
+ */
+export const runGenerateOpenApi = (options: RunGenerateOpenApiOptions = {}): string => {
+  const outputPath = options.outputPath ?? DEFAULT_OUTPUT_PATH;
+  const log = options.log ?? console.log;
+
+  const content = buildOpenApiYaml(generateDocument());
+  writeOpenApiSpec(outputPath, content);
+  log(`OpenAPI spec generated at ${path.relative(path.resolve(__dirname, '..'), outputPath)}`);
+  return outputPath;
+};
+
+// Only write when invoked as a CLI so importing this module (e.g. from tests)
+// has no filesystem side effects.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  runGenerateOpenApi();
+}

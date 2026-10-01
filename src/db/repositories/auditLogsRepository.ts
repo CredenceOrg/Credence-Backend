@@ -322,6 +322,12 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     if (n === 0) return []
     if (n === 1) return [await this.append(inputs[0])]
 
+    for (const input of inputs) {
+      if (!input.tenantId) {
+        throw new Error('AuditLogRepository.appendBatch requires tenantId for tenant isolation')
+      }
+    }
+
     const params: unknown[] = []
     const ctes: string[] = []
 
@@ -397,6 +403,10 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     if (!filters?.tenantId) {
       throw new Error('AuditLogRepository.query requires tenantId for tenant isolation')
     }
+    if (!Number.isFinite(limit) || limit < 1) {
+      throw new Error('AuditLogRepository.query requires a positive finite limit')
+    }
+    limit = Math.floor(limit)
     const whereClauses: string[] = []
     const params: unknown[] = []
     applyFilters(filters, whereClauses, params)
@@ -467,6 +477,9 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
     windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
     now = new Date(),
   ): Promise<TopTalkersReport> {
+    if (!Number.isFinite(windowMinutes) || windowMinutes < 0) {
+      throw new Error('AuditLogRepository.getTopTalkers requires a non-negative finite windowMinutes')
+    }
     const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
     const windowEnd = now
     const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
@@ -535,9 +548,17 @@ export class PostgresAuditLogsRepository implements AuditLogRepository {
       return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
     }
 
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+      throw new Error('AuditLogRepository.purgeExpired requires olderThanDays >= 0')
+    }
+
     const batchSize = options?.batchSize ?? 5_000
     const dryRun = options?.dryRun ?? false
     const tenantId = options?.tenantId
+
+    if (!Number.isFinite(batchSize) || batchSize < 1) {
+      throw new Error('AuditLogRepository.purgeExpired requires batchSize >= 1')
+    }
 
     // Count expired entries
     const countParams: unknown[] = [olderThanDays]
@@ -602,6 +623,9 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
   private seqCounter = 0
 
   async append(input: AuditLogInput): Promise<AuditLogEntry> {
+    if (!input.tenantId) {
+      throw new Error('AuditLogRepository.append requires tenantId for tenant isolation')
+    }
     const id = randomUUID()
     const actorId = resolveActorId(input)
     const actorEmail = resolveActorEmail(input)
@@ -671,6 +695,10 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
   }
 
   async query(filters?: AuditLogFilters, limit = 100, cursor?: string): Promise<{ logs: AuditLogEntry[]; hasNextPage: boolean; nextCursor?: string }> {
+    if (!Number.isFinite(limit) || limit < 1) {
+      throw new Error('AuditLogRepository.query requires a positive finite limit')
+    }
+    limit = Math.floor(limit)
     let filtered = this.logs as AuditLogEntry[]
 
     if (filters?.action) {
@@ -749,6 +777,9 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
     windowMinutes = DEFAULT_TOP_TALKERS_WINDOW_MINUTES,
     now = new Date(),
   ): Promise<TopTalkersReport> {
+    if (!Number.isFinite(windowMinutes) || windowMinutes < 0) {
+      throw new Error('AuditLogRepository.getTopTalkers requires a non-negative finite windowMinutes')
+    }
     const effectiveLimit = Math.min(Math.max(1, limit), MAX_TOP_TALKERS_LIMIT)
     const windowEnd = now
     const windowStart = new Date(now.getTime() - windowMinutes * 60 * 1000)
@@ -810,9 +841,17 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       return { expiredCount: 0, deletedCount: 0, dryRun: options?.dryRun ?? false, ttlDays: 0, tenantId: options?.tenantId }
     }
 
+    if (!Number.isFinite(olderThanDays) || olderThanDays < 0) {
+      throw new Error('AuditLogRepository.purgeExpired requires olderThanDays >= 0')
+    }
+
     const batchSize = options?.batchSize ?? 5_000
     const dryRun = options?.dryRun ?? false
     const tenantId = options?.tenantId
+
+    if (!Number.isFinite(batchSize) || batchSize < 1) {
+      throw new Error('AuditLogRepository.purgeExpired requires batchSize >= 1')
+    }
     const cutoff = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000)
 
     // Find expired entries (occurred_at before cutoff)
@@ -832,14 +871,28 @@ export class InMemoryAuditLogsRepository implements AuditLogRepository {
       return { expiredCount, deletedCount: 0, dryRun, ttlDays: olderThanDays, tenantId }
     }
 
-    // Delete up to batchSize entries (oldest first)
-    const deleteCount = Math.min(expiredCount, batchSize)
-    const indicesToDelete = new Set(expiredIndices.slice(0, deleteCount))
-    this.logs = this.logs.filter((_, i) => !indicesToDelete.has(i))
+    // Delete in batches to mirror Postgres behavior and remain resilient to
+    // partial failures. Each iteration removes at most `batchSize` entries.
+    let totalDeleted = 0
+    const maxIterations = Math.ceil(expiredCount / batchSize) + 1
+    for (let i = 0; i < maxIterations; i++) {
+      const remaining = this.logs.filter((entry) => {
+        if (new Date(entry.timestamp) >= cutoff) return false
+        if (tenantId && entry.tenantId !== tenantId) return false
+        return true
+      })
+      if (remaining.length === 0) break
+      const toDelete = new Set(remaining.slice(0, batchSize))
+      const before = this.logs.length
+      this.logs = this.logs.filter((entry) => !toDelete.has(entry))
+      const deleted = before - this.logs.length
+      totalDeleted += deleted
+      if (deleted < batchSize) break
+    }
 
     return {
       expiredCount,
-      deletedCount: deleteCount,
+      deletedCount: totalDeleted,
       dryRun: false,
       ttlDays: olderThanDays,
       tenantId,

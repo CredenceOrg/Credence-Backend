@@ -1,3 +1,4 @@
+
 #!/usr/bin/env tsx
 /* eslint-disable no-console */
 //
@@ -36,6 +37,7 @@ import { createInMemoryLeaseStore } from './horizon-failover-drill.store.js'
 const STREAM = 'bond_creation'
 const TTL_MS = 1_000
 const HEARTBEAT_MS = 300
+const MAX_RETRIES = 3
 
 export interface HorizonFailoverDrillCheck {
   name: string
@@ -80,6 +82,7 @@ async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
   )
   const primaryStart = await primary.start()
   record('primary acquires lease on cold start', primaryStart.acquired)
+  record('primary start is idempotent on re-invocation', (await primary.start()).acquired)
 
   for (const token of ['10', '20', '30']) {
     const status = await primary.process(mkEvent(token))
@@ -115,6 +118,7 @@ async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
     'standby is blocked while primary is healthy',
     !firstClaim.acquired && firstClaim.reason === 'held-by-other',
   )
+  record('standby retry remains blocked while primary healthy', !(await standby.start()).acquired)
 
   // ---- 3. PAUSE PRIMARY, WAIT PAST TTL -------------------------------
   console.log('… pausing primary until the lease expires')
@@ -147,6 +151,7 @@ async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
   // Evicted primary attempts to heartbeat after losing the lease.
   const zombieHeartbeat = await primary.heartbeat()
   record('split-brain: zombie primary heartbeat rejected', !zombieHeartbeat)
+  record('split-brain: zombie primary process rejected', (await primary.process(mkEvent('35'))) === 'skipped')
 
   // ---- 5. EDGE CASE B — expired lease while processing ---------------
   // Standby processes the next event; should succeed because it owns lease.
@@ -161,12 +166,13 @@ async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
     'expired-lease-while-processing: result reported as "skipped"',
     midflight === 'skipped',
   )
-  const afterSkipped = await standby.lease.peek()
+const afterSkipped = await standby.lease.peek()
   record(
     'skipped event does not advance the cursor',
     afterSkipped?.pagingToken === '40',
     `cursor=${afterSkipped?.pagingToken}`,
   )
+  record('expired-lease-while-processing: heartbeat rejected', !(await standby.heartbeat()))
 
   // ---- 6. EDGE CASE C — in-flight replay -----------------------------
   // A fresh owner re-acquires and replays event 50.  Cursor must not
@@ -189,6 +195,7 @@ async function main(options: HorizonFailoverDrillOptions = {}): Promise<void> {
     replayClaim.acquired && replay === 'processed',
   )
   if (replay === 'processed') processed.push({ owner: 'standby-2', token: '50' })
+  record('in-flight replay: duplicate replay is idempotent', (await replayOwner.process(mkEvent('50'))) === 'processed')
 
   const final = await replayOwner.lease.peek()
   record(
