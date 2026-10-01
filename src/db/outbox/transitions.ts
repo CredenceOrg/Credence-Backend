@@ -25,6 +25,21 @@
  * | failed      | —                                        | Terminal                    |
  * | dead_letter | —                                        | Terminal                    |
  *
+ * ## Boundary / recovery invariants
+ *
+ *  - Self-transitions (e.g. `pending -> pending`) are rejected.  A consumer
+ *    that re-claims an event it already holds must not silently succeed; the
+ *    repository's `WHERE status = 'pending'` guard is the persistence-level
+ *    enforcement of the same rule.
+ *  - `retry` is only legal from `processing`.  A `pending` event cannot be
+ *    "retried" because it was never claimed; doing so would reset the retry
+ *    counter and allow unbounded redelivery.
+ *  - `dead_letter` is only reachable from `processing`.  Terminal states are
+ *    never re-entered, so a quarantined event must be reinjected as a new
+ *    `pending` row rather than transitioned in place.
+ *  - Unknown / out-of-vocabulary statuses are rejected by the matrix rather
+ *    than coerced, so corrupt rows surface as errors instead of data loss.
+ *
  * ## Design
  *
  *  - This module provides the **application-level** transition matrix.  The SQL
@@ -108,6 +123,36 @@ export function isValidOutboxTransition(
   to: OutboxLifecycleStatus,
 ): boolean {
   return OUTBOX_LIFECYCLE_TRANSITIONS.isValid(from, to)
+}
+
+/**
+ * Returns true when `status` is a known outbox lifecycle status.
+ *
+ * Guards against corrupt / out-of-vocabulary rows being treated as valid
+ * states.  Callers should reject unknown statuses rather than coercing them.
+ */
+export function isOutboxLifecycleStatus(
+  status: unknown,
+): status is OutboxLifecycleStatus {
+  return (
+    status === 'pending' ||
+    status === 'processing' ||
+    status === 'published' ||
+    status === 'failed' ||
+    status === 'dead_letter'
+  )
+}
+
+/**
+ * Returns true when `status` is terminal (no outgoing transitions).
+ *
+ * Terminal events must be recovered via quarantine → reinjection, which
+ * creates a new `pending` row; they are never transitioned in place.
+ */
+export function isTerminalOutboxStatus(
+  status: OutboxLifecycleStatus,
+): boolean {
+  return OUTBOX_LIFECYCLE_TRANSITIONS.getAllowedTargets(status).length === 0
 }
 
 /**

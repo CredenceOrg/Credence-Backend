@@ -1,4 +1,15 @@
 /**
+ * Terminal statuses are those from which an outbox event will not
+ * transition again under normal operation.  Recovery tooling and the
+ * publisher rely on this classification to decide whether an event is
+ * eligible for retry, reinjection, or cleanup.
+ */
+export const TERMINAL_OUTBOX_STATUSES: ReadonlyArray<OutboxEventStatus> = [
+  'published',
+  'dead_letter',
+]
+
+/**
  * Domain event stored in the outbox table.
  */
 export interface OutboxEvent {
@@ -36,6 +47,13 @@ export interface OutboxEvent {
    * already delivered and skips straight to markPublished.
    */
   publishIdempotencyKey?: string | null
+  /**
+   * Timestamp of the most recent publish attempt.  Used by recovery
+   * tooling to detect stale `processing` rows whose lease has expired
+   * and to compute retry backoff without relying on wall-clock drift
+   * between the worker and the database.
+   */
+  lastAttemptAt?: Date | null
 }
 
 export type OutboxEventStatus = 'pending' | 'processing' | 'published' | 'failed' | 'dead_letter'
@@ -202,26 +220,15 @@ export type OutboxQuarantineReason =
   | 'unknown_event_type'
 
 /**
- * All quarantine reasons, useful for validation and exhaustive tests.
+ * Reasons an outbox event may be recovered from a non-terminal state.
+ * Kept as a closed union so callers cannot silently introduce new
+ * recovery paths without updating downstream metrics and audit logs.
  */
-export const OUTBOX_QUARANTINE_REASONS: readonly OutboxQuarantineReason[] = [
-  'malformed_json',
-  'schema_invalid',
-  'oversized_payload',
-  'unknown_event_type',
-] as const
-
-/**
- * Returns true when `value` is a valid {@link OutboxQuarantineReason}.
- */
-export function isOutboxQuarantineReason(
-  value: unknown,
-): value is OutboxQuarantineReason {
-  return (
-    typeof value === 'string' &&
-    (OUTBOX_QUARANTINE_REASONS as readonly string[]).includes(value)
-  )
-}
+export type OutboxRecoveryReason =
+  | 'lease_expired'
+  | 'stale_processing'
+  | 'retry_exhausted'
+  | 'manual_reinject'
 
 export interface OutboxQuarantineEntry {
   id: bigint
@@ -237,6 +244,12 @@ export interface OutboxQuarantineEntry {
   quarantinedAt: Date
   reinjectedAt: Date | null
   reinjectedBy: string | null
+  /**
+   * Reason the entry was quarantined.  Mirrors `reason` but is nullable
+   * for rows written before the reason column was introduced, so
+   * recovery tooling can distinguish legacy rows from new ones.
+   */
+  recoveryReason?: OutboxRecoveryReason | null
 }
 
 /**
@@ -248,6 +261,13 @@ export interface CreateOutboxEvent {
   eventType: string
   payload: Record<string, unknown>
   maxRetries?: number
+  /**
+   * Optional idempotency key supplied by the caller.  When present the
+   * publisher will reuse it instead of generating a fresh one, which
+   * lets callers safely retry event creation without duplicating
+   * downstream side effects.
+   */
+  publishIdempotencyKey?: string | null
   traceId?: string | null
   spanId?: string | null
   tracestate?: string | null
@@ -262,6 +282,13 @@ export interface OutboxCleanupConfig {
   publishedRetentionDays: number
   /** Delete failed events older than this many days. Default: 30 */
   failedRetentionDays: number
+  /**
+   * Delete dead-letter events older than this many days.  Defaults to
+   * `failedRetentionDays` when omitted so existing callers keep their
+   * current behavior while new callers can tune dead-letter retention
+   * independently.
+   */
+  deadLetterRetentionDays?: number
 }
 
 /**
