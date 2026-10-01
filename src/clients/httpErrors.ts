@@ -1,4 +1,5 @@
 
+
 /**
  * Centralized HTTP transport error normalization and retry classification.
  *
@@ -7,6 +8,9 @@
  * classified consistently, preventing any single client from silently swallowing
  * retriable errors.
  */
+
+/** Maximum depth to walk a `cause` chain before giving up (cycle/DoS guard). */
+const MAX_CAUSE_DEPTH = 8
 
 /** Structured transport error codes, independent of any client-specific error hierarchy. */
 export type TransportErrorCode = 'TIMEOUT' | 'RESET' | 'REFUSED' | 'NETWORK'
@@ -31,6 +35,17 @@ const REFUSED_CODES = new Set(['ECONNREFUSED'])
 /** OS-level connection timeout (distinct from AbortController-driven request timeout). */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNABORTED'])
 
+/** Permission / authorization syscall codes. Never retried. */
+const PERMISSION_CODES = new Set(['EACCES', 'EPERM'])
+
+/**
+ * Returns true if `code` is a recognized transport syscall code. Kept in one
+ * place so `isNetworkError` and `normalizeTransportError` cannot drift apart.
+ */
+function isTransportCode(code: string): boolean {
+  return RESET_CODES.has(code) || REFUSED_CODES.has(code) || TIMEOUT_CODES.has(code)
+}
+
 function getNodeCode(err: unknown): string | undefined {
   if (err != null && typeof err === 'object' && 'code' in err) {
     const code = (err as Record<string, unknown>).code
@@ -49,12 +64,22 @@ function getNodeCode(err: unknown): string | undefined {
  * - `DOMException { name: 'AbortError' }` (browser + Node.js 18+)
  * - `Error { name: 'AbortError' }` (older Node.js / whatwg-fetch polyfill)
  * - `TypeError { cause: AbortError }` (undici wraps the abort inside TypeError)
+ *
+ * The `cause` chain is walked to a bounded depth so a cyclic or adversarially
+ * deep chain cannot cause unbounded recursion. Non-Error causes are ignored.
  */
 export function isAbortError(err: unknown): boolean {
+  return isAbortErrorAtDepth(err, 0)
+}
+
+function isAbortErrorAtDepth(err: unknown, depth: number): boolean {
+  if (depth > MAX_CAUSE_DEPTH) return false
   if (err instanceof DOMException && err.name === 'AbortError') return true
   if (err instanceof Error && err.name === 'AbortError') return true
   // Unwrap one level of cause-chain (undici / Node.js fetch wrapping)
-  if (err instanceof Error && err.cause != null && isAbortError(err.cause)) return true
+  if (err instanceof Error && err.cause != null && isAbortErrorAtDepth(err.cause, depth + 1)) {
+    return true
+  }
   return false
 }
 
@@ -66,9 +91,10 @@ export function isAbortError(err: unknown): boolean {
 export function isNetworkError(err: unknown): boolean {
   if (isAbortError(err)) return false // timeout is its own category
   if (!(err instanceof Error)) return false
+  if (isPermissionError(err)) return false // permission is its own category
 
   const code = getNodeCode(err)
-  if (code && (RESET_CODES.has(code) || REFUSED_CODES.has(code) || TIMEOUT_CODES.has(code))) {
+  if (code && isTransportCode(code)) {
     return true
   }
 
@@ -77,10 +103,7 @@ export function isNetworkError(err: unknown): boolean {
     const cause = (err as Error & { cause?: unknown }).cause
     if (cause instanceof Error) {
       const causeCode = getNodeCode(cause)
-      if (
-        causeCode &&
-        (RESET_CODES.has(causeCode) || REFUSED_CODES.has(causeCode) || TIMEOUT_CODES.has(causeCode))
-      ) {
+      if (causeCode && isTransportCode(causeCode)) {
         return true
       }
     }
@@ -105,6 +128,10 @@ export function isNetworkError(err: unknown): boolean {
  *
  * Call this in `catch` blocks that wrap both transport I/O *and* body reads so
  * that transport failures are not silently re-classified as parse errors.
+ *
+ * Returns `null` for permission errors so they are never misclassified as
+ * retriable transport failures (permission is handled by `isPermissionError`).
+ * The undici `cause` chain is walked to a bounded depth.
  */
 export function normalizeTransportError(err: unknown): TransportError | null {
   if (isAbortError(err)) {
@@ -113,6 +140,8 @@ export function normalizeTransportError(err: unknown): TransportError | null {
   }
 
   if (!(err instanceof Error)) return null
+
+  if (isPermissionError(err)) return null
 
   const code = getNodeCode(err)
   if (code) {
@@ -124,13 +153,9 @@ export function normalizeTransportError(err: unknown): TransportError | null {
   // Unwrap undici TypeError wrapper
   if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch failed')) {
     const cause = (err as Error & { cause?: unknown }).cause
-    if (cause instanceof Error) {
-      const causeCode = getNodeCode(cause)
-      if (causeCode) {
-        if (RESET_CODES.has(causeCode)) return { code: 'RESET', message: cause.message, cause: err }
-        if (REFUSED_CODES.has(causeCode)) return { code: 'REFUSED', message: cause.message, cause: err }
-        if (TIMEOUT_CODES.has(causeCode)) return { code: 'TIMEOUT', message: cause.message, cause: err }
-      }
+    const nested = normalizeCauseChain(cause, 0)
+    if (nested) {
+      return { code: nested.code, message: nested.message, cause: err }
     }
     return { code: 'NETWORK', message: err.message, cause: err }
   }
@@ -146,6 +171,27 @@ export function normalizeTransportError(err: unknown): TransportError | null {
     return { code: 'RESET', message: err.message, cause: err }
   }
 
+  return null
+}
+
+/**
+ * Walks a `cause` chain looking for a recognized transport syscall code.
+ * Bounded by `MAX_CAUSE_DEPTH` to prevent unbounded recursion on cyclic or
+ * adversarially deep chains. Returns `null` if no transport code is found.
+ */
+function normalizeCauseChain(
+  cause: unknown,
+  depth: number,
+): { code: TransportErrorCode; message: string } | null {
+  if (depth > MAX_CAUSE_DEPTH) return null
+  if (!(cause instanceof Error)) return null
+  const code = getNodeCode(cause)
+  if (code) {
+    if (RESET_CODES.has(code)) return { code: 'RESET', message: cause.message }
+    if (REFUSED_CODES.has(code)) return { code: 'REFUSED', message: cause.message }
+    if (TIMEOUT_CODES.has(code)) return { code: 'TIMEOUT', message: cause.message }
+  }
+  if (cause.cause != null) return normalizeCauseChain(cause.cause, depth + 1)
   return null
 }
 
@@ -177,11 +223,19 @@ export function isRetryableTransportCode(code: TransportErrorCode): boolean {
  * Returns true if `err` is a permission/authorization failure (HTTP 401/403 or
  * Node.js EACCES/EPERM). These are never retried because retrying will not
  * change the outcome and may lock out the caller.
+ *
+ * Also recognizes the undici `TypeError { cause }` wrapper so a wrapped
+ * EACCES/EPERM is not silently treated as a retriable transport failure.
  */
 export function isPermissionError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   const code = getNodeCode(err)
-  if (code === 'EACCES' || code === 'EPERM') return true
+  if (code && PERMISSION_CODES.has(code)) return true
+  const cause = (err as Error & { cause?: unknown }).cause
+  if (cause instanceof Error) {
+    const causeCode = getNodeCode(cause)
+    if (causeCode && PERMISSION_CODES.has(causeCode)) return true
+  }
   const status = getHttpStatus(err)
   return status === 401 || status === 403
 }
@@ -190,9 +244,13 @@ export function isPermissionError(err: unknown): boolean {
  * Returns true if `err` represents a stale/expired state (HTTP 409/410/412 or
  * a stale-read marker). Stale errors are not retried blindly; callers must
  * re-read state before retrying to avoid clobbering concurrent updates.
+ *
+ * Permission errors take precedence: a 403 with a "stale" message must be
+ * treated as a permission failure, not a stale re-read.
  */
 export function isStaleError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
+  if (isPermissionError(err)) return false
   const status = getHttpStatus(err)
   if (status === 409 || status === 410 || status === 412) return true
   const msg = err.message.toLowerCase()
@@ -203,18 +261,31 @@ export function isStaleError(err: unknown): boolean {
  * Best-effort extraction of an HTTP status code from an arbitrary error value.
  * Recognizes `status`, `statusCode`, and `response.status` shapes used by
  * fetch wrappers, axios, got, and node-fetch.
+ *
+ * Only integer status codes in the valid HTTP range [100, 599] are returned;
+ * non-integer or out-of-range values are rejected so callers cannot be tricked
+ * into retrying on a bogus status.
  */
 export function getHttpStatus(err: unknown): number | undefined {
   if (err == null || typeof err !== 'object') return undefined
   const rec = err as Record<string, unknown>
   const direct = rec.status ?? rec.statusCode
-  if (typeof direct === 'number' && Number.isFinite(direct)) return direct
+  if (isValidHttpStatus(direct)) return direct
   const response = rec.response
   if (response != null && typeof response === 'object') {
     const nested = (response as Record<string, unknown>).status
-    if (typeof nested === 'number' && Number.isFinite(nested)) return nested
+    if (isValidHttpStatus(nested)) return nested
   }
   return undefined
+}
+
+function isValidHttpStatus(value: unknown): value is number {
+  return (
+    typeof value === 'number' &&
+    Number.isInteger(value) &&
+    value >= 100 &&
+    value <= 599
+  )
 }
 
 /**
@@ -227,6 +298,9 @@ export function getHttpStatus(err: unknown): number | undefined {
  * - Stale errors require a re-read before retry (never blind retry).
  * - Transport errors are retried per `isRetryableTransportCode`.
  * - Unknown errors are not retried (fail closed).
+ * - Permission errors are checked before stale/transport so a wrapped
+ *   EACCES/EPERM or 401/403 can never be retried.
+ * - Non-Error values (null, undefined, strings, plain objects) fail closed.
  */
 export type RecoveryDecision =
   | { readonly action: 'retry'; readonly reason: TransportErrorCode | 'HTTP_STATUS' }

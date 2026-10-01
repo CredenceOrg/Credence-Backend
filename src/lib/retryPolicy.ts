@@ -95,7 +95,7 @@ export function getBackoffDelayMs(
   randomFn: () => number = Math.random,
   previousDelayMs?: number,
 ): number {
-  const boundedAttempt = Math.max(1, Math.floor(attempt))
+  const boundedAttempt = Math.max(1, Math.floor(sanitizeNumber(attempt, 1)))
   const exponentialDelay =
     policy.baseDelayMs * Math.pow(policy.backoffMultiplier, Math.max(0, boundedAttempt - 1))
   const cappedDelay = Math.min(exponentialDelay, policy.maxDelayMs)
@@ -110,7 +110,11 @@ export function getBackoffDelayMs(
   }
 
   if (policy.jitterStrategy === 'decorrelated') {
-    const prev = previousDelayMs ?? policy.baseDelayMs
+    const prev = clamp(
+      sanitizeNumber(previousDelayMs ?? policy.baseDelayMs, policy.baseDelayMs),
+      policy.baseDelayMs,
+      policy.maxDelayMs,
+    )
     const delay = Math.floor(policy.baseDelayMs + randomFn() * (prev * 3 - policy.baseDelayMs))
     return Math.min(cappedDelay, delay)
   }

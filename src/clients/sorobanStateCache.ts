@@ -20,6 +20,15 @@
  * getIdentityState() call:
  *   soroban_state_cache_hits_total   { network, contract }
  *   soroban_state_cache_misses_total { network, contract }
+ *
+ * Boundary & recovery invariants
+ * ──────────────────────────────
+ * - Empty / whitespace-only network, contractId, or address are rejected
+ *   before any cache or RPC interaction (fail-fast, no silent key collisions).
+ * - Redis L2 failures never propagate: reads fall through to RPC, writes
+ *   degrade to L1-only, deletes are best-effort.
+ * - Values that are `undefined` are never stored (would be indistinguishable
+ *   from a miss); `null` is stored as a legitimate cached payload.
  */
 
 import { LRUCache } from 'lru-cache'
@@ -56,6 +65,14 @@ export interface SorobanStateCacheOptions {
   cacheService?: CacheService
 }
 
+/** Thrown when a cache key component is empty or non-string. */
+export class SorobanStateCacheKeyError extends Error {
+  constructor(component: string) {
+    super(`sorobanStateCache: invalid ${component} (must be a non-empty string)`)
+    this.name = 'SorobanStateCacheKeyError'
+  }
+}
+
 export class SorobanStateCache {
   private readonly ttlMs: number
   private readonly l1: LRUCache<string, any>
@@ -87,6 +104,30 @@ export class SorobanStateCache {
   }
 
   /**
+   * Validate key components before any cache/RPC interaction.
+   *
+   * Rejects empty, whitespace-only, or non-string inputs so that distinct
+   * logical addresses can never collapse onto the same cache key (e.g.
+   * `""` vs `" "`), and so callers get a deterministic, diagnosable error
+   * instead of a silent cache hit/miss on a malformed key.
+   */
+  private assertKeyComponents(
+    network: string,
+    contractId: string,
+    address: string,
+  ): void {
+    if (typeof network !== 'string' || network.trim() === '') {
+      throw new SorobanStateCacheKeyError('network')
+    }
+    if (typeof contractId !== 'string' || contractId.trim() === '') {
+      throw new SorobanStateCacheKeyError('contractId')
+    }
+    if (typeof address !== 'string' || address.trim() === '') {
+      throw new SorobanStateCacheKeyError('address')
+    }
+  }
+
+  /**
    * Returns a cached entry or null if not found / caching is disabled.
    *
    * Checks L1 first; promotes L2 hit into L1.
@@ -99,6 +140,8 @@ export class SorobanStateCache {
     if (this.disabled) {
       return null
     }
+
+    this.assertKeyComponents(network, contractId, address)
 
     const key = this.buildKey(network, contractId, address)
     const labels = { network, contract: contractId }
@@ -147,6 +190,8 @@ export class SorobanStateCache {
       return
     }
 
+    this.assertKeyComponents(network, contractId, address)
+
     const key = this.buildKey(network, contractId, address)
 
     // L1 — always succeeds
@@ -173,6 +218,8 @@ export class SorobanStateCache {
     contractId: string,
     address: string,
   ): Promise<void> {
+    this.assertKeyComponents(network, contractId, address)
+
     const key = this.buildKey(network, contractId, address)
     this.l1.delete(key)
     try {

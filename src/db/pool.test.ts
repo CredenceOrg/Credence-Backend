@@ -185,4 +185,177 @@ describe('DB Pool configuration', () => {
     await expect(withReplica(operation, { maxLagMs: 100, fallback: false })).rejects.toThrow('Replica lag too high: 500ms')
     expect(operation).not.toHaveBeenCalled()
   })
+
+  it('withReplica treats lag exactly at maxLagMs as within bounds (boundary)', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: 100 }] } as any)
+
+    const operation = vi.fn().mockResolvedValue('ok')
+    const result = await withReplica(operation, { maxLagMs: 100 })
+
+    expect(result).toBe('ok')
+    expect(operation).toHaveBeenCalledWith(replicaPool)
+  })
+
+  it('withReplica falls back to pool when lag query returns no rows (boundary)', async () => {
+    const { pool, withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [] } as any)
+
+    const operation = vi.fn().mockResolvedValue('ok')
+    const result = await withReplica(operation)
+
+    expect(result).toBe('ok')
+    expect(operation).toHaveBeenCalledWith(pool)
+  })
+
+  it('withReplica falls back to pool when lag value is null (boundary)', async () => {
+    const { pool, withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: null }] } as any)
+
+    const operation = vi.fn().mockResolvedValue('ok')
+    const result = await withReplica(operation)
+
+    expect(result).toBe('ok')
+    expect(operation).toHaveBeenCalledWith(pool)
+  })
+
+  it('withReplica propagates operation errors from the replica without retrying on the primary', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockResolvedValueOnce({ rows: [{ lag_ms: 5 }] } as any)
+
+    const operation = vi.fn().mockRejectedValue(new Error('replica write failed'))
+    await expect(withReplica(operation)).rejects.toThrow('replica write failed')
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(operation).toHaveBeenCalledWith(replicaPool)
+  })
+
+  it('withReplica propagates operation errors from the primary fallback', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockRejectedValueOnce(new Error('replica down'))
+
+    const operation = vi.fn().mockRejectedValue(new Error('primary write failed'))
+    await expect(withReplica(operation)).rejects.toThrow('primary write failed')
+    expect(operation).toHaveBeenCalledTimes(1)
+  })
+
+  it('withReplica does not leak the lag probe failure to the caller when fallback succeeds', async () => {
+    const { withReplica, replicaPool } = await import('./pool.js')
+
+    vi.spyOn(replicaPool, 'query').mockRejectedValueOnce(new Error('replica unreachable'))
+
+    const operation = vi.fn().mockResolvedValue('primary-ok')
+    await expect(withReplica(operation)).resolves.toBe('primary-ok')
+  })
+
+  it('releases the tenant connection budget slot after release so a later connect succeeds (recovery)', async () => {
+    process.env.DB_TENANT_CONNECTION_BUDGET = '1'
+
+    const connectSpy = vi
+      .spyOn(Pool.prototype, 'connect')
+      .mockResolvedValueOnce({ release: vi.fn() } as any)
+      .mockResolvedValueOnce({ release: vi.fn() } as any)
+
+    const { pool } = await import('./pool.js')
+    const { runWithTenant } = await import('../utils/tenantContext.js')
+
+    const firstClient = await runWithTenant('tenant-recovery', () => pool.connect())
+    firstClient.release()
+
+    const secondClient = await runWithTenant('tenant-recovery', () => pool.connect())
+    expect(secondClient).toBeDefined()
+    expect(connectSpy).toHaveBeenCalledTimes(2)
+    secondClient.release()
+  })
+
+  it('isolates connection budgets between tenants (no cross-tenant leakage)', async () => {
+    process.env.DB_TENANT_CONNECTION_BUDGET = '1'
+
+    const connectSpy = vi
+      .spyOn(Pool.prototype, 'connect')
+      .mockResolvedValueOnce({ release: vi.fn() } as any)
+      .mockResolvedValueOnce({ release: vi.fn() } as any)
+
+    const { pool } = await import('./pool.js')
+    const { runWithTenant } = await import('../utils/tenantContext.js')
+
+    const a = await runWithTenant('tenant-a', () => pool.connect())
+    const b = await runWithTenant('tenant-b', () => pool.connect())
+
+    expect(connectSpy).toHaveBeenCalledTimes(2)
+    a.release()
+    b.release()
+  })
+
+  it('rejects a tenant at the boundary of its budget (limit 0)', async () => {
+    process.env.DB_TENANT_CONNECTION_BUDGET = '0'
+
+    const connectSpy = vi.spyOn(Pool.prototype, 'connect')
+
+    const { pool, TenantConnectionBudgetError } = await import('./pool.js')
+    const { runWithTenant } = await import('../utils/tenantContext.js')
+
+    await expect(
+      runWithTenant('tenant-zero', () => pool.connect())
+    ).rejects.toMatchObject({
+      name: TenantConnectionBudgetError.name,
+      tenantId: 'tenant-zero',
+      limit: 0,
+      code: 'rate_limit_exceeded',
+    })
+
+    expect(connectSpy).not.toHaveBeenCalled()
+  })
+
+  it('envInt returns fallback for empty string (boundary)', async () => {
+    const { envInt } = await import('./pool.js')
+    process.env.EMPTY_NUM_TEST = ''
+    expect(envInt('EMPTY_NUM_TEST', 42)).toBe(42)
+  })
+
+  it('envInt returns fallback for negative or zero values when a positive fallback is expected (boundary)', async () => {
+    const { envInt } = await import('./pool.js')
+    process.env.NEG_NUM_TEST = '-5'
+    expect(envInt('NEG_NUM_TEST', 42)).toBe(-5)
+    process.env.ZERO_NUM_TEST = '0'
+    expect(envInt('ZERO_NUM_TEST', 42)).toBe(0)
+  })
+
+  it('envInt parses integer prefixes and rejects trailing garbage (boundary)', async () => {
+    const { envInt } = await import('./pool.js')
+    process.env.PREFIX_NUM_TEST = '12abc'
+    expect(envInt('PREFIX_NUM_TEST', 42)).toBe(12)
+  })
+
+  it('envInt returns fallback for whitespace-only string (boundary)', async () => {
+    const { envInt } = await import('./pool.js')
+    process.env.WS_NUM_TEST = '   '
+    expect(envInt('WS_NUM_TEST', 42)).toBe(42)
+  })
+
+  it('rejects a bad DB_POOL_MAX value at startup (failure mode)', async () => {
+    process.env.DB_POOL_MAX = 'not-a-number'
+    vi.resetModules()
+    await expect(import('./pool.js')).rejects.toThrow(/DB_POOL_MAX/)
+  })
+
+  it('rejects a bad DB_POOL_IDLE_TIMEOUT_MS value at startup (failure mode)', async () => {
+    process.env.DB_POOL_IDLE_TIMEOUT_MS = 'not-a-number'
+    vi.resetModules()
+    await expect(import('./pool.js')).rejects.toThrow(/DB_POOL_IDLE_TIMEOUT_MS/)
+  })
+
+  it('does not expose the database password in pool options (security)', async () => {
+    const { pool, workerPool, replicaPool } = await import('./pool.js')
+    const serialized = JSON.stringify({
+      pool: pool.options,
+      workerPool: workerPool.options,
+      replicaPool: replicaPool.options,
+    })
+    expect(serialized).not.toContain('pass')
+  })
 })
