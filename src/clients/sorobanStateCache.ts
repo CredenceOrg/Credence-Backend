@@ -131,6 +131,14 @@ export class SorobanStateCache {
    * Returns a cached entry or null if not found / caching is disabled.
    *
    * Checks L1 first; promotes L2 hit into L1.
+   *
+   * Invariants:
+   *  - Never throws: Redis failures degrade to a miss so the RPC path is
+   *    never blocked by cache-layer errors.
+   *  - Only non-null/non-undefined payloads are treated as hits; a stored
+   *    `null` is indistinguishable from a miss and is never promoted.
+   *  - Concurrent callers may each observe a miss and re-fetch; this is
+   *    safe because `set` is idempotent for a given key.
    */
   public async get(
     network: string,
@@ -179,6 +187,12 @@ export class SorobanStateCache {
    * Stores a successful RPC response in L1 and L2.
    * Silently swallows Redis errors — a failed write only means the next
    * request will be a cache miss, not an error.
+   *
+   * Invariants:
+   *  - `null`/`undefined` values are rejected (no-op) so error responses
+   *    can never be cached and later served as a hit.
+   *  - L1 write is synchronous and always succeeds; L2 is best-effort.
+   *  - TTL is clamped to a minimum of 1 second for Redis setEx.
    */
   public async set(
     network: string,
@@ -190,7 +204,11 @@ export class SorobanStateCache {
       return
     }
 
-    this.assertKeyComponents(network, contractId, address)
+    // Never cache nullish payloads — they represent errors / not-found and
+    // must not be served as a hit on subsequent reads.
+    if (value === null || value === undefined) {
+      return
+    }
 
     const key = this.buildKey(network, contractId, address)
 
@@ -212,6 +230,12 @@ export class SorobanStateCache {
 
   /**
    * Evict a single entry from L1 and L2 (e.g. after a state-invalidating write).
+   *
+   * Invariants:
+   *  - L1 eviction is synchronous and always succeeds, so a subsequent `get`
+   *    on this process cannot serve a stale value even if Redis is down.
+   *  - Redis failures are logged and swallowed; the entry may linger in L2
+   *    until its TTL expires, which is the documented recovery window.
    */
   public async invalidate(
     network: string,

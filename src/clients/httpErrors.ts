@@ -1,5 +1,3 @@
-
-
 /**
  * Centralized HTTP transport error normalization and retry classification.
  *
@@ -15,11 +13,37 @@ const MAX_CAUSE_DEPTH = 8
 /** Structured transport error codes, independent of any client-specific error hierarchy. */
 export type TransportErrorCode = 'TIMEOUT' | 'RESET' | 'REFUSED' | 'NETWORK'
 
-export interface TransportError {
-  readonly code: TransportErrorCode
-  readonly message: string
-  /** Original thrown value for debugging. */
-  readonly cause: unknown
+/**
+ * TransportError wraps low-level network failures. 
+ * Upgraded to a Class to enforce serialization invariants and prevent sensitive
+ * data (like original causes or stacks) from leaking into diagnostic outputs.
+ */
+export class TransportError extends Error {
+  public readonly code: TransportErrorCode
+  public readonly cause: unknown
+
+  constructor(code: TransportErrorCode, message: string, cause: unknown) {
+    super(message)
+    this.name = 'TransportError'
+    this.code = code
+    this.cause = cause
+    // Maintains proper stack trace for V8
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, TransportError)
+    }
+  }
+
+  /**
+   * Invariant: Never expose potentially sensitive `cause` or `stack` trace
+   * data in serialized output. Ensures logging/metrics are diagnosable but safe.
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      code: this.code,
+      message: this.message,
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -35,23 +59,27 @@ const REFUSED_CODES = new Set(['ECONNREFUSED'])
 /** OS-level connection timeout (distinct from AbortController-driven request timeout). */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNABORTED'])
 
-/** Permission / authorization syscall codes. Never retried. */
-const PERMISSION_CODES = new Set(['EACCES', 'EPERM'])
-
-/**
- * Returns true if `code` is a recognized transport syscall code. Kept in one
- * place so `isNetworkError` and `normalizeTransportError` cannot drift apart.
- */
-function isTransportCode(code: string): boolean {
-  return RESET_CODES.has(code) || REFUSED_CODES.has(code) || TIMEOUT_CODES.has(code)
-}
-
+/** Safely extract a Node.js error code, guarding against throwing getters. */
 function getNodeCode(err: unknown): string | undefined {
-  if (err != null && typeof err === 'object' && 'code' in err) {
-    const code = (err as Record<string, unknown>).code
-    return typeof code === 'string' ? code : undefined
+  if (err != null && typeof err === 'object') {
+    try {
+      const code = (err as Record<string, unknown>).code
+      return typeof code === 'string' ? code : undefined
+    } catch {
+      // Protect against throwing getters in malicious/malformed error objects
+      return undefined
+    }
   }
   return undefined
+}
+
+/** Safely stringify and bound an error message to prevent CPU exhaustion on huge payloads. */
+function getBoundedMessage(err: Error, limit = 1000): string {
+  try {
+    return String(err.message || '').slice(0, limit).toLowerCase()
+  } catch {
+    return ''
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -60,13 +88,7 @@ function getNodeCode(err: unknown): string | undefined {
 
 /**
  * Returns true if `err` is an AbortController abort signal (request timeout or
- * explicit cancel). Handles all known variants:
- * - `DOMException { name: 'AbortError' }` (browser + Node.js 18+)
- * - `Error { name: 'AbortError' }` (older Node.js / whatwg-fetch polyfill)
- * - `TypeError { cause: AbortError }` (undici wraps the abort inside TypeError)
- *
- * The `cause` chain is walked to a bounded depth so a cyclic or adversarially
- * deep chain cannot cause unbounded recursion. Non-Error causes are ignored.
+ * explicit cancel). Handles all known variants.
  */
 export function isAbortError(err: unknown): boolean {
   return isAbortErrorAtDepth(err, 0)
@@ -111,7 +133,7 @@ export function isNetworkError(err: unknown): boolean {
   }
 
   // String heuristics for older libraries (node-fetch, got, axios)
-  const msg = err.message.toLowerCase()
+  const msg = getBoundedMessage(err)
   return (
     msg.includes('socket hang up') ||
     msg.includes('econnreset') ||
@@ -123,20 +145,12 @@ export function isNetworkError(err: unknown): boolean {
 
 /**
  * Attempt to normalize any thrown value into a `TransportError`.
- * Returns `null` if the error is not transport-related (e.g. a real JSON
- * parse error or application-level error).
- *
- * Call this in `catch` blocks that wrap both transport I/O *and* body reads so
- * that transport failures are not silently re-classified as parse errors.
- *
- * Returns `null` for permission errors so they are never misclassified as
- * retriable transport failures (permission is handled by `isPermissionError`).
- * The undici `cause` chain is walked to a bounded depth.
+ * Returns `null` if the error is not transport-related.
  */
 export function normalizeTransportError(err: unknown): TransportError | null {
   if (isAbortError(err)) {
     const message = err instanceof Error ? err.message : 'Request aborted'
-    return { code: 'TIMEOUT', message, cause: err }
+    return new TransportError('TIMEOUT', message, err)
   }
 
   if (!(err instanceof Error)) return null
@@ -145,22 +159,26 @@ export function normalizeTransportError(err: unknown): TransportError | null {
 
   const code = getNodeCode(err)
   if (code) {
-    if (RESET_CODES.has(code)) return { code: 'RESET', message: err.message, cause: err }
-    if (REFUSED_CODES.has(code)) return { code: 'REFUSED', message: err.message, cause: err }
-    if (TIMEOUT_CODES.has(code)) return { code: 'TIMEOUT', message: err.message, cause: err }
+    if (RESET_CODES.has(code)) return new TransportError('RESET', err.message, err)
+    if (REFUSED_CODES.has(code)) return new TransportError('REFUSED', err.message, err)
+    if (TIMEOUT_CODES.has(code)) return new TransportError('TIMEOUT', err.message, err)
   }
 
   // Unwrap undici TypeError wrapper
   if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch failed')) {
     const cause = (err as Error & { cause?: unknown }).cause
-    const nested = normalizeCauseChain(cause, 0)
-    if (nested) {
-      return { code: nested.code, message: nested.message, cause: err }
+    if (cause instanceof Error) {
+      const causeCode = getNodeCode(cause)
+      if (causeCode) {
+        if (RESET_CODES.has(causeCode)) return new TransportError('RESET', cause.message, err)
+        if (REFUSED_CODES.has(causeCode)) return new TransportError('REFUSED', cause.message, err)
+        if (TIMEOUT_CODES.has(causeCode)) return new TransportError('TIMEOUT', cause.message, err)
+      }
     }
-    return { code: 'NETWORK', message: err.message, cause: err }
+    return new TransportError('NETWORK', err.message, err)
   }
 
-  const msg = err.message.toLowerCase()
+  const msg = getBoundedMessage(err)
   if (
     msg.includes('socket hang up') ||
     msg.includes('econnreset') ||
@@ -168,41 +186,14 @@ export function normalizeTransportError(err: unknown): TransportError | null {
     msg.includes('socket ended without sending a response') ||
     msg.includes('network request failed')
   ) {
-    return { code: 'RESET', message: err.message, cause: err }
+    return new TransportError('RESET', err.message, err)
   }
 
   return null
 }
 
 /**
- * Walks a `cause` chain looking for a recognized transport syscall code.
- * Bounded by `MAX_CAUSE_DEPTH` to prevent unbounded recursion on cyclic or
- * adversarially deep chains. Returns `null` if no transport code is found.
- */
-function normalizeCauseChain(
-  cause: unknown,
-  depth: number,
-): { code: TransportErrorCode; message: string } | null {
-  if (depth > MAX_CAUSE_DEPTH) return null
-  if (!(cause instanceof Error)) return null
-  const code = getNodeCode(cause)
-  if (code) {
-    if (RESET_CODES.has(code)) return { code: 'RESET', message: cause.message }
-    if (REFUSED_CODES.has(code)) return { code: 'REFUSED', message: cause.message }
-    if (TIMEOUT_CODES.has(code)) return { code: 'TIMEOUT', message: cause.message }
-  }
-  if (cause.cause != null) return normalizeCauseChain(cause.cause, depth + 1)
-  return null
-}
-
-/**
- * Returns true for HTTP status codes that are always safe to retry:
- * - 408 Request Timeout
- * - 429 Too Many Requests
- * - 5xx Server Errors
- *
- * 4xx codes other than 408/429 are NOT retried because they represent
- * client errors (bad request, auth failure) that will not resolve on retry.
+ * Returns true for HTTP status codes that are always safe to retry.
  */
 export function isRetryableHttpStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500
@@ -210,22 +201,15 @@ export function isRetryableHttpStatus(status: number): boolean {
 
 /**
  * Returns true if the transport error code warrants a retry under the default
- * idempotent-safe policy. All transport codes are retried by default since they
- * indicate infrastructure failures, not application logic errors.
+ * idempotent-safe policy.
  */
 export function isRetryableTransportCode(code: TransportErrorCode): boolean {
-  // All four transport codes (TIMEOUT, RESET, REFUSED, NETWORK) are retriable.
-  // Non-idempotent callers that need to suppress this must check explicitly.
   return code === 'TIMEOUT' || code === 'RESET' || code === 'REFUSED' || code === 'NETWORK'
 }
 
 /**
  * Returns true if `err` is a permission/authorization failure (HTTP 401/403 or
- * Node.js EACCES/EPERM). These are never retried because retrying will not
- * change the outcome and may lock out the caller.
- *
- * Also recognizes the undici `TypeError { cause }` wrapper so a wrapped
- * EACCES/EPERM is not silently treated as a retriable transport failure.
+ * Node.js EACCES/EPERM). Never retried.
  */
 export function isPermissionError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
@@ -241,40 +225,37 @@ export function isPermissionError(err: unknown): boolean {
 }
 
 /**
- * Returns true if `err` represents a stale/expired state (HTTP 409/410/412 or
- * a stale-read marker). Stale errors are not retried blindly; callers must
- * re-read state before retrying to avoid clobbering concurrent updates.
- *
- * Permission errors take precedence: a 403 with a "stale" message must be
- * treated as a permission failure, not a stale re-read.
+ * Returns true if `err` represents a stale/expired state (HTTP 409/410/412).
+ * Stale errors require state re-read before retry.
  */
 export function isStaleError(err: unknown): boolean {
   if (!(err instanceof Error)) return false
   if (isPermissionError(err)) return false
   const status = getHttpStatus(err)
   if (status === 409 || status === 410 || status === 412) return true
-  const msg = err.message.toLowerCase()
+  
+  const msg = getBoundedMessage(err)
   return msg.includes('stale') || msg.includes('expired') || msg.includes('precondition failed')
 }
 
 /**
- * Best-effort extraction of an HTTP status code from an arbitrary error value.
- * Recognizes `status`, `statusCode`, and `response.status` shapes used by
- * fetch wrappers, axios, got, and node-fetch.
- *
- * Only integer status codes in the valid HTTP range [100, 599] are returned;
- * non-integer or out-of-range values are rejected so callers cannot be tricked
- * into retrying on a bogus status.
+ * Best-effort extraction of an HTTP status code from an arbitrary error value,
+ * guarded against circular references and throwing getters.
  */
 export function getHttpStatus(err: unknown): number | undefined {
   if (err == null || typeof err !== 'object') return undefined
-  const rec = err as Record<string, unknown>
-  const direct = rec.status ?? rec.statusCode
-  if (isValidHttpStatus(direct)) return direct
-  const response = rec.response
-  if (response != null && typeof response === 'object') {
-    const nested = (response as Record<string, unknown>).status
-    if (isValidHttpStatus(nested)) return nested
+  try {
+    const rec = err as Record<string, unknown>
+    const direct = rec.status ?? rec.statusCode
+    if (typeof direct === 'number' && Number.isFinite(direct)) return direct
+    
+    const response = rec.response
+    if (response != null && typeof response === 'object') {
+      const nested = (response as Record<string, unknown>).status
+      if (typeof nested === 'number' && Number.isFinite(nested)) return nested
+    }
+  } catch {
+    // Failsafe for proxy objects or throwing getters
   }
   return undefined
 }
@@ -289,9 +270,7 @@ function isValidHttpStatus(value: unknown): value is number {
 }
 
 /**
- * Classifies an error into a recovery decision. This is the single entry point
- * callers should use to decide whether to retry, re-read state, or surface the
- * failure. Deterministic for all inputs (including non-Error values).
+ * Classifies an error into a recovery decision. 
  *
  * Invariants:
  * - Permission errors are never retried.

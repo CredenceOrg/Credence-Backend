@@ -46,6 +46,11 @@ async function histogramCount(
       value: number
     }>) {
       if (v.labels && Object.keys(v.labels).some((k) => k === 'le' || k === 'quantile')) continue
+      // Skip the histogram `_sum` series: `_count` carries empty labels too,
+      // and `_sum` precedes `_count` in the exported sample list, so without
+      // this guard the helper would return the sum of observations instead of
+      // their number.
+      if (v.metricName?.endsWith('_sum')) continue
       if (
         labels &&
         !Object.entries(labels).every(([k, val]) => v.labels?.[k] === val)

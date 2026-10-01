@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { executeWithRetry, type ExtendedRetryPolicy } from './retryExecutor.js'
+import { executeWithRetry as executeWithRetryExample } from '../examples/retryExecutor.js'
 import type { RetryObserver } from '../observability/retryMetrics.js'
 
 const basePolicy: ExtendedRetryPolicy = {
@@ -266,5 +267,237 @@ describe('executeWithRetry', () => {
       ['first', 2],
       ['second', 1],
     ]))
+  })
+
+  it('rejects a zero-attempt policy without invoking the operation', async () => {
+    const operation = vi.fn<() => Promise<string>>().mockResolvedValue('never')
+    const sleepFn = vi.fn(async () => {})
+    const retryObserver = observer()
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 0 }),
+        sleepFn,
+        retryObserver,
+      }),
+    ).rejects.toThrow(/maxAttempts/)
+
+    expect(operation).not.toHaveBeenCalled()
+    expect(sleepFn).not.toHaveBeenCalled()
+    expect(retryObserver.onRetryAttempt).not.toHaveBeenCalled()
+    expect(retryObserver.onRetryExhausted).not.toHaveBeenCalled()
+    expect(retryObserver.onSuccess).not.toHaveBeenCalled()
+  })
+
+  it('rejects a negative-attempt policy without invoking the operation', async () => {
+    const operation = vi.fn<() => Promise<string>>().mockResolvedValue('never')
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: -1 }),
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow(/maxAttempts/)
+
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-integer attempt policy without invoking the operation', async () => {
+    const operation = vi.fn<() => Promise<string>>().mockResolvedValue('never')
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 2.5 }),
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow(/maxAttempts/)
+
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a negative base delay without invoking the operation', async () => {
+    const operation = vi.fn<() => Promise<string>>().mockResolvedValue('never')
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ baseDelayMs: -1 }),
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow(/baseDelayMs/)
+
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a negative timeout without invoking the operation', async () => {
+    const operation = vi.fn<() => Promise<string>>().mockResolvedValue('never')
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ timeoutMs: -1 }),
+        sleepFn: vi.fn(async () => {}),
+      }),
+    ).rejects.toThrow(/timeoutMs/)
+
+    expect(operation).not.toHaveBeenCalled()
+  })
+
+  it('clamps the backoff delay to maxDelayMs across many attempts', async () => {
+    const error = httpError(503)
+    const operation = vi.fn<() => Promise<never>>().mockRejectedValue(error)
+    const sleepFn = vi.fn(async () => {})
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({
+          maxAttempts: 6,
+          baseDelayMs: 10,
+          maxDelayMs: 25,
+          backoffMultiplier: 2,
+        }),
+        sleepFn,
+      }),
+    ).rejects.toBe(error)
+
+    expect(operation).toHaveBeenCalledTimes(6)
+    expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([10, 20, 25, 25, 25])
+  })
+
+  it('honors a zero base delay without sleeping between attempts', async () => {
+    const error = httpError(503)
+    const operation = vi.fn<() => Promise<never>>().mockRejectedValue(error)
+    const sleepFn = vi.fn(async () => {})
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 3, baseDelayMs: 0 }),
+        sleepFn,
+      }),
+    ).rejects.toBe(error)
+
+    expect(operation).toHaveBeenCalledTimes(3)
+    expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([0, 0])
+  })
+
+  it('honors a zero timeout as an immediate abort boundary', async () => {
+    vi.useFakeTimers()
+    try {
+      const retryObserver = observer()
+      const operation = vi.fn(
+        (signal?: AbortSignal) =>
+          new Promise<never>((_resolve, reject) => {
+            signal?.addEventListener(
+              'abort',
+              () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })),
+              { once: true },
+            )
+          }),
+      )
+      const promise = executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 1, timeoutMs: 0 }),
+        retryObserver,
+        sleepFn: vi.fn(async () => {}),
+      })
+      const rejection = expect(promise).rejects.toMatchObject({ name: 'AbortError' })
+
+      await vi.advanceTimersByTimeAsync(0)
+      await rejection
+      expect(operation).toHaveBeenCalledTimes(1)
+      expect(retryObserver.onRetryExhausted).toHaveBeenCalledWith({
+        provider: 'provider',
+        attempts: 1,
+        errorCode: 'TIMEOUT',
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('recovers after exhausting retries when the operation later succeeds', async () => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(httpError(503))
+      .mockRejectedValueOnce(httpError(503))
+      .mockResolvedValueOnce('late-success')
+    const sleepFn = vi.fn(async () => {})
+    const retryObserver = observer()
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 3 }),
+        sleepFn,
+        retryObserver,
+      }),
+    ).resolves.toBe('late-success')
+
+    expect(operation).toHaveBeenCalledTimes(3)
+    expect(sleepFn.mock.calls.map(([delay]) => delay)).toEqual([10, 20])
+    expect(retryObserver.onRetryAttempt).toHaveBeenCalledTimes(2)
+    expect(retryObserver.onRetryExhausted).not.toHaveBeenCalled()
+    expect(retryObserver.onSuccess).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: 'provider', attempt: 3 }),
+    )
+  })
+
+  it('propagates the original error when the sleep function rejects', async () => {
+    const error = httpError(503)
+    const sleepError = new Error('sleep interrupted')
+    const operation = vi.fn<() => Promise<never>>().mockRejectedValue(error)
+    const sleepFn = vi.fn(async () => {
+      throw sleepError
+    })
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 3 }),
+        sleepFn,
+      }),
+    ).rejects.toBe(sleepError)
+
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(sleepFn).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not retry after the caller aborts via an external signal', async () => {
+    const controller = new AbortController()
+    const retryObserver = observer()
+    const operation = vi.fn(async (signal?: AbortSignal) => {
+      controller.abort()
+      if (signal?.aborted) {
+        throw Object.assign(new Error('aborted'), { name: 'AbortError' })
+      }
+      throw httpError(503)
+    })
+    const sleepFn = vi.fn(async () => {})
+
+    await expect(
+      executeWithRetry('provider', operation, {
+        policy: makePolicy({ maxAttempts: 5 }),
+        signal: controller.signal,
+        sleepFn,
+        retryObserver,
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' })
+
+    expect(operation).toHaveBeenCalledTimes(1)
+    expect(sleepFn).not.toHaveBeenCalled()
+    expect(retryObserver.onRetryAttempt).not.toHaveBeenCalled()
+  })
+
+  it('exposes the example retry executor with the same recovery semantics', async () => {
+    const operation = vi
+      .fn<() => Promise<string>>()
+      .mockRejectedValueOnce(httpError(503))
+      .mockResolvedValueOnce('example-ok')
+    const sleepFn = vi.fn(async () => {})
+
+    await expect(
+      executeWithRetryExample('example', operation, {
+        policy: makePolicy(),
+        sleepFn,
+      }),
+    ).resolves.toBe('example-ok')
+
+    expect(operation).toHaveBeenCalledTimes(2)
+    expect(sleepFn).toHaveBeenCalledWith(10)
   })
 })

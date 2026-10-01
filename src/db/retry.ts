@@ -172,7 +172,7 @@ export function isRetryableError(error: unknown): boolean {
     return false
   }
 
-  const pgError = error as { code?: string; errno:? string; syscall?: string }
+  const pgError = error as { code?: string; errno?: string; syscall?: string }
 
   // Check for retryable PostgreSQL error codes
   if (pgError.code) {
@@ -219,9 +219,9 @@ export function sanitizeErrorMessage(message: string): string {
 
 /**
  * Calculates exponential backoff delay with full jitter.
- * 
+ *
  * Formula: delay = random(0, min(maxBackoffMs, initialBackoffMs * 2^attempt))
- * 
+ *
  * Full jitter prevents thundering herd problems where many clients
  * retry simultaneously after a transient failure.
  * Boundary-safe: protects against negative, NaN, non-finite, and overflow values.
@@ -285,17 +285,17 @@ export function classifyConflict(error: unknown): ConflictRetryInfo['conflictCod
 
 /**
  * Wraps a database transaction function with exponential backoff retry logic.
- * 
+ *
  * This function automatically retries transient PostgreSQL errors (serialization
  * failures, deadlocks, connection timeouts) while failing fast on permanent
  * errors (constraint violations, invalid data).
- * 
+ *
  * **CRITICAL IDEMPOTENCY REQUIREMENT:**
  * The `fn` callback MUST be idempotent. It will be re-executed multiple times
  * on transient failures. Any side effects (sending emails, webhooks, calling
  * external APIs) MUST occur AFTER the transaction commits successfully, not
  * inside the retried block.
- * 
+ *
  * @example
  * ```typescript
  * const result = await withRetryableTransaction(
@@ -310,7 +310,7 @@ export function classifyConflict(error: unknown): ConflictRetryInfo['conflictCod
  * // Side effects go here, after successful commit
  * await sendNotification(result)
  * ```
- * 
+ *
  * @param pool - PostgreSQL connection pool
  * @param fn - Idempotent transaction function to execute
  * @param options - Retry configuration options

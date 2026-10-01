@@ -1,4 +1,5 @@
 import { Pool, type PoolClient, type QueryResult } from "pg";
+import { Pool, type PoolClient, type QueryResult } from "pg";
 import { createHash } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { AppError, ErrorCode } from "../lib/errors.js";

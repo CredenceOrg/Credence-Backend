@@ -1,8 +1,19 @@
 /**
+ * Terminal statuses are those from which an outbox event will not
+ * transition again under normal operation.  Recovery tooling and the
+ * publisher rely on this classification to decide whether an event is
+ * eligible for retry, reinjection, or cleanup.
+ */
+export const TERMINAL_OUTBOX_STATUSES: ReadonlyArray<OutboxEventStatus> = [
+  'published',
+  'dead_letter',
+]
+
+/**
  * Domain event stored in the outbox table.
  */
 export interface OutboxEvent {
-  id: bigint
+  id: bilint
   aggregateType: string
   aggregateId: string
   eventType: string
@@ -36,6 +47,13 @@ export interface OutboxEvent {
    * already delivered and skips straight to markPublished.
    */
   publishIdempotencyKey?: string | null
+  /**
+   * Timestamp of the most recent publish attempt.  Used by recovery
+   * tooling to detect stale `processing` rows whose lease has expired
+   * and to compute retry backoff without relying on wall-clock drift
+   * between the worker and the database.
+   */
+  lastAttemptAt?: Date | null
 }
 
 export type OutboxEventStatus = 'pending' | 'processing' | 'published' | 'failed' | 'dead_letter'
@@ -202,26 +220,15 @@ export type OutboxQuarantineReason =
   | 'unknown_event_type'
 
 /**
- * All quarantine reasons, useful for validation and exhaustive tests.
+ * Reasons an outbox event may be recovered from a non-terminal state.
+ * Kept as a closed union so callers cannot silently introduce new
+ * recovery paths without updating downstream metrics and audit logs.
  */
-export const OUTBOX_QUARANTINE_REASONS: readonly OutboxQuarantineReason[] = [
-  'malformed_json',
-  'schema_invalid',
-  'oversized_payload',
-  'unknown_event_type',
-] as const
-
-/**
- * Returns true when `value` is a valid {@link OutboxQuarantineReason}.
- */
-export function isOutboxQuarantineReason(
-  value: unknown,
-): value is OutboxQuarantineReason {
-  return (
-    typeof value === 'string' &&
-    (OUTBOX_QUARANTINE_REASONS as readonly string[]).includes(value)
-  )
-}
+export type OutboxRecoveryReason =
+  | 'lease_expired'
+  | 'stale_processing'
+  | 'retry_exhausted'
+  | 'manual_reinject'
 
 export interface OutboxQuarantineEntry {
   id: bigint
@@ -237,6 +244,12 @@ export interface OutboxQuarantineEntry {
   quarantinedAt: Date
   reinjectedAt: Date | null
   reinjectedBy: string | null
+  /**
+   * Reason the entry was quarantined.  Mirrors `reason` but is nullable
+   * for rows written before the reason column was introduced, so
+   * recovery tooling can distinguish legacy rows from new ones.
+   */
+  recoveryReason?: OutboxRecoveryReason | null
 }
 
 /**
@@ -248,6 +261,13 @@ export interface CreateOutboxEvent {
   eventType: string
   payload: Record<string, unknown>
   maxRetries?: number
+  /**
+   * Optional idempotency key supplied by the caller.  When present the
+   * publisher will reuse it instead of generating a fresh one, which
+   * lets callers safely retry event creation without duplicating
+   * downstream side effects.
+   */
+  publishIdempotencyKey?: string | null
   traceId?: string | null
   spanId?: string | null
   tracestate?: string | null
@@ -262,40 +282,197 @@ export interface OutboxCleanupConfig {
   publishedRetentionDays: number
   /** Delete failed events older than this many days. Default: 30 */
   failedRetentionDays: number
+  /**
+   * Delete dead-letter events older than this many days.  Defaults to
+   * `failedRetentionDays` when omitted so existing callers keep their
+   * current behavior while new callers can tune dead-letter retention
+   * independently.
+   */
+  deadLetterRetentionDays?: number
 }
 
 /**
- * Default cleanup policy applied when a caller does not supply one.
- */
-export const DEFAULT_OUTBOX_CLEANUP_CONFIG: OutboxCleanupConfig = {
-  publishedRetentionDays: 7,
-  failedRetentionDays: 30,
-}
-
-/**
- * Returns true when `value` is a usable {@link OutboxCleanupConfig}.
+ * Runtime guards and invariants for the outbox domain types.
  *
- * Boundary behavior: retention days must be finite, non-negative
- * integers. Zero is allowed (delete immediately) but negative or
- * non-finite values are rejected so that a misconfigured cleanup job
- * cannot delete events that are still needed for recovery.
+ * These helpers are the single source of truth for the boundary and
+ * state-transition invariants of the outbox model. They are deliberately
+ * pure (no I/O, no clocks) so that they are deterministic and easy to
+ * test across the success, rejection, boundary and regression matrix.
  */
-export function isValidOutboxCleanupConfig(
-  value: unknown,
-): value is OutboxCleanupConfig {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Partial<OutboxCleanupConfig>
-  return (
-    isValidRetentionDays(candidate.publishedRetentionDays) &&
-    isValidRetentionDays(candidate.failedRetentionDays)
-  )
+
+export const OUTBOX_EVENT_STATUSES: readonly OutboxEventStatus[] = [
+  'pending',
+  'processing',
+  'published',
+  'failed',
+  'dead_letter',
+] as const
+
+export const OUTBOX_QUARANTINE_REASONS: readonly OutboxQuarantineReason[] = [
+  'malformed_json',
+  'schema_invalid',
+  'oversized_payload',
+  'unknown_event_type',
+] as const
+
+/**
+ * Maximum number of retries allowed for a single outbox event.
+ * This bounds the retry loop so a poison message cannot cycle forever.
+ */
+export const MAX_RETRIES_LIMIT = 100
+
+/**
+ * Maximum length of a single identifier (aggregateType, aggregateId,
+ * eventType). Keeps identifiers bounded so they can be used in logs and
+ * indexes without unbounded growth.
+ */
+export const MAX_IDENTIFIER_LENGTH = 255
+
+/**
+ * The canonical allowed state transitions for an outbox event.
+ *
+ * Invariants:
+ * - `published` and `dead_letter` are terminal; no further transitions.
+ * - `pending` may only move to `processing` or `dead_letter`.
+ * - `processing` may move to `published`, `failed` or `dead_letter`.
+ * - `failed` may be retried (`pending`) or given up on (`dead_letter`).
+ */
+export const OUTBOX_STATE_TRANSITIONS: Readonly<Record<OutboxEventStatus, readonly OutboxEventStatus[]>> = {
+  pending: ['processing', 'dead_letter'],
+  processing: ['published', 'failed', 'dead_letter'],
+  failed: ['pending', 'dead_letter'],
+  published: [],
+  dead_letter: [],
+} as const
+
+export const TERMINAL_OUTBOX_STATUSES: readonly OutboxEventStatus[] = [
+  'published',
+  'dead_letter',
+] as const
+
+export function isOutboxEventStatus(value: unknown): value is OutboxEventStatus {
+  return typeof value === 'string' && (OUTBOX_EVENT_STATUSES as readonly string[]).includes(value)
 }
 
-function isValidRetentionDays(value: unknown): value is number {
-  return (
-    typeof value === 'number' &&
-    Number.isFinite(value) &&
-    Number.isInteger(value) &&
-    value >= 0
-  )
+export function isOutboxQuarantineReason(value: unknown): value is OutboxQuarantineReason {
+  return typeof value === 'string' && (OUTBOX_QUARANTINE_REAQ==NS as readonly string[]).includes(value)
+}
+
+export function isTerminalOutboxStatus(status: OutboxEventStatus): boolean {
+  return (TERMINAL_OUTBOX_STATUSES as readonly string[]).includes(status)
+}
+
+/**
+ * Returns true when a transition from `from` to `to` is allowed by the
+ * outbox state machine. Terminal states never transition.
+ */
+export function canTransitionOutboxStatus(
+  from: OutboxEventStatus,
+  to: OutboxEventStatus,
+): boolean {
+  if (!isOutboxEventStatus(from) || !isOutboxEventStatus(to)) return false
+  if (from === to) return false
+  return OUTBOX_STATE_TRANSITIONS[from].includes(to)
+}
+
+/**
+ * Asserts that a state transition is allowed, throwing a descriptive error
+ * otherwise. Used by the worker and reinjuction paths to fail closed.
+ */
+export function assertOutboxStateTransition(
+  from: OutboxEventStatus,
+  to: OutboxEventStatus,
+): void {
+  if (!canTransitionOutboxStatus(from, to)) {
+    throw new Error(`invalid outbox state transition: ${from} -> ${to}`)
+  }
+}
+
+/**
+ * Returns true when the event can be retried. An event is retrieable when
+ * it is in a retryable state and has not yet exhausted its retry budget.
+ */
+export function canRetryOutboxEvent(event: Pick<OutboxEvent, 'status' | 'retryCount' | 'maxRetries'>): boolean {
+  if (event.status !== 'failed' && event.status !== 'pending') {
+    return false
+  }
+  if (!Number.isInteger(event.retryCount) || event.retryCount < 0) return false
+  if (!Number.isInteger(event.maxRetries) || event.maxRetries < 0) return false
+  return event.retryCount < event.maxRetries
+}
+
+/**
+ * Returns true when an event has exhausted its retry budget and must be
+ * dead-lettered rather than retried again.
+ */
+export function isOutboxEventExhausted(event: Pick<OutboxEvent, 'retryCount' | 'maxRetries'>): boolean {
+  if (!Number.isInteger(event.retryCount) || event.retryCount < 0) return true
+  if (!Number.isInteger(event.maxRetries) || event.maxRetries < 0) return true
+  return event.retryCount >= event.maxRetries
+}
+
+/**
+ * Returns true when the lease hold by a consumer has expired. A null or
+ * missing lease is treated as expired so an orphaned `processing` event
+ * can be reclaimed by another worker.
+ */
+export function isOutboxLeaseExpired(
+  leaseExpiresAt: Date | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!leaseExpiresAt) return true
+  const expires = leaseExpiresAt instanceof Date ? leaseExpiresAt.getTime() : NaN
+  if (!Number.isFinite(expires)) return true
+  return expires <= now.getTime()
+}
+
+/**
+ * Returns true when a `processing` event can be reclaimed by another
+ * consumer. This is the recovery path for a worker that crashed mid-lease.
+ */
+export function canReclaimOutboxEvent(
+  event: Pick<OutboxEvent, 'status' | 'leaseExpiresAt' | 'consumerId'>,
+  now: Date = new Date(),
+): boolean {
+  if (event.status !== 'processing') return false
+  return isOutboxLeaseExpired(event.leaseExpiresAt, now)
+}
+
+/**
+ * Validates the identifier fields of a `CreateOutboxEvent`. Returns a
+ * list of human-readable errors; an empty list means the input is valid.
+ * This is the central validation entry point used by the atomic coordinator
+ * and the direct emitter path.
+ */
+export function validateCreateOutboxEvent(input: CreateOutboxEvent): string[] {
+  const errors: string[] = []
+  if (!input || typeof input !== 'object') {
+    return ['event must be an object']
+  }
+  for (const field of ['aggregateType', 'aggregateId', 'eventType'] as const) {
+    const value = input[field]
+    if (typeof value !== 'string' || value.trim().length === 0) {
+      errors.push(`${field} must be a non-empty string`)
+      continue
+    }
+    if (value.length > MAX_IDENTIFIER_LENGTH) {
+      errors.push(`${field} must be at most ${MAX_IDENTIFIER_LENGTH} characters`)
+    }
+  }
+  if (input.payload === null || typeof input.payload !== 'object' || Array.isArray(input.payload)) {
+    errors.push('payload must be a plain object')
+  }
+  if (input.maxRetries !== undefined) {
+    if (!Number.isInteger(input.maxRetries) || input.maxRetries < 0 || input.maxRetries > MAX_RETRIES_LIMIT) {
+      errors.push(`maxRetries must be an integer between 0 and ${MAX_RETRIES_LIMIT}`)
+    }
+  }
+  return errors
+}
+
+export function assertCreateOutboxEvent(input: CreateOutboxEvent): void {
+  const errors = validateCreateOutboxEvent(input)
+  if (errors.length > 0) {
+    throw new Error(`invalid outbox event: ${errors.join('; ')}`)
+  }
 }

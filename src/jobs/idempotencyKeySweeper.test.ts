@@ -163,7 +163,7 @@ describe('IdempotencyKeySweeper', () => {
       // Advance one interval to exercise the immediate run plus one scheduled
       // tick. (runAllTimersAsync would never terminate against a recurring
       // setInterval.)
-      await vi.advanceTimesByTimeAsync(1000)
+      await vi.advanceTimersByTimeAsync(1000)
 
       expect(mockQuery).toHaveBeenCalled()
       expect(logger).toHaveBeenCalledWith(
@@ -221,7 +221,7 @@ describe('IdempotencyKeySweeper', () => {
       const storage = new Map(seed.map((row) => [row.key, row.expiresAt]))
 
       const isExpired = (sql: string, expiresAt: Date, now: Date): boolean => {
-        const operator = sql.match(/expires_at\s*(<=|<)\s*NOW(\)/)?.[1]
+        const operator = sql.match(/expires_at\s*(<=|<)\s*NOW\(\)/)?.[1]
         if (!operator) throw new Error(`Could not find expiry comparison in query: ${sql}`)
         return operator === '<=' ? expiresAt <= now : expiresAt < now
       }

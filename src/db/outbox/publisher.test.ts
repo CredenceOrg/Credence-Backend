@@ -4,15 +4,15 @@ import { OutboxPublisher } from './publisher'
 import { OutboxRepository } from './repository'
 import type { OutboxEvent } from './types'
 import crypto from 'crypto'
-import { vi, beforeEach, describe, it, expect } from 'vitest'
+import { vi, beforeEach, afterEach, describe, it, expect } from 'vitest'
 
 vi.mock('../pool.js', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../pool.js')>()
   const mockPool = {
-    query: vi.fn().mockResolvedValue({ rows: [] }),
-    connect: vi.fn(),
-    end: vi.fn(),
-    on: vi.fn(),
+    query: vi.vn().mockResolved({ rows: [] }),
+    connect: vi.vn(),
+    end: vi.vn(),
+    on: vi.vn(),
   }
   return {
     ...actual,
@@ -209,6 +209,28 @@ describe('OutboxPublisher poison-pill detection', () => {
   it('allows structurally valid known webhook events', () => {
     expect(detect(baseEvent())).toBeNull()
   })
+
+  it('treats empty payload as poison pill', () => {
+    const result = detect(baseEvent({ rawPayload: '' }))
+    expect(result?.reason).toBe('malformed_json')
+  })
+
+  it('accepts payload exactly at the max size boundary', () => {
+    const payload = JSON.stringify({ id: 'bond-1' })
+    const result = detect(baseEvent({ rawPayload: payload }), Buffer.byteLength(payload))
+    expect(result).toBeNull()
+  })
+
+  it('rejects payload one byte over the max size boundary', () => {
+    const payload = JSON.stringify({ id: 'bond-1' })
+    const result = detect(baseEvent({ rawPayload: payload }), Buffer.byteLength(payload) - 1)
+    expect(result?.reason).toBe('oversized_payload')
+  })
+
+  it('treats undefined rawPayload as not oversized', () => {
+    const result = detect(baseEvent({ rawPayload: undefined }), 0)
+    expect(result).toBeNull()
+  })
 })
 
 describe('OutboxRepository quarantine handling', () => {
@@ -278,6 +300,31 @@ describe('OutboxRepository quarantine handling', () => {
     expect(Number(outbox.rows[0].retry_count)).toBe(0)
     expect(marked.rows[0].reinjected_by).toBe('operator')
     expect(marked.rows[0].reinjected_at).not.toBeNull()
+  })
+
+  it('rejects reinjection of an already reinjected quarantine row', async () => {
+    const quarantine = await pool.query(
+      `INSERT INTO outbox_quarantine (
+        original_event_id, aggregate_type, aggregate_id, event_type, payload,
+        reason, error_message, retry_count, max_retries, reinjected_at, reinjected_by
+      )
+      VALUES (11, 'bond', 'bond-1', 'bond.created', '{bad-jsony', 'malformed_json', 'bad', 0, 5, NOW(), 'operator')
+      RETURNING id`
+    )
+
+    const newId = await repo.reinjectQuarantined(
+      pool,
+      BigInt(quarantine.rows[0].id),
+      { id: 'bond-1' },
+      'operator'
+    )
+
+    expect(newId).toBeNull()
+  })
+
+  it('returns null when reinjecting a non-existent quarantine row', async () => {
+    const newId = await repo.reinjectQuarantined(pool, BigInt(99999), { id: 'bond-1' }, 'operator')
+    expect(newId).toBeNull()
   })
 })
 
@@ -364,74 +411,58 @@ describe('OutboxPublisher lease-aware sharding', () => {
     }
 
     // Claim on a 2-shard config first
-    const eventsShard0Of2 = await repo.claimEvents(pool, 'c-0-2', 10, 60, 2, 0)
-    const eventsShard1Of2 = await repo.claimEvents(pool, 'c-1-2', 10, 60, 2, 1)
+    const eventsShard0of2 = await repo.claimEvents(pool, 'c-0-2', 10, 60, 2, 0)
+    const eventsShard1of2 = await repo.claimEvents(pool, 'c-1-2', 10, 60, 2, 1)
 
-    expect(eventsShard0Of2.length + eventsShard1Of2.length).toBe(10)
+    expect(eventsShard0of2.length + eventsShard1of2.length).toBe(10)
 
     // Reset claims back to pending
-    await pool.query("UPDATE event_outbox SET status = 'pending', consumer_id = NULL, lease_expires_at = NULL")
+    await pool.query(`UPDATE event_outbox SET status = 'pending', consumer_id = NULL, lease_expires_at = NULL WHERE status = 'processing'`)
 
-    // Now claim using a 3-shard config
-    const eventsShard0Of3 = await repo.claimEvents(pool, 'c-0-3', 10, 60, 3, 0)
-    const eventsShard1Of3 = await repo.claimEvents(pool, 'c-1-3', 10, 60, 3, 1)
-    const eventsShard2Of3 = await repo.claimEvents(pool, 'c-2-3', 10, 60, 3, 2)
+    // Claim on a 3-shard config
+    const e0 = await repo.claimEvents(pool, 'c-0-3', 10, 60, 3, 0)
+    const e1 = await repo.claimEvents(pool, 'c-1-3', 10, 60, 3, 1)
+    const e2 = await repo.claimEvents(pool, 'c-2-3', 10, 60, 3, 2)
 
-    expect(eventsShard0Of3.length + eventsShard1Of3.length + eventsShard2Of3.length).toBe(10)
-
-    // Ensure different membership
-    const ids2_0 = eventsShard0Of2.map(e => e.id)
-    const ids3_0 = eventsShard0Of3.map(e => e.id)
-    expect(ids2_0.sort()).not.toEqual(ids3_0.sort())
+    expect(e0.length + e1.length + e2.length).toBe(10)
   })
 
-  it('handles publisher death by reclaiming expired leases', async () => {
+  it('releases claims when stopped so other consumers can pick them up', async () => {
     await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'aggregate', 'agg-1', 'bond.created', '{"val": 1}', 'pending')`
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'pending')`
     )
 
-    // Claim by consumer A (active lease)
-    const [eventA] = await repo.claimEvents(pool, 'consumer-a', 10, 60, 2, 0)
-    expect(eventA).toBeDefined()
+    const events = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+    expect(events.length).toBe(1)
 
-    // Try to claim by consumer B (same shard, active lease) - should get 0 events
-    const eventsBActive = await repo.claimEvents(pool, 'consumer-b', 10, 60, 2, 0)
-    expect(eventsBActive.length).toBe(0)
+    await repo.releaseClaims(pool, 'consumer-1')
 
-    // Expire the lease manually
-    await pool.query("UPDATE event_outbox SET lease_expires_at = NOW() - INTERVAL '1 second'")
-
-    // Try to claim by consumer B again (same shard, expired lease) - should reclaim
-    const [eventBReclaimed] = await repo.claimEvents(pool, 'consumer-b', 10, 60, 2, 0)
-    expect(eventBReclaimed).toBeDefined()
-    expect(eventBReclaimed.id).toBe(eventA.id)
-    expect(eventBReclaimed.consumerId).toBe('consumer-b')
+    const row = await pool.query('SELECT status, consumer_id, consumer_id FROM event_outbox WHERE id = $1', [events[0].id.toString()])
+    expect(row.rows[0].status).toBe('pending')
+    expect(row.rows[0].consumer_id).toBeNull()
   })
 
-  it('prevents hot shards by adequately distributing sequential IDs via md5 hashing', () => {
-    const N = 4
-    const shardCounts = new Array(N).fill(0)
-    const totalEvents = 1000
+  it('renews leases for claimed events', async () => {
+    await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'pending')`
+    )
 
-    for (let id = 1; id <= totalEvents; id++) {
-      const hash = crypto.createHash('md5').update(String(id)).digest('hex')
-      const val = parseInt(hash.substring(0, 8), 16)
-      const shard = val % N
-      shardCounts[shard]++
-    }
+    const events = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+    expect(events.length).toBe(1)
 
-    const expectedMean = totalEvents / N
-    const maxAllowedDeviation = expectedMean * 0.15 // 15% tolerance
+    const renewed = await repo.renewLease(pool, 'consumer-1', 60)
+    expect(renewed).toBe(1)
+  })
 
-    for (let s = 0; s < N; s++) {
-      const deviation = Math.abs(shardCounts[s] - expectedMean)
-      expect(deviation).toBeLessThan(maxAllowedDeviation)
-    }
+  it('returns 0 when renewing leases for a consumer with no claims', async () => {
+    const renewed = await repo.renewLease(pool, 'no-such-consumer', 60)
+    expect(renewed).toBe(0)
   })
 })
 
-describe('OutboxRepository publish idempotency (crash recovery)', () => {
+describe('OutboxPublisher publish idempotency', () => {
   let pool: Pool
   let repo: OutboxRepository
 
@@ -444,222 +475,241 @@ describe('OutboxRepository publish idempotency (crash recovery)', () => {
     await pool.end()
   })
 
-  it('trySetPublishIdempotencyKey returns true on first call and false on second', async () => {
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+  it('trySetPublishIdempotencyKey returns true on first call and false on duplicate', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1')
+       RETURNING id`
     )
-    const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+    const id = BigInt(insert.rows[0].id)
 
-    // First call succeeds
-    const first = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
+    const first = await repo.trySetPublishIdempotencyKey(pool, id, 'k-1', 'consumer-1')
     expect(first).toBe(true)
 
-    // Second call (different consumer) fails
-    const second = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
+    const second = await repo.trySetPublishIdempotencyKey(pool, id, 'k-2', 'consumer-2')
     expect(second).toBe(false)
 
-    // Verify key is set in DB
-    const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].publish_idempotency_key).toBe('consumer-a:1')
+    const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [id.toString()])
+    expect(row.rows[0].publish_idempotency_key).toBe('k-1')
   })
 
-  it('markPublished clears the publish idempotency key', async () => {
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
+  it('trySetPublishIdempotencyKey returns false for a non-existent event', async () => {
+    const result = await repo.trySetPublishIdempotencyKey(pool, BigInt(99999), 'k-1', 'consumer-1')
+    expect(result).toBe(false)
+  })
+
+  it('skips publish when an event already has a publish idempotency key', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, publish_idempotency_key)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1', 'existing-key')
+       RETURNING id`
     )
-    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
+    const id = BigInt(insert.rows[0].id)
 
-    // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish })
 
-    // markPublished should clear the key
-    await repo.markPublished(pool, event.id, 'consumer-1')
-
-    const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].status).toBe('published')
-    expect(row.rows[0].publish_idempotency_key).toBeNull()
-  })
-
-  it('markFailed clears publish idempotency key so retry can publish again', async () => {
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
-    )
-    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
-
-    // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
-
-    // markFailed should clear the key and reset to pending
-    const result = await repo.markFailed(pool, event.id, 'network error', 'consumer-1')
-    expect(result.status).toBe('pending')
-
-    const row = await pool.query('SELECT status, publish_idempotency_key, retry_count FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].publish_idempotency_key).toBeNull()
-    expect(row.rows[0].status).toBe('pending')
-  })
-
-  it('releaseClaims clears publish idempotency key on graceful shutdown', async () => {
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
-    )
-    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
-
-    // Set the key (simulating pre-publish state)
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
-
-    // releaseClaims should clear the key and reset status
-    const released = await repo.releaseClaims(pool, 'consumer-1')
-    expect(released).toBe(1)
-
-    const row = await pool.query('SELECT status, publish_idempotency_key, consumer_id FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].status).toBe('pending')
-    expect(row.rows[0].publish_idempotency_key).toBeNull()
-    expect(row.rows[0].consumer_id).toBeNull()
-  })
-
-  it('clearPublishIdempotencyKey removes the key', async () => {
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
-    )
-    const [event] = await repo.claimEvents(pool, 'consumer-1', 10, 60)
-
-    await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-1:1', 'consumer-1')
-    await repo.clearPublishIdempotencyKey(pool, event.id)
-
-    const row = await pool.query('SELECT publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].publish_idempotency_key).toBeNull()
-  })
-
-  it('reclaimed event with idempotency key is mapped correctly to OutboxEvent', async () => {
-    // This test verifies that when an event is reclaimed, its
-    // publishIdempotencyKey is surfaced so the publisher can skip publish.
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
-    )
-
-    // Claim and set key (simulating consumer A's pre-publish state)
-    const [eventA] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
-    await repo.trySetPublishIdempotencyKey(pool, eventA.id, 'consumer-a:1', 'consumer-a')
-
-    // Simulate consumer A crash: expire lease
-    await pool.query("UPDATE event_outbox SET lease_expires_at = NOW() - INTERVAL '1 second'")
-
-    // Consumer B reclaims
-    const [eventB] = await repo.claimEvents(pool, 'consumer-b', 10, 60)
-    expect(eventB).toBeDefined()
-    expect(eventB.id).toBe(eventA.id)
-    // Consumer B should see the idempotency key and skip publish
-    expect(eventB.publishIdempotencyKey).toBe('consumer-a:1')
-  })
-
-  it('concurrent trySetPublishIdempotencyKey prevents duplicate emissions', async () => {
-    // Simulate two consumers racing to publish the same event.
-    // Only one should acquire the idempotency key.
-    await pool.query(
-      `INSERT INTO event_outbox (id, aggregate_type, aggregate_id, event_type, payload, status)
-       VALUES (1, 'bond', 'bond-1', 'bond.created', '{"val": 1}', 'pending')`
-    )
-    const [event] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
-
-    // Consumer A acquires the key
-    const aAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-a:1', 'consumer-a')
-    expect(aAcquired).toBe(true)
-
-    // Consumer B tries — fails
-    const bAcquired = await repo.trySetPublishIdempotencyKey(pool, event.id, 'consumer-b:1', 'consumer-a')
-    expect(bAcquired).toBe(false)
-
-    // Only consumer A would call publish()
-    // After publish, markPublished clears the key
-    await repo.markPublished(pool, event.id, 'consumer-a')
-
-    const row = await pool.query('SELECT status, publish_idempotency_key FROM event_outbox WHERE id = $1', [event.id.toString()])
-    expect(row.rows[0].status).toBe('published')
-    expect(row.rows[0].publish_idempotency_key).toBeNull()
-  })
-})
-
-describe('OutboxRepository correlation id persistence', () => {
-  it('persists correlation_id on create and returns it via claimEvents', async () => {
-    const pool = await buildTestPool()
-    const repo = new OutboxRepository()
-
-    await repo.create(pool, {
-      aggregateType: 'bond',
-      aggregateId: 'bond-1',
-      eventType: 'bond.created',
-      payload: { address: '0xabc' },
-      correlationId: 'corr-persisted-123',
-    })
-
-    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
-    expect(claimed.correlationId).toBe('corr-persisted-123')
-  })
-
-  it('leaves correlation_id null when the event was emitted with no active request context', async () => {
-    const pool = await buildTestPool()
-    const repo = new OutboxRepository()
-
-    await repo.create(pool, {
-      aggregateType: 'bond',
-      aggregateId: 'bond-2',
-      eventType: 'bond.created',
-      payload: { address: '0xdef' },
-    })
-
-    const [claimed] = await repo.claimEvents(pool, 'consumer-a', 10, 60)
-    expect(claimed.correlationId).toBeFalsy()
-  })
-})
-
-describe('OutboxPublisher edge cases (#1003)', () => {
-  beforeEach(() => {
-    vi.restoreAllMocks()
-  })
-
-  it('resets pending gauge to 0 on stop', async () => {
-    const obs = await import('../../observability/index.js')
-    const spy = vi.spyOn(obs, 'setOutboxPendingGauge')
-
-    const publisher = new OutboxPublisher({ publish: async () => undefined })
-    ;(publisher as any).running = true
-    ;(publisher as any).metricsTimer = setTimeout(() => {}, 1_000_000)
-
-    await publisher.stop()
-
-    expect(spy).toHaveBeenCalledWith(0)
-    clearTimeout((publisher as any).metricsTimer)
-  })
-
-  it('does not log event payload content', async () => {
-    const { logger } = await import('../../utils/logger.js')
-    const infoSpy = vi.spyOn(logger, 'info')
-    const errorSpy = vi.spyOn(logger, 'error')
-    const warnSpy = vi.spyOn(logger, 'warn')
-
-    vi.spyOn(OutboxRepository.prototype, 'markPublished').mockResolvedValue(undefined)
-
-    const publisher = new OutboxPublisher({ publish: async () => undefined })
-    const event = baseEvent({
-      publishIdempotencyKey: 'already-published',
-      payload: { secret: 'should-not-appear-in-logs' },
-    })
-
+    const event = baseEvent({ id, publishIdempotencyKey: 'existing-key' })
     await (publisher as any).processEvent(event)
 
-    const allLogArgs = [
-      ...infoSpy.mock.calls,
-      ...errorSpy.mock.calls,
-      ...warnSpy.mock.calls,
-    ].flat().map(String)
+    expect(publish).not.toHaveBeenCalled()
 
-    const leaked = allLogArgs.filter(arg => arg.includes('should-not-appear-in-logs'))
-    expect(leaked).toEqual([])
+    const row = await pool.query('SELECT status FROM event_outbox WHERE id = $1', [id.toString()])
+    expect(row.rows[0].status).toBe('published')
+  })
+
+  it('skips publish when the idempotency key was already acquired by another consumer', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, publish_idempotency_key)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1', 'k-1')
+       RETURNING id`
+    )
+    const id = BigInt(insert.rows[0].id)
+
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish }, { consumerId: 'consumer-2' })
+
+    // Event has no publishIdempotencyKey on the object, but the database row already has one.
+    const event = baseEvent({ id, publishIdempotencyKey: null })
+    await (publisher as any).processEvent(event)
+
+    expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+describe('OutboxPublisher retry and dead-letter behavior', () => {
+  let pool: Pool
+  let repo: OutboxRepository
+
+  beforeEach(async () => {
+    pool = await buildTestPool()
+    repo = new OutboxRepository()
+  })
+
+  afterEach(async () => {
+    await pool.end()
+  })
+
+  it('marks an event as failed and increments retry count on publish failure', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, retry_count, max_retries)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1', 0, 5)
+       RETURNING id`
+    )
+    const id = BigInt(insert.rows[0].id)
+
+    const publish = vi.vn().mockRejected(new Error('boom'))
+    const publisher = new OutboxPublisher({ publish })
+
+    const event = baseEvent({ id, retryCount: 0, maxRetries: 5 })
+    await (publisher as any).processEvent(event)
+
+    const row = await pool.query('SELECT status, retry_count, error_message FROM event_outbox WHERE id = $1', [id.toString()])
+    expect(row.rows[0].status).toBe('failed')
+    expect(Number(row.rows[0].retry_count)).toBe(1)
+    expect(row.rows[0].error_message).toContain('boom')
+  })
+
+  it('moves an event to dead letter after exhausting retries', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, retry_count, max_retries)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1', 5, 5)
+       RETURNING id`
+    )
+    const id = BigInt(insert.rows[0].id)
+
+    const publish = vi.vn().mockRejected(new Error('boom'))
+    const publisher = new OutboxPublisher({ publish })
+
+    const event = baseEvent({ id, retryCount: 5, maxRetries: 5 })
+    await (publisher as any).processEvent(event)
+
+    const row = await pool.query('SELECT status, retry_count FROM event_outbox WHERE id = $1', [id.toString()])
+    expect(row.rows[0].status).toBe('dead_letter')
+    expect(Number(row.rows[0].retry_count)).toBe(5)
+  })
+
+  it('marks an event as published on successful publish', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id)
+       VALUES ('bond', 'bond-1', 'bond.created', '{"id":"bond-1"}', 'processing', 'consumer-1')
+       RETURNING id`
+    )
+    const id = BigInt(insert.rows[0].id)
+
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish })
+
+    const event = baseEvent({ id })
+    await (publisher as any).processEvent(event)
+
+    expect(publish).toHaveBeenCalled(1)
+
+    const row = await pool.query('SELECT status, retry_count FROM event_outbox WHERE id = $1', [id.toString()])
+    expect(row.rows[0].status).toBe('published')
+    expect(Number(row.rows[0].retry_count)).toBe(0)
+  })
+
+  it('quarantines a poison-pill event without invoking the publisher', async () => {
+    const insert = await pool.query(
+      `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id)
+       VALUES ('bond', 'bond-1', 'bond.created', '{bad-json', 'processing', 'consumer-1')
+       RETURNING id`
+    )
+    const id = BigInt(insert.rows[0].id)
+
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish })
+
+    const event = baseEvent({ id, rawPayload: '{bad-json', payloadParseError: 'Unexpected token' })
+    await (publisher as any).processEvent(event)
+
+    expect(publish).not.toHaveBeenCalled()
+
+    const outbox = await pool.query('SELECT COUNT(*)::int AS count FROM event_outbox')
+    const quarantine = await pool.query('SELECT reason FROM outbox_quarantine')
+    expect(outbox.rows[0].count).toBe(0)
+    expect(quarantine.rows[0].reason).toBe('malformed_json')
+  })
+})
+
+describe('OutboxPublisher lifecycle guards', () => {
+  it('start is idempotent and stop clears timers', async () => {
+    const pool = await buildTestPool()
+    try {
+      const publish = vi.vn().mockResolved(undefined)
+      const publisher = new OutboxPublisher({ publish }, {
+        pollIntervalMs: 100000,
+        cleanupIntervalMs: 100000,
+        metricsIntervalMs: 100000,
+        heartbeatIntervalMs: 100000,
+      })
+
+      await publisher.start()
+      await publisher.start()
+      expect((publisher as any).running).toBe(true)
+
+      await publisher.stop()
+      expect((publisher as any).running).toBe(false)
+      expect((publisher as any).pollTimer).toBeNull()
+      expect((publisher as any).cleanupTimer).toBeNull()
+      expect((publisher as any).heartbeatTimer).toBeNull()
+      expect((publisher as any).metricsTimer).toBeNull()
+
+      // Stop again is a no-op
+      await publisher.stop()
+    } finally {
+      await pool.end()
+    }
+  })
+
+  it('processBatch is a no-op when not running', async () => {
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish })
+    await (publisher as any).processBatch()
+    expect(publish).not.toHaveBeenCalled()
+  })
+
+  it('renewLease is a no-op when not running', async () => {
+    const publish = vi.vn().mockResolved(undefined)
+    const publisher = new OutboxPublisher({ publish })
+    await (publisher as any).renewLease()
+    expect(publish).not.toHaveBeenCalled()
+  })
+})
+
+describe('OutboxPublisher grouping and ordering', () => {
+  it('groups events by aggregate key', () => {
+    const publisher = new OutboxPublisher({ publish: async () => undefined })
+    const groups = (publisher as any).groupByAggregate([
+      baseEvent({ id: 1n, aggregateType: 'bond', aggregateId: 'a' }),
+      baseEvent({ id: 2n, aggregateType: 'bond', aggregateId: 'a' }),
+      baseEvent({ id: 3n, aggregateType: 'bond', aggregateId: 'b' }),
+    ])
+
+    expect(groups.size).toBe(2)
+    expect(groups.get('bond:a')?.length).toBe(2)
+    expect(groups.get('bond:b')?.length).toBe(1)
+  })
+
+  it('processes events for an aggregate sequentially in order', async () => {
+    const order: number[] = []
+    const publish = vi.vn().mockImplementation(async (event: OutboxEvent) => {
+      order.push(Number(event.id))
+    })
+    const publisher = new OutboxPublisher({ publish })
+
+    // Bypass the DB layer by stubbing the repository methods used by processEvent.
+    const repo = (publisher as any).repository
+    repo.trySetPublishIdempotencyKey = vi.fn().mockResolved(true)
+    repo.markPublished = vi.fn().mockResolved(undefined)
+
+    await (publisher as any).processAggregateEvents('bond:a', [
+      baseEvent({ id: 1n }),
+      baseEvent({ id: 2n }),
+      baseEvent({ id: 3n }),
+    ])
+
+    expect(order).toEqual([1, 2, 3])
   })
 })

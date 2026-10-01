@@ -789,30 +789,6 @@ export class SorobanClient {
       details: error,
     });
   }
-
-  private isRetryable(error: SorobanClientError): boolean {
-    if (error.code === "NETWORK_ERROR" || error.code === "TIMEOUT_ERROR") {
-      return true;
-    }
-
-    if (error.code === "HTTP_ERROR") {
-      return (
-        error.status === 408 ||
-        error.status === 429 ||
-        (error.status !== undefined && error.status >= 500)
-      );
-    }
-
-    if (error.code === "RPC_ERROR") {
-      return isRetryableRpcCode(error.rpcCode);
-    }
-
-    return false;
-  }
-
-  private getDelayMs(attempt: number): number {
-    return getBackoffDelayMs(this.retryOptions, attempt, this.randomFn);
-  }
 }
 
 export function createSorobanClient(
