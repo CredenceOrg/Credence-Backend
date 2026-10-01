@@ -87,6 +87,13 @@ export class CursorRepository {
    * @throws Error if paging_token format is invalid
    */
   async upsert(input: UpsertCursorInput): Promise<HorizonCursor> {
+    // Validate stream_name is a non-empty string
+    if (typeof input.streamName !== 'string' || input.streamName.trim() === '') {
+      throw new Error(
+        `Invalid stream_name: expected non-empty string, received ${JSON.stringify(input.streamName)}.`
+      )
+    }
+
     // Validate paging_token format (Horizon tokens are numeric strings or 'now')
     if (!this.isValidPagingToken(input.pagingToken)) {
       throw new Error(
@@ -116,6 +123,13 @@ export class CursorRepository {
    * @param streamName - The stream identifier to delete
    */
   async delete(streamName: string): Promise<boolean> {
+    // Validate stream_name is a non-empty string
+    if (typeof streamName !== 'string' || streamName.trim() === '') {
+      throw new Error(
+        `Invalid stream_name: expected non-empty string, received ${JSON.stringify(streamName)}.`
+      )
+    }
+
     const { rowCount } = await this.db.query(
       `DELETE FROM horizon_cursors WHERE stream_name = $1`,
       [streamName]
@@ -137,6 +151,9 @@ export class CursorRepository {
    * @returns true if valid, false otherwise
    */
   private isValidPagingToken(token: string): boolean {
+    if (typeof token !== 'string') {
+      return false
+    }
     if (token === 'now') {
       return true
     }

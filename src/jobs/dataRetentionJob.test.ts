@@ -174,4 +174,124 @@ describe('DataRetentionJob', () => {
       expect(params?.[1]).toBe(5)
     })
   })
+
+  describe('Boundary and Recovery', () => {
+    it('handles negative ttlDays by skipping just like 0', async () => {
+      const config = makeConfig({
+        entities: {
+          scoreHistory: { ttlDays: -5 },
+          auditLogs: { ttlDays: 365 },
+          slashEvents: { ttlDays: -1 },
+          outboxEvents: { ttlDays: 30 },
+          evidence: { ttlDays: 0 },
+        },
+      })
+      const db = makeDb(4, 4)
+      const job = new DataRetentionJob(db, config)
+      const result = await job.run()
+
+      expect(result.entities.find((e) => e.entity === 'score_history')!.expiredCount).toBe(0)
+      expect(result.entities.find((e) => e.entity === 'slash_events')!.expiredCount).toBe(0)
+      expect(result.entities.find((e) => e.entity === 'audit_logs')!.deletedCount).toBe(4)
+      expect(result.totalExpired).toBe(8)
+    })
+
+    it('continues processing if one entity DB query fails (partial failure)', async () => {
+      const db = makeDb(5, 5)
+      db.query = vi.fn().mockImplementation((sql: string) => {
+        if (sql.includes('audit_logs')) {
+          return Promise.reject(new Error('DB connection lost during audit_logs'))
+        }
+        if (sql.includes('COUNT(*)')) {
+          return Promise.resolve({ rows: [{ cnt: '5' }], rowCount: 1 })
+        }
+        return Promise.resolve({ rows: [], rowCount: 5 })
+      })
+
+      const job = new DataRetentionJob(db, makeConfig())
+      const result = await job.run()
+
+      const auditAudit = result.entities.find((e) => e.entity === 'audit_logs')!
+      expect(auditAudit.deletedCount).toBe(0)
+      
+      const scoreAudit = result.entities.find((e) => e.entity === 'score_history')!
+      expect(scoreAudit.deletedCount).toBe(5)
+
+      expect(result.totalDeleted).toBe(15) 
+    })
+
+    it('handles missing evidenceService gracefully in non-dryRun mode', async () => {
+      const db = makeDb(2, 2)
+      const config = makeConfig({
+        entities: {
+          scoreHistory: { ttlDays: 0 },
+          auditLogs: { ttlDays: 0 },
+          slashEvents: { ttlDays: 0 },
+          outboxEvents: { ttlDays: 0 },
+          evidence: { ttlDays: 30 },
+        },
+      })
+      const job = new DataRetentionJob(db, config, () => {}) 
+      const result = await job.run()
+      
+      const ev = result.entities.find((e) => e.entity === 'evidence')!
+      expect(ev.expiredCount).toBe(2)
+      expect(ev.deletedCount).toBe(0) 
+    })
+
+    it('handles audit log service throwing without failing the job', async () => {
+      const db = makeDb(1, 1)
+      const auditLogService = {
+        logAction: vi.fn().mockRejectedValue(new Error('Audit log service down'))
+      }
+      
+      const job = new DataRetentionJob(db, makeConfig(), () => {}, undefined, auditLogService as any)
+      const result = await job.run()
+      
+      expect(result.totalDeleted).toBe(4)
+      expect(auditLogService.logAction).toHaveBeenCalled()
+    })
+
+    it('handles partial failures during evidence crypto-shredding', async () => {
+      const db = makeDb(3, 3)
+      const evidenceService = {
+        getExpiredEvidenceIds: vi.fn().mockReturnValue(['id1', 'id2', 'id3']),
+        cryptoShredEvidence: vi.fn().mockImplementation((id) => {
+          if (id === 'id2') return Promise.reject(new Error('Shred failed'))
+          return Promise.resolve({ proofJwt: 'xxx' })
+        })
+      }
+      const config = makeConfig({
+        entities: {
+          scoreHistory: { ttlDays: 0 },
+          auditLogs: { ttlDays: 0 },
+          slashEvents: { ttlDays: 0 },
+          outboxEvents: { ttlDays: 0 },
+          evidence: { ttlDays: 30 },
+        }
+      })
+      const job = new DataRetentionJob(db, config, () => {}, evidenceService as any)
+      const result = await job.run()
+      
+      const ev = result.entities.find((e) => e.entity === 'evidence')!
+      expect(ev.deletedCount).toBe(2) 
+      
+      const deleteCalls = (db.query as ReturnType<typeof vi.fn>).mock.calls.filter(
+         ([sql]) => sql.includes('UPDATE evidence') || sql.includes('DELETE') || sql.includes('WITH rows AS')
+      )
+      expect(deleteCalls.length).toBeGreaterThan(0) 
+    })
+    
+    it('forces batchLimit to a minimum of 1', async () => {
+      const db = makeDb(1, 1)
+      const job = new DataRetentionJob(db, makeConfig({ batchLimit: 0 }))
+      await job.run()
+
+      const calls = (db.query as ReturnType<typeof vi.fn>).mock.calls as [string, unknown[]][]
+      const deleteCalls = calls.filter(([sql]) => sql.trim().startsWith('WITH rows AS'))
+      deleteCalls.forEach(([, params]) => {
+        expect(params?.[1]).toBe(1) 
+      })
+    })
+  })
 })

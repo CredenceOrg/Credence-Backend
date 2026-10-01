@@ -6,9 +6,9 @@
 
 This assignment implements a complete severity-aware alert routing matrix for the Credence Backend monitoring infrastructure.
 
-## What Has Been Implemented
+##What Has Been Implemented
 
-### 1. ✅ AlertManager Configuration
+###1. ✅ AlertManager Configuration
 
 **File:** [monitoring/prometheus/alertmanager.yml](../monitoring/prometheus/alertmanager.yml)
 

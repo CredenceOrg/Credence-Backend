@@ -474,6 +474,102 @@ describe('BondRepository', () => {
                expect(await bondRepo.delete('00000000-0000-0000-0000-000000000000')).toBe(false)
           })
      })
+
+     describe('boundary and recovery behavior', () => {
+          it('keeps a rejected create from inserting a row and allows a valid retry', async () => {
+               const invalidIdentityId = '00000000-0000-0000-0000-000000000000'
+               await expect(bondRepo.create({
+                    identityId: invalidIdentityId,
+                    bondedAmount: '10',
+                    bondDuration: '7 days',
+               })).rejects.toThrow()
+               expect(await bondRepo.findByIdentityId(identityId)).toEqual([])
+
+               const created = await bondRepo.create({ identityId, bondedAmount: '10', bondDuration: '7 days' })
+               expect((await bondRepo.findByIdentityId(identityId)).map((bond) => bond.id)).toEqual([created.id])
+          })
+
+          it('preserves the previous value after a rejected update and accepts a valid retry', async () => {
+               const bond = await bondRepo.create({ identityId, bondedAmount: '100', bondDuration: '30 days' })
+               await expect(bondRepo.update(bond.id, { slashedAmount: '-1', active: false })).rejects.toThrow()
+               const unchanged = await bondRepo.findById(bond.id)
+               expect(unchanged?.slashedAmount).toBe(0)
+               expect(unchanged?.active).toBe(true)
+
+               const updated = await bondRepo.update(bond.id, { slashedAmount: '0', active: false })
+               expect(updated?.slashedAmount).toBe(0)
+               expect(updated?.active).toBe(false)
+          })
+
+          it('returns only active bonds whose end is before the current time', async () => {
+               const start = new Date(Date.now() - 60 * 86_400_000)
+               const past = new Date(Date.now() - 86_400_000)
+               const future = new Date(Date.now() + 86_400_000)
+               const expiredId = await insertBond(pool, identityId, '10', '1 day', start, true, past)
+               await insertBond(pool, identityId, '20', '1 day', start, true, future)
+               await insertBond(pool, identityId, '30', '1 day', start, false, past)
+
+               expect((await bondRepo.findExpired()).map((bond) => bond.id)).toEqual([expiredId])
+          })
+
+          it('allows only one concurrent deactivation to change the state', async () => {
+               const bond = await bondRepo.create({ identityId, bondedAmount: '100', bondDuration: '30 days' })
+               const results = await Promise.all([bondRepo.deactivate(bond.id), bondRepo.deactivate(bond.id)])
+               expect(results.sort()).toEqual([false, true])
+               expect((await bondRepo.findById(bond.id))?.active).toBe(false)
+          })
+
+          it('handles duplicate concurrent deletes without affecting another bond', async () => {
+               const target = await bondRepo.create({ identityId, bondedAmount: '10', bondDuration: '7 days' })
+               const other = await bondRepo.create({ identityId, bondedAmount: '20', bondDuration: '7 days' })
+               const results = await Promise.all([bondRepo.delete(target.id), bondRepo.delete(target.id)])
+               expect(results.sort()).toEqual([false, true])
+               expect(await bondRepo.findById(target.id)).toBeNull()
+               expect((await bondRepo.findById(other.id))?.id).toBe(other.id)
+          })
+
+          it('binds untrusted identifiers and update values as query parameters', async () => {
+               const calls: Array<{ sql: string; values: unknown[] | undefined }> = []
+               const recordingPool = {
+                    query: async (sql: string, values?: unknown[]) => {
+                         calls.push({ sql, values })
+                         return { rows: [], rowCount: 0 }
+                    },
+               } as unknown as Pool
+               const repo = new BondRepository(recordingPool)
+               const untrustedId = "x' OR TRUE --"
+
+               await repo.findByIdentityId(untrustedId)
+               await repo.update(untrustedId, { slashedAmount: '0', active: false })
+               await repo.delete(untrustedId)
+
+               expect(calls.map(({ sql }) => sql.includes(untrustedId))).toEqual([false, false, false])
+               expect(calls.map(({ values }) => values)).toEqual([
+                    [untrustedId],
+                    ['0', false, untrustedId],
+                    [untrustedId],
+               ])
+          })
+
+          it('propagates a read failure and fetches current data on retry', async () => {
+               const bond = await bondRepo.create({ identityId, bondedAmount: '10', bondDuration: '7 days' })
+               let failNextRead = true
+               const flakyPool = {
+                    query: (sql: string, values?: unknown[]) => {
+                         if (failNextRead) {
+                              failNextRead = false
+                              return Promise.reject(new Error('database temporarily unavailable'))
+                         }
+                         return proxiedPool.query(sql, values)
+                    },
+               } as unknown as Pool
+               const retryingRepo = new BondRepository(flakyPool)
+
+               await expect(retryingRepo.findById(bond.id)).rejects.toThrow('database temporarily unavailable')
+               await bondRepo.update(bond.id, { active: false })
+               expect((await retryingRepo.findById(bond.id))?.active).toBe(false)
+          })
+     })
 })
 
 // ---------------------------------------------------------------------------
