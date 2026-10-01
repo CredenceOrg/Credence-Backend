@@ -27,6 +27,14 @@ export interface WorkerLeaseManagerOptions {
 
 export type WorkerLeaseState = 'standby' | 'leader'
 
+interface LeaseSession {
+  client: PoolClient
+  held: boolean
+  querying: boolean
+  disposed: boolean
+  onError: (error: Error) => void
+}
+
 export interface WorkerLeaseEvents {
   onStateChange?: (state: WorkerLeaseState) => void
   onAcquired?: () => void
@@ -41,11 +49,11 @@ export interface WorkerLeaseEvents {
  * ### How it works
  *
  * 1. On `start()`, the manager checks out a dedicated connection from the
- *    pool and calls `pg_advisory_lock($1)` on it.
+ *    pool and calls `pg_try_advisory_lock($1)` on it.
  * 2. If the lock is acquired, the instance becomes **leader** and its
  *    `onStateChange('leader')` callback fires.  A heartbeat timer verifies
  *    the connection is still alive.
- * 3. If the lock is not immediately available (`pg_advisory_try_lock`
+ * 3. If the lock is not immediately available (`pg_try_advisory_lock`
  *    returns false), the instance stays in **standby** and retries every
  *    `retryIntervalMs`.
  * 4. On `stop()`, the manager calls `pg_advisory_unlock($1)` and releases
@@ -68,7 +76,10 @@ export class WorkerLeaseManager {
   private readonly now: () => Date
   private readonly log: (msg: string) => void
 
-  private client: PoolClient | null = null
+  private lease: LeaseSession | null = null
+  private generation = 0
+  private acquisition: { generation: number; promise: Promise<void> } | null = null
+  private stopping: Promise<void> | null = null
   private running = false
   private state: WorkerLeaseState = 'standby'
   private retryTimer: NodeJS.Timeout | null = null
@@ -80,6 +91,14 @@ export class WorkerLeaseManager {
     this.lockKey = opts.lockKey ?? OUTBOX_LEADER_LOCK_KEY
     this.retryIntervalMs = opts.retryIntervalMs ?? 5_000
     this.heartbeatIntervalMs = opts.heartbeatIntervalMs ?? 10_000
+    if (!Number.isSafeInteger(this.lockKey)) {
+      throw new RangeError('lockKey must be a safe integer')
+    }
+    for (const [name, value] of [['retryIntervalMs', this.retryIntervalMs], ['heartbeatIntervalMs', this.heartbeatIntervalMs]] as const) {
+      if (!Number.isInteger(value) || value < 1 || value > 2_147_483_647) {
+        throw new RangeError(`${name} must be an integer between 1 and 2147483647`)
+      }
+    }
     this.now = opts.now ?? (() => new Date())
     this.log = opts.log ?? ((msg) => logger.info(msg))
   }
@@ -99,9 +118,15 @@ export class WorkerLeaseManager {
    * immediately and begins retrying if unsuccessful.
    */
   async start(): Promise<void> {
-    if (this.running) return
+    // A restart must not race the previous session's unlock/return to pool.
+    if (this.stopping) await this.stopping
+    if (this.running) {
+      await this.acquisition?.promise
+      return
+    }
     this.running = true
-    this.log(`[WorkerLease] Starting (lockKey=${this.lockKey}, retry=${this.retryIntervalMs}ms)`)
+    this.generation++
+    this.safeLog(`[WorkerLease] Starting (lockKey=${this.lockKey}, retry=${this.retryIntervalMs}ms)`)
 
     // Attempt acquisition immediately
     await this.tryAcquire()
@@ -111,13 +136,28 @@ export class WorkerLeaseManager {
    * Stop the lease manager, release the advisory lock, and clean up timers.
    */
   async stop(): Promise<void> {
+    if (this.stopping) {
+      await this.stopping
+      return
+    }
     if (!this.running) return
     this.running = false
-
+    this.generation++
     this.clearTimers()
-    await this.releaseLock()
+    const lease = this.lease
+    this.lease = null
+    let finished!: () => void
+    const stopping = new Promise<void>(resolve => { finished = resolve })
+    this.stopping = stopping
+    // Revoke observable leadership before cleanup or any observer runs.
     this.setState('standby')
-    this.log('[WorkerLease] Stopped')
+    try {
+      await this.releaseLock(lease)
+    } finally {
+      finished()
+      if (this.stopping === stopping) this.stopping = null
+      this.safeLog('[WorkerLease] Stopped')
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -126,68 +166,111 @@ export class WorkerLeaseManager {
 
   private async tryAcquire(): Promise<void> {
     if (!this.running) return
+    if (this.acquisition?.generation === this.generation) {
+      await this.acquisition.promise
+      return
+    }
+    const acquisition = { generation: this.generation, promise: Promise.resolve() }
+    acquisition.promise = this.acquireSession(acquisition.generation)
+    this.acquisition = acquisition
+    try {
+      await acquisition.promise
+    } finally {
+      if (this.acquisition === acquisition) this.acquisition = null
+    }
+  }
 
-    // Ensure we have a dedicated connection
-    if (!this.client) {
-      try {
-        this.client = await this.pool.connect()
-      } catch (err) {
-        this.events.onError?.(err instanceof Error ? err : new Error(String(err)))
+  private async acquireSession(generation: number): Promise<void> {
+    let lease: LeaseSession | null = null
+    try {
+      const client = await this.pool.connect()
+      const session: LeaseSession = {
+        client, held: false, querying: false, disposed: false,
+        onError: error => this.loseLease(session, generation, error, 'connection'),
+      }
+      lease = session
+      // A stopped/restarted run owns neither this connection nor future
+      // results from it. Return late connections without querying them.
+      if (!this.running || this.generation !== generation) {
+        this.disposeSession(session, false)
+        return
+      }
+      this.lease = session
+      client.on('error', session.onError)
+      session.querying = true
+      const { rows } = await client.query<{ acquired: boolean }>(
+        'SELECT pg_try_advisory_lock($1) AS acquired',
+        [this.lockKey],
+      )
+      session.querying = false
+      if (!this.isCurrent(session, generation)) {
+        this.disposeSession(session, true)
+        return
+      }
+      const acquired = rows[0]?.acquired
+      if (typeof acquired !== 'boolean') {
+        throw new Error('Invalid advisory-lock acquisition response')
+      }
+      if (!acquired) {
+        // Standby workers must not exhaust the pool while waiting for a
+        // different session to release leadership.
+        this.disposeSession(session, false)
+        this.safeLog('[WorkerLease] Leadership unavailable — retrying')
         this.scheduleRetry()
         return
       }
-    }
-
-    try {
-      const { rows } = await this.client.query<{ pg_advisory_lock: boolean }>(
-        'SELECT pg_advisory_lock($1) AS pg_advisory_lock',
-        [this.lockKey],
-      )
-
-      const acquired = rows[0]?.pg_advisory_lock === true
-      if (acquired) {
-        this.log(`[WorkerLease] Acquired leadership (lockKey=${this.lockKey})`)
-        this.setState('leader')
-        this.events.onAcquired?.()
-        this.startHeartbeat()
-        return
-      }
-
-      // pg_advisory_lock blocks until acquired, so reaching here is
-      // unexpected with session-level locks.  Log and retry.
-      this.log('[WorkerLease] pg_advisory_lock returned unexpected false — retrying')
-      this.scheduleRetry()
+      session.held = true
+      this.safeLog(`[WorkerLease] Acquired leadership (lockKey=${this.lockKey})`)
+      this.setState('leader')
+      if (!this.isCurrent(session, generation)) return
+      this.notify(() => this.events.onAcquired?.())
+      if (this.isCurrent(session, generation)) this.startHeartbeat(session, generation)
     } catch (err) {
-      this.events.onError?.(err instanceof Error ? err : new Error(String(err)))
-      await this.releaseClient()
-      this.scheduleRetry()
+      if (lease && this.isCurrent(lease, generation)) {
+        this.loseLease(lease, generation, err, 'acquisition')
+      } else if (!lease && this.running && this.generation === generation) {
+        this.reportError(err, 'pool connection')
+        this.scheduleRetry()
+      }
     }
   }
 
-  private startHeartbeat(): void {
+  private startHeartbeat(lease: LeaseSession, generation: number): void {
     this.clearTimers()
 
     this.heartbeatTimer = setInterval(() => {
-      this.heartbeat().catch((err) => {
-        this.events.onError?.(err instanceof Error ? err : new Error(String(err)))
-      })
+      void this.heartbeat(lease, generation)
     }, this.heartbeatIntervalMs)
   }
 
-  private async heartbeat(): Promise<void> {
-    if (!this.running || this.state !== 'leader' || !this.client) return
+  private async heartbeat(lease: LeaseSession, generation: number): Promise<void> {
+    if (!this.isCurrent(lease, generation) || this.state !== 'leader' || lease.querying) return
 
+    lease.querying = true
     try {
       // Verify connection is alive — if the backend session dropped, this
       // will throw and we re-enter standby.
-      await this.client.query('SELECT 1')
-    } catch {
-      this.log('[WorkerLease] Heartbeat failed — connection lost, reverting to standby')
-      await this.releaseClient()
-      this.setState('standby')
-      this.events.onReleased?.()
-      this.scheduleRetry()
+      await lease.client.query('SELECT 1')
+    } catch (err) {
+      this.loseLease(lease, generation, err, 'heartbeat')
+    } finally {
+      lease.querying = false
     }
+  }
+
+  private isCurrent(lease: LeaseSession, generation: number): boolean {
+    return this.running && this.generation === generation && this.lease === lease && !lease.disposed
+  }
+
+  private loseLease(lease: LeaseSession, generation: number, error: unknown, phase: string): void {
+    if (!this.isCurrent(lease, generation)) return
+    this.generation++
+    this.clearTimers()
+    this.disposeSession(lease, true)
+    this.setState('standby')
+    if (lease.held) this.notify(() => this.events.onReleased?.())
+    this.reportError(error, phase)
+    this.scheduleRetry()
   }
 
   private scheduleRetry(): void {
@@ -199,28 +282,40 @@ export class WorkerLeaseManager {
     }, this.retryIntervalMs)
   }
 
-  private async releaseLock(): Promise<void> {
-    if (!this.client) return
-
+  private async releaseLock(lease: LeaseSession | null): Promise<void> {
+    if (!lease || lease.disposed) return
+    let unlocked = false
     try {
-      await this.client.query('SELECT pg_advisory_unlock($1)', [this.lockKey])
-      this.log(`[WorkerLease] Released advisory lock (lockKey=${this.lockKey})`)
-      this.events.onReleased?.()
-    } catch {
-      // Connection may already be dead — nothing to do
+      // Never queue an unlock behind an unbounded pending query. Destroy
+      // that session instead; session closure releases advisory locks.
+      if (lease.held && !lease.querying) {
+        lease.querying = true
+        const { rows } = await lease.client.query<{ unlocked: boolean }>('SELECT pg_advisory_unlock($1) AS unlocked', [this.lockKey])
+        unlocked = rows[0]?.unlocked === true
+        if (!unlocked) this.reportError(new Error('Unlock was not confirmed'), 'unlock')
+      }
+    } catch (err) {
+      this.reportError(err, 'unlock')
     } finally {
-      await this.releaseClient()
+      // Returning a session with uncertain lock ownership would leak a
+      // session lock into unrelated pool users. Only confirmed unlocks
+      // are safe to reuse; all other paths destroy the session exactly once.
+      this.disposeSession(lease, !unlocked)
+      if (lease.held) this.notify(() => this.events.onReleased?.())
     }
   }
 
-  private async releaseClient(): Promise<void> {
-    if (!this.client) return
+  private disposeSession(lease: LeaseSession, destroy: boolean): void {
+    if (lease.disposed) return
+    lease.disposed = true
+    if (this.lease === lease) this.lease = null
+    lease.client.removeListener('error', lease.onError)
     try {
-      this.client.release()
+      if (destroy) lease.client.release(true)
+      else lease.client.release()
     } catch {
-      // ignore
+      this.safeLog('[WorkerLease] Client release failed')
     }
-    this.client = null
   }
 
   private clearTimers(): void {
@@ -238,7 +333,33 @@ export class WorkerLeaseManager {
     if (this.state === newState) return
     const prev = this.state
     this.state = newState
-    this.events.onStateChange?.(newState)
-    this.log(`[WorkerLease] State: ${prev} → ${newState}`)
+    this.safeLog(`[WorkerLease] State: ${prev} → ${newState}`)
+    this.notify(() => this.events.onStateChange?.(newState))
+  }
+
+  private reportError(error: unknown, phase: string): void {
+    // Keep raw errors available to the existing callback contract, while
+    // internal logs contain only a known phase, never DSNs or credentials.
+    this.safeLog(`[WorkerLease] ${phase} failed`)
+    this.notify(() => this.events.onError?.(error instanceof Error ? error : new Error('Lease operation failed')))
+  }
+
+  private notify(callback: () => void): void {
+    try {
+      // The public callbacks remain void callbacks. Observe a promise if
+      // an existing caller supplies an async function, without letting
+      // its rejection escape a timer or interrupt resource cleanup.
+      void Promise.resolve(callback()).catch(() => this.safeLog('[WorkerLease] Lifecycle callback failed'))
+    } catch {
+      this.safeLog('[WorkerLease] Lifecycle callback failed')
+    }
+  }
+
+  private safeLog(message: string): void {
+    try {
+      this.log(message)
+    } catch {
+      // Observability must not change lock ownership or prevent cleanup.
+    }
   }
 }

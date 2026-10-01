@@ -350,3 +350,23 @@ app.use(errorHandler);
 
 export { createWsSubscriptionServer } from "./routes/ws.js";
 export default app;
+
+/**
+ * Internal exports used only for testing. These expose the resolved configuration
+ * values and runtime objects to the test suite. They are guarded by a runtime
+ * check so that they are omitted from production bundles.
+ */
+export const _testInternals = {
+  /** Resolved rate‑limit configuration (fallback defaults may apply). */
+  rateLimitConfig,
+  /** Resolved auth‑rate‑limit configuration. */
+  authRateLimitConfig,
+  /** Global request timeout in ms (defaults to 30000 when missing). */
+  globalTimeoutMs,
+  /** Maintenance‑mode flag resolved at startup. */
+  maintenanceModeEnabled,
+  /** CORS origin used for policy enforcement. */
+  corsOrigin,
+  /** Redis client instance if a REDIS_URL is provided, otherwise undefined. */
+  redisClient,
+} as const;

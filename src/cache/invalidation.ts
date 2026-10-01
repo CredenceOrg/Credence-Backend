@@ -5,20 +5,23 @@
  * to prevent stale reads in concurrent environments.
  */
 
-import { cache, CacheService } from './redis.js'
+import { cache } from './redis.js'
 import { recordStaleCacheRead } from '../middleware/metrics.js'
 import { getInvalidationBus } from './invalidationBus.js'
 import { logger } from '../utils/logger.js'
 import { ValidationError, ServiceUnavailableError } from '../lib/errors.js'
 import { transactionContextStorage, runPostCommit, runRollback } from '../db/transaction.js'
 
-/**
- * Compute a deterministic, stable hash for comparing cached values.
- * Produces identical output for structurally equal objects regardless of
- * property insertion order, so it is safe to use for stale-read detection.
- */
 function computeStableHash(value: unknown): string {
-  return JSON.stringify(value, Object.keys(value as object).sort())
+  if (value === null || typeof value !== 'object') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => computeStableHash(item)).join(',')}]`
+  }
+  const record = value as Record<string, unknown>
+  const keys = Object.keys(record).sort()
+  return `{${keys.map((k) => `${JSON.stringify(k)}:${computeStableHash(record[k])}`).join(',')}}`
 }
 
 export interface InvalidationOptions {
@@ -63,12 +66,12 @@ export async function invalidateCache(
       if (verify && freshData) {
         const staleCheck = await cache.get(namespace, key)
         if (staleCheck) {
-          const isStale = verifyFn 
+          const isStale = verifyFn
             ? verifyFn(staleCheck, freshData)
-            : JSON.stringify(staleCheck) !== JSON.stringify(freshData)
+            : computeStableHash(staleCheck) !== computeStableHash(freshData)
           if (isStale) {
             recordStaleCacheRead(namespace)
-            console.warn(`Stale cache detected for ${namespace}:${key}`)
+            logger.warn(`Stale cache detected for ${namespace}:${key}`)
           }
         }
       }
@@ -304,13 +307,37 @@ export async function invalidateTenantCache(
     throw new ValidationError('tenantId must be a valid UUID')
   }
 
-  const health = await cache.healthCheck()
-  if (!health.healthy) {
-    logger.error(`Tenant cache invalidation aborted: cache backend unavailable for tenant ${tenantId}`)
+  let health: { healthy: boolean }
+  try {
+    health = await cache.healthCheck()
+  } catch (error) {
+    logger.error({
+      message: 'Tenant cache invalidation aborted: cache health check failed',
+      tenantId,
+      error: error instanceof Error ? error.message : String(error)
+    })
     throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
   }
 
-  const keysCleared = await cache.clearNamespace(tenantId)
+  if (!health.healthy) {
+    logger.error({
+      message: 'Tenant cache invalidation aborted: cache backend unavailable',
+      tenantId
+    })
+    throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
+  }
+
+  let keysCleared: number
+  try {
+    keysCleared = await cache.clearNamespace(tenantId)
+  } catch (error) {
+    logger.error({
+      message: 'Tenant cache invalidation failed while clearing namespace',
+      tenantId,
+      error: error instanceof Error ? error.message : String(error)
+    })
+    throw new ServiceUnavailableError('Cache backend is unavailable; tenant cache was not invalidated')
+  }
 
   logger.info({
     message: 'Tenant cache invalidated',

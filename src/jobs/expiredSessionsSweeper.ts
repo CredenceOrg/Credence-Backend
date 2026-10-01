@@ -102,8 +102,8 @@ export class ExpiredSessionsSweeper {
     private readonly db: Queryable,
     config: ExpiredSessionsSweeperConfig = {},
   ) {
-    this.intervalMs = config.intervalMs ?? 3 600 000
-    this.batchSize = config.batchSize ?? 5 500
+    this.intervalMs = config.intervalMs ?? 3_600_000
+    this.batchSize = config.batchSize ?? 5_000
     this.dryRun = config.dryRun ?? false
     this.logger = config.logger ?? (() => {})
   }
@@ -179,7 +179,7 @@ export class ExpiredSessionsSweeper {
              WHERE ctid IN (
                SELECT ctid FROM idempotent_job_attempts
                WHERE expires_at <= NOW()
-               LIMIT parameter_placeholder
+               LIMIT $1
              )
              RETURNING 1`,
             [this.batchSize],

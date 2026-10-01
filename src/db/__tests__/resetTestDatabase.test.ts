@@ -127,3 +127,123 @@ describe('resetTestDatabase', () => {
     })
   })
 })
+
+describe('resetTestDatabase — boundary & recovery', () => {
+  beforeEach(() => {
+    pgMocks.query.mockReset()
+    pgMocks.query.mockResolvedValue({ rows: [] })
+    pgMocks.end.mockClear()
+    pgMocks.Pool.mockClear()
+  })
+
+  describe('parseTestDatabaseTarget — boundaries', () => {
+    it('rejects a connection string that is not a URL', () => {
+      expect(() => parseTestDatabaseTarget('not a url')).toThrow(
+        'must be a valid PostgreSQL connection string',
+      )
+    })
+
+    it('decodes a percent-encoded database name', () => {
+      const { databaseName } = parseTestDatabaseTarget(
+        'postgresql://credence:credence@localhost:5433/credence%5Ftest',
+      )
+      expect(databaseName).toBe(DEFAULT_TEST_DATABASE_NAME)
+    })
+
+    it('preserves host, port and credentials while retargeting the admin URL at postgres', () => {
+      const { adminConnectionString } = parseTestDatabaseTarget(
+        'postgresql://user:secret@db.example:6000/some_db',
+      )
+      const url = new URL(adminConnectionString)
+      expect(url.hostname).toBe('db.example')
+      expect(url.port).toBe('6000')
+      expect(url.username).toBe('user')
+      expect(url.password).toBe('secret')
+      expect(url.pathname).toBe('/postgres')
+    })
+  })
+
+  describe('assertResetAllowedDatabaseName — boundaries', () => {
+    it('is an exact match: case and whitespace variants are refused', () => {
+      for (const bad of ['', ' ', `${DEFAULT_TEST_DATABASE_NAME} `, 'Credence_Test']) {
+        expect(() => assertResetAllowedDatabaseName(bad)).toThrow(/Refusing to reset/)
+      }
+    })
+  })
+
+  describe('dropAndRecreateDatabase — failure boundaries', () => {
+    it('refuses a non-test database before issuing any query', async () => {
+      const query = vi.fn()
+      const pool = { query } as unknown as import('pg').Pool
+      await expect(dropAndRecreateDatabase(pool, 'production')).rejects.toThrow(/Refusing to reset/)
+      expect(query).not.toHaveBeenCalled()
+    })
+
+    it('passes the database name as a parameter to pg_terminate_backend', async () => {
+      const query = vi.fn().mockResolvedValue({ rows: [] })
+      const pool = { query } as unknown as import('pg').Pool
+      await dropAndRecreateDatabase(pool, DEFAULT_TEST_DATABASE_NAME)
+      expect(query.mock.calls[0][1]).toEqual([DEFAULT_TEST_DATABASE_NAME])
+    })
+  })
+
+  describe('resetTestDatabase — recovery', () => {
+    it('always closes the admin pool, even when the reset fails', async () => {
+      pgMocks.query.mockRejectedValueOnce(new Error('terminate failed'))
+
+      await expect(
+        resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL, skipMigrations: true }),
+      ).rejects.toThrow('terminate failed')
+      expect(pgMocks.end).toHaveBeenCalledTimes(1)
+    })
+
+    it('throws the migration error when migrations fail', async () => {
+      const spy = vi
+        .spyOn(runner, 'runMigration')
+        .mockResolvedValue({ success: false, applied: [], error: 'boom' })
+
+      await expect(resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL })).rejects.toThrow(
+        'boom',
+      )
+      expect(pgMocks.end).toHaveBeenCalled()
+      spy.mockRestore()
+    })
+
+    it('throws a generic message when migrations fail without an error string', async () => {
+      const spy = vi.spyOn(runner, 'runMigration').mockResolvedValue({ success: false, applied: [] })
+
+      await expect(resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL })).rejects.toThrow(
+        'Migration failed after test database reset',
+      )
+      spy.mockRestore()
+    })
+
+    it('recovers: a failed migration attempt can be retried successfully', async () => {
+      const spy = vi
+        .spyOn(runner, 'runMigration')
+        .mockResolvedValueOnce({ success: false, applied: [], error: 'transient' })
+        .mockResolvedValueOnce({ success: true, applied: ['001_initial_schema'] })
+
+      await expect(resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL })).rejects.toThrow(
+        'transient',
+      )
+
+      const result = await resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL })
+      expect(result.migrationApplied).toEqual(['001_initial_schema'])
+      spy.mockRestore()
+    })
+
+    it('passes verbose through to the migration runner (defaults to true)', async () => {
+      const spy = vi
+        .spyOn(runner, 'runMigration')
+        .mockResolvedValue({ success: true, applied: [] })
+
+      await resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL })
+      expect(spy).toHaveBeenCalledWith(expect.objectContaining({ verbose: true }))
+
+      await resetTestDatabase({ testDatabaseUrl: DEFAULT_TEST_DATABASE_URL, verbose: false })
+      expect(spy).toHaveBeenLastCalledWith(expect.objectContaining({ verbose: false }))
+      spy.mockRestore()
+    })
+  })
+})

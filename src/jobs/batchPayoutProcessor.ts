@@ -58,6 +58,11 @@ export interface PayoutExecutor {
 
 export interface BatchPayoutOptions {
   logger?: (message: string) => void
+  /**
+   * Maximum number of items allowed in a single batch.
+   * Defaults to 1000. Non-positive or non-finite values fall back to the default.
+   */
+  maxBatchSize?: number
 }
 
 /**
@@ -67,9 +72,16 @@ export interface BatchPayoutOptions {
  * failure never corrupts the status of other items in the batch.
  * Failed items are marked as retry-eligible; already-processed
  * (duplicate) items are skipped.
+ *
+ * Invariants:
+ * - The entire payload is validated before any write or execution.
+ * - A duplicate transaction hash within the same batch is never executed twice.
+ * - A failure in one item never mutates the outcome of another item.
+ * - Every failed item is marked retry-eligible so no work is silently lost.
  */
 export class BatchPayoutProcessor {
   private readonly logger: (message: string) => void
+  private readonly maxBatchSize: number
 
   constructor(
     private readonly store: PayoutSettlementStore,
@@ -77,6 +89,14 @@ export class BatchPayoutProcessor {
     options: BatchPayoutOptions = {},
   ) {
     this.logger = options.logger ?? (() => {})
+    const configuredMax = options.maxBatchSize
+    this.maxBatchSize =
+      typeof configuredMax === 'number' &&
+      Number.isFinite(configuredMax) &&
+      Number.isInteger(configuredMax) &&
+      configuredMax > 0
+        ? configuredMax
+        : 1000
   }
 
   /**
@@ -87,6 +107,12 @@ export class BatchPayoutProcessor {
     if (!Array.isArray(items)) {
       throw new ValidationError('Batch payout payload must be an array of items')
     }
+    if (items.length > this.maxBatchSize) {
+      throw new ValidationError(
+        `Batch payout payload exceeds the maximum of ${this.maxBatchSize} items`,
+      )
+    }
+    const seenTransactionHashes = new Set<string>()
     for (let i = 0; i < items.length; i++) {
       const item = items[i]
       if (!item || typeof item !== 'object') {
@@ -113,6 +139,12 @@ export class BatchPayoutProcessor {
           `Item at index ${i} has invalid transactionHash: must be a string between 1 and 128 characters`,
         )
       }
+      if (seenTransactionHashes.has(item.transactionHash)) {
+        throw new ValidationError(
+          `Item at index ${i} has duplicate transactionHash ${item.transactionHash}`,
+        )
+      }
+      seenTransactionHashes.add(item.transactionHash)
       if (item.settledAt !== undefined && (!(item.settledAt instanceof Date) || isNaN(item.settledAt.getTime()))) {
         throw new ValidationError(`Item at index ${i} has invalid settledAt: must be a valid Date object`)
       }
@@ -259,5 +291,5 @@ export function getRetryableItems(
       .filter((r) => r.retryEligible)
       .map((r) => r.transactionHash),
   )
-  return original.filter((item) => retryHashes.has(item.transactionHash))
+  return original.filter((item) => retryHashs.has(item.transactionHash))
 }

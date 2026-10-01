@@ -14,6 +14,20 @@ vi.mock('../redis.js', () => ({
   }
 }))
 
+vi.mock('../invalidationBus.js', () => ({
+  getInvalidationBus: vi.fn()
+}))
+
+vi.mock('../../middleware/metrics.js', () => ({
+  recordStaleCacheRead: vi.fn()
+}))
+
+vi.mock('../../db/transaction.js', () => ({
+  transactionContextStorage: { getStore: vi.fn(() => undefined) },
+  runPostCommit: vi.fn(),
+  runRollback: vi.fn()
+}))
+
 const VALID_TENANT_ID = '3fa85f64-5717-4562-b3fc-2c963f66afa6'
 
 describe('invalidateTenantCache', () => {
@@ -31,7 +45,7 @@ describe('invalidateTenantCache', () => {
 
     const result = await invalidateTenantCache(VALID_TENANT_ID)
 
-    expect(cache.clearNamespace).toHaveBeenCalledWith(VALID_TENANT_ID)
+    expect(cache.clearNamespace).toHaveBeenCalledWith(VALID_TENANT_ID, { throwOnError: true })
     expect(result).toEqual({ tenantId: VALID_TENANT_ID, keysCleared: 7 })
   })
 
@@ -69,6 +83,13 @@ describe('invalidateTenantCache', () => {
 
     await expect(invalidateTenantCache(VALID_TENANT_ID)).rejects.toThrow(ServiceUnavailableError)
     expect(cache.clearNamespace).not.toHaveBeenCalled()
+  })
+
+  it('does not convert a clear failure into a successful zero-key result', async () => {
+    vi.mocked(cache.clearNamespace).mockRejectedValue(new Error('redis connection lost'))
+
+    await expect(invalidateTenantCache(VALID_TENANT_ID)).rejects.toThrow(ServiceUnavailableError)
+    expect(cache.clearNamespace).toHaveBeenCalledWith(VALID_TENANT_ID, { throwOnError: true })
   })
 })
 

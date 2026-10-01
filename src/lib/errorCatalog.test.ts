@@ -13,12 +13,16 @@ import {
   ValidationError,
 } from './errors.js'
 import {
+  API_ERROR_CATALOG_CODES,
   ERROR_CATALOG,
   ERROR_CATALOG_BY_CODE,
   ERROR_CODE_DEPRECATIONS,
   ERROR_LOCALIZATION_CATALOG,
+  TRANSPORT_ERROR_CATALOG_CODES,
+  getCatalogEntry,
   getErrorCatalogEntry,
   getErrorCatalogEntryByCode,
+  getHttpStatus,
   getLocalizedErrorMessage,
   isErrorCode,
 } from './errorCatalog.js'
@@ -106,6 +110,46 @@ describe('error catalog registry', () => {
     expect(getErrorCatalogEntryByCode('not_found')).toEqual(getErrorCatalogEntry(ErrorCode.NOT_FOUND))
     expect(isErrorCode('not-a-real-code')).toBe(false)
     expect(getErrorCatalogEntryByCode('not-a-real-code')).toBeUndefined()
+  })
+
+  it.each([
+    undefined,
+    null,
+    0,
+    false,
+    Symbol('not-an-error-code'),
+    {},
+    [],
+  ])('rejects non-string error code input: %s', (code) => {
+    expect(isErrorCode(code)).toBe(false)
+    expect(getCatalogEntry(code as string)).toBeUndefined()
+    expect(getErrorCatalogEntryByCode(code)).toBeUndefined()
+  })
+
+  it.each(['', 'toString', 'constructor', '__proto__', 'not_found '])(
+    'does not resolve unknown or prototype-shaped code %s',
+    (code) => {
+      expect(isErrorCode(code)).toBe(false)
+      expect(getCatalogEntry(code)).toBeUndefined()
+      expect(getErrorCatalogEntryByCode(code)).toBeUndefined()
+    },
+  )
+
+  it('keeps lookups usable after misses and separates API from transport codes', () => {
+    expect(getErrorCatalogEntryByCode('__proto__')).toBeUndefined()
+    expect(getCatalogEntry('unknown-code')).toBeUndefined()
+    expect(getCatalogEntry(ErrorCode.NOT_FOUND)?.code).toBe(ErrorCode.NOT_FOUND)
+    expect(getErrorCatalogEntryByCode(ErrorCode.SERVICE_UNAVAILABLE)?.httpStatus).toBe(503)
+
+    const classifiedCodes = [...API_ERROR_CATALOG_CODES, ...TRANSPORT_ERROR_CATALOG_CODES]
+    expect(new Set(classifiedCodes).size).toBe(classifiedCodes.length)
+    expect(classifiedCodes).toHaveLength(Object.keys(ERROR_CATALOG).length)
+  })
+
+  it('uses a nullish HTTP status fallback without rewriting explicit boundary values', () => {
+    expect(getHttpStatus(ERROR_CATALOG.sdk_invalid_json)).toBe(500)
+    expect(getHttpStatus(ERROR_CATALOG.sdk_network_error)).toBe(0)
+    expect(getHttpStatus(ERROR_CATALOG.NOT_FOUND)).toBe(404)
   })
 })
 

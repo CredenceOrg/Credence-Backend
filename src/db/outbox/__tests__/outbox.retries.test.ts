@@ -330,3 +330,266 @@ describe('Outbox lifecycle transition invariants', () => {
         expect(unchanged.rows[0]).toMatchObject({ status: 'processing', retry_count: 0 })
     })
 })
+
+describe('Outbox boundary and recovery coverage', () => {
+    let pool: Pool
+    let repo: OutboxRepository
+
+    beforeEach(async () => {
+        const built = await buildTestDb()
+        pool = built.pool
+        repo = new OutboxRepository()
+    })
+
+    afterEach(async () => {
+        await pool.end()
+    })
+
+    it('claimEvents returns an empty array when no events are due (boundary: empty set)', async () => {
+        const events = await repo.claimEvents(pool, 'empty-consumer', 10, 60)
+        expect(events).toEqual([])
+    })
+
+    it('claimEvents honors limit=0 boundary and returns nothing', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, created_at)
+             VALUES ('agg', 'zero-limit', 't', '{}', 'pending', NOW())`
+        )
+        const events = await repo.claimEvents(pool, 'zero-consumer', 0, 60)
+        expect(events).toEqual([])
+    })
+
+    it('claimEvents respects the limit boundary and never over-claims', async () => {
+        for (let i = 0; i < 5; i++) {
+            await pool.query(
+                `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, created_at)
+                 VALUES ('agg', $1, 't', '{}', 'pending', NOW() + ($2 || ' second')::interval)`,
+                [`limit-${i}`, String(i)]
+            )
+        }
+        const events = await repo.claimEvents(pool, 'limit-consumer', 2, 60)
+        expect(events.length).toBe(2)
+    })
+
+    it('claimEvents does not return events already claimed by another live consumer (concurrency boundary)', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, created_at)
+             VALUES ('agg', 'concurrent', 't', '{}', 'pending', NOW())`
+        )
+
+        const first = await repo.claimEvents(pool, 'consumer-a', 10, 60)
+        expect(first.length).toBe(1)
+
+        const second = await repo.claimEvents(pool, 'consumer-b', 10, 60)
+        expect(second).toEqual([])
+    })
+
+    it('claimEvents can reclaim an event whose lease has expired (recovery from crashed consumer)', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, lease_expires_at, created_at)
+             VALUES ('agg', 'expired-lease', 't', '{}', 'processing', 'dead-consumer', NOW() - '1 hour'::interval, NOW() - '2 hour'::interval)
+             RETURNING id`
+        )
+
+        const events = await repo.claimEvents(pool, 'recovery-consumer', 10, 60)
+        expect(events.map(e => e.id)).toContain(BigInt(insert.rows[0].id))
+    })
+
+    it('markFailed on a pending (never-claimed) event is rejected without mutating state', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries)
+             VALUES ('agg', 'pending-fail', 't', '{}', 'pending', 0, 5) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        await expect(repo.markFailed(pool, id, 'boom', 'any-consumer')).rejects.toThrow('cannot transition')
+
+        const check = await pool.query<{ status: string; retry_count: number; error_message: string | null }>(
+            `SELECT status, retry_count, error_message FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(check.rows[0]).toMatchObject({ status: 'pending', retry_count: 0, error_message: null })
+    })
+
+    it('markFailed on a non-existent id is rejected without side effects', async () => {
+        await expect(repo.markFailed(pool, BigInt(999999), 'ghost', 'consumer')).rejects.toThrow('cannot transition')
+    })
+
+    it('markPublished on a non-existent id is rejected without side effects', async () => {
+        await expect(repo.markPublished(pool, BigInt(999999), 'consumer')).rejects.toThrow('cannot transition')
+    })
+
+    it('trySetPublishIdempotencyKey returns false for a non-existent id', async () => {
+        const result = await repo.trySetPublishIdempotencyKey(pool, BigInt(999999), 'key', 'consumer')
+        expect(result).toBe(false)
+    })
+
+    it('trySetPublishIdempotencyKey is idempotent for the same key on the same claimed row', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, created_at)
+             VALUES ('agg', 'idem', 't', '{}', 'pending', NOW())`
+        )
+        const [claimed] = await repo.claimEvents(pool, 'idem-owner', 1, 60)
+
+        expect(await repo.trySetPublishIdempotencyKey(pool, claimed.id, 'same-key', 'idem-owner')).toBe(true)
+        expect(await repo.trySetPublishIdempotencyKey(pool, claimed.id, 'same-key', 'idem-owner')).toBe(true)
+    })
+
+    it('markFailed with an empty error message still records a sanitized value', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'empty-err', 't', '{}', 'processing', 0, 5, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const result = await repo.markFailed(pool, id, '', 'consumer')
+        expect(result.status).toBe('pending')
+
+        const check = await pool.query<{ error_message: string | null }>(
+            `SELECT error_message FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(check.rows[0].error_message).not.toBeNull()
+    })
+
+    it('markFailed truncates an extremely long error message to a bounded length', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'long-err', 't', '{}', 'processing', 0, 5, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const huge = 'x'.repeat(10000)
+        await repo.markFailed(pool, id, huge, 'consumer')
+
+        const check = await pool.query<{ error_message: string }>(
+            `SELECT error_message FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(check.rows[0].error_message.length).toBeLessThanOrEqual(1024)
+    })
+
+    it('backoff delay grows monotonically with retry_count until the cap', async () => {
+        const delays: number[] = []
+        for (const retry of [0, 1, 2, 3]) {
+            const insert = await pool.query<{ id: string }>(
+                `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+                 VALUES ('agg', $1, 't', '{}', 'processing', $2, 20, 'consumer', NOW()) RETURNING id`,
+                [`grow-${retry}`, retry]
+            )
+            const id = BigInt(insert.rows[0].id)
+            const before = Date.now()
+            await repo.markFailed(pool, id, 'boom', 'consumer')
+            const check = await pool.query<{ next_attempt_at: string }>(
+                `SELECT next_attempt_at FROM event_outbox WHERE id = $1`,
+                [id.toString()]
+            )
+            delays.push((new Date(check.rows[0].next_attempt_at).getTime() - before) / 1000)
+        }
+        for (let i = 1; i < delays.length; i++) {
+            expect(delays[i]).toBeGreaterThanOrEqual(delays[i - 1])
+        }
+    })
+
+    it('markFailed at retry_count = max_retries - 1 lands on dead_letter (boundary)', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'edge-max', 't', '{}', 'processing', 0, 1, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const result = await repo.markFailed(pool, id, 'boom', 'consumer')
+        expect(result.status).toBe('dead_letter')
+        expect(result.retryCount).toBe(1)
+    })
+
+    it('markFailed with max_retries = 0 immediately dead-letters (boundary)', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'zero-max', 't', '{}', 'processing', 0, 0, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const result = await repo.markFailed(pool, id, 'boom', 'consumer')
+        expect(result.status).toBe('dead_letter')
+    })
+
+    it('concurrent markFailed calls on the same claimed row cannot double-increment retry_count', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'race', 't', '{}', 'processing', 0, 5, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const results = await Promise.allSettled([
+            repo.markFailed(pool, id, 'first', 'consumer'),
+            repo.markFailed(pool, id, 'second', 'consumer'),
+        ])
+
+        const fulfilled = results.filter(r => r.status === 'fulfilled')
+        const rejected = results.filter(r => r.status === 'rejected')
+        expect(fulfilled.length).toBe(1)
+        expect(rejected.length).toBe(1)
+
+        const check = await pool.query<{ retry_count: number; status: string }>(
+            `SELECT retry_count, status FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(Number(check.rows[0].retry_count)).toBe(1)
+        expect(check.rows[0].status).toBe('pending')
+    })
+
+    it('recovers a stuck processing row after lease expiry and completes the lifecycle', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, consumer_id, lease_expires_at, created_at)
+             VALUES ('agg', 'recover', 't', '{}', 'processing', 'crashed', NOW() - '1 hour'::interval, NOW() - '2 hour'::interval)
+             RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const [reclaimed] = await repo.claimEvents(pool, 'recovery', 10, 60)
+        expect(reclaimed.id).toBe(id)
+
+        await repo.markPublished(pool, id, 'recovery')
+
+        const check = await pool.query<{ status: string; processed_at: string | null }>(
+            `SELECT status, processed_at FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(check.rows[0].status).toBe('published')
+        expect(check.rows[0].processed_at).not.toBeNull()
+    })
+
+    it('does not leak secrets in the persisted error message for common token patterns', async () => {
+        const insert = await pool.query<{ id: string }>(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, retry_count, max_retries, consumer_id, created_at)
+             VALUES ('agg', 'leak', 't', '{}', 'processing', 0, 5, 'consumer', NOW()) RETURNING id`
+        )
+        const id = BigInt(insert.rows[0].id)
+
+        const secret = 'S' + 'B'.repeat(55)
+        await repo.markFailed(pool, id, `auth failed token=${secret}`, 'consumer')
+
+        const check = await pool.query<{ error_message: string }>(
+            `SELECT error_message FROM event_outbox WHERE id = $1`,
+            [id.toString()]
+        )
+        expect(check.rows[0].error_message).not.toContain(secret)
+        expect(check.rows[0].error_message).toContain('[REDACTED]')
+    })
+
+    it('claimEvents is stable when called repeatedly with no new work (no duplicate claims)', async () => {
+        await pool.query(
+            `INSERT INTO event_outbox (aggregate_type, aggregate_id, event_type, payload, status, created_at)
+             VALUES ('agg', 'stable', 't', '{}', 'pending', NOW())`
+        )
+
+        const first = await repo.claimEvents(pool, 'stable-consumer', 10, 60)
+        expect(first.length).toBe(1)
+
+        await delay(10)
+
+        const second = await repo.claimEvents(pool, 'stable-consumer', 10, 60)
+        expect(second).toEqual([])
+    })
+})

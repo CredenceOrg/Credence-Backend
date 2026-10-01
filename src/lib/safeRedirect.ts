@@ -4,10 +4,10 @@ import { UnsafeRedirectError } from './errors.js'
  * Control characters (C0 + DEL) that must never appear in a redirect target.
  * Attackers use these to smuggle scheme separators past naive string checks.
  */
-const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/
+const CONTROL_CHAR_PATTERN = /[x\00-\x1f\x7f]/
 
 /**
- * A "safe" relative redirect target is a single-slash, same-origin path.
+ * A safe relative redirect target is a single-slash, same-origin path.
  * Browsers treat a leading `//` (protocol-relative) or a leading backslash
  * (`/\`, `\/`, `\\`) as an authority separator, so those must be rejected
  * even though they superficially "start with a slash".

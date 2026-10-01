@@ -1,261 +1,137 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SettlementReconciler } from './settlementReconciler.js'
 import * as metrics from '../middleware/metrics.js'
 
-// Mock recordSettlementDrift and setSettlementUnmatchedCount helpers
-vi.mock('../middleware/metrics.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../middleware/metrics.js')>()
-  return {
-    ...actual,
-    recordSettlementDrift: vi.fn(),
-    setSettlementUnmatchedCount: vi.fn(),
-  }
-})
+vi.mock('../middleware/metrics.js', () => ({
+  recordSettlementDrift: vi.fn(),
+  setSettlementUnmatchedCount: vi.fn(),
+}))
 
-// Setup a global mock function for transaction call
-const mockTransactionCall = vi.fn()
+const transactionCall = vi.fn()
+vi.mock('@stellar/stellar-sdk', () => ({
+  Horizon: { Server: class {
+    transactions() { return { transaction: () => ({ call: transactionCall }) } }
+  } },
+}))
 
-vi.mock('@stellar/stellar-sdk', () => {
-  return {
-    Horizon: {
-      Server: class MockServer {
-        transactions() {
-          return {
-            transaction: () => {
-              return {
-                call: mockTransactionCall,
-              }
-            },
-          }
-        }
-      },
-    },
-  }
+const now = new Date('2026-09-29T12:00:00.000Z')
+const settlement = (overrides: Record<string, unknown> = {}) => ({
+  id: 'settlement-1', status: 'settled', transaction_hash: 'tx-1', amount: '100.00',
+  updated_at: new Date(now.getTime() - 600_000), ...overrides,
 })
 
 describe('SettlementReconciler', () => {
-  let mockDb: any
+  let rows: ReturnType<typeof settlement>[]
+  let logs: string[]
+  let db: { query: ReturnType<typeof vi.fn> }
 
   beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(now)
     vi.clearAllMocks()
-    mockDb = {
-      query: vi.fn().mockResolvedValue({ rows: [] }),
-    }
+    rows = []
+    logs = []
+    db = { query: vi.fn(async (sql: string) => {
+      if (sql.includes('FROM settlements')) return { rows }
+      if (sql.includes('INSERT INTO settlement_reconciliation_findings')) return { rows: [{ id: 'finding-1', created_at: now }] }
+      if (sql.includes('INSERT INTO settlement_reconciliation_runs')) return { rows: [{ id: 'run-1' }] }
+      return { rows: [], rowCount: 1 }
+    }) }
   })
+  afterEach(() => vi.useRealTimers())
 
-  it('matching records produce no findings', async () => {
-    // DB returns one settled settlement
-    const settlement = {
-      id: 'settlement-1',
-      status: 'settled',
-      transaction_hash: 'tx-hash-1',
-      amount: '100.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000), // 10 minutes ago
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [settlement] })
+  const run = (db: { query: ReturnType<typeof vi.fn> }, logs: string[]) =>
+    new SettlementReconciler(db as any, { logger: (message) => logs.push(message) }).run()
 
-    // Horizon returns transaction was successful
-    mockTransactionCall.mockResolvedValueOnce({ successful: true })
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-1' }] })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    expect(result).toEqual({ runId: 'run-1', checked: 1, discrepancies: 0, errors: 0 })
-    expect(mockTransactionCall).toHaveBeenCalledOnce()
-    // select + persistRunSummary (no linkFindings because 0 discrepancies)
-    expect(mockDb.query).toHaveBeenCalledTimes(2)
+  it('records a matching transaction without a finding', async () => {
+    rows = [settlement()]
+    transactionCall.mockResolvedValueOnce({ successful: true })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 0, errors: 0 })
+    expect(db.query).toHaveBeenCalledTimes(2)
     expect(metrics.recordSettlementDrift).not.toHaveBeenCalled()
+    expect(metrics.setSettlementUnmatchedCount).toHaveBeenCalledWith(0)
   })
 
-  it('mismatches produce findings (state_mismatch)', async () => {
-    // DB returns one settled settlement
-    const settlement = {
-      id: 'settlement-2',
-      status: 'settled',
-      transaction_hash: 'tx-hash-2',
-      amount: '200.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [settlement] })
-
-    // Horizon returns transaction failed on-chain
-    mockTransactionCall.mockResolvedValueOnce({ successful: false })
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-2' }] })
-    // linkFindingsToRun UPDATE
-    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    expect(result).toEqual({ runId: 'run-2', checked: 1, discrepancies: 1, errors: 0 })
-    expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
-    
-    // select + finding insert + persistRunSummary + linkFindings
-    expect(mockDb.query).toHaveBeenCalledTimes(4)
-    expect(mockDb.query.mock.calls[1][0]).toContain('INSERT INTO settlement_reconciliation_findings')
-    expect(mockDb.query.mock.calls[1][1]).toEqual([
-      'settlement-2',
-      'state_mismatch',
-      expect.any(String), // JSON stringified details
-    ])
-
-    const details = JSON.parse(mockDb.query.mock.calls[1][1][2])
-    expect(details.internalStatus).toBe('settled')
-    expect(details.chainStatus).toBe('failed')
+  it('skips recent pending work and checks exactly at the grace boundary', async () => {
+    rows = [
+      settlement({ id: 'recent', status: 'pending', updated_at: new Date(now.getTime() - 299_999) }),
+      settlement({ id: 'boundary', status: 'pending', updated_at: new Date(now.getTime() - 300_000) }),
+    ]
+    transactionCall.mockResolvedValueOnce({ successful: true })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 0 })
+    expect(transactionCall).toHaveBeenCalledOnce()
+    expect(db.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO settlement_reconciliation_findings'))?.[1]?.[0]).toBe('boundary')
   })
 
-  it('missing transaction on-chain produces findings (missing_on_chain)', async () => {
-    const settlement = {
-      id: 'settlement-3',
-      status: 'settled',
-      transaction_hash: 'tx-hash-3',
-      amount: '300.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [settlement] })
-
-    // Horizon throws 404
-    const err: any = new Error('Not Found')
-    err.response = { status: 404 }
-    mockTransactionCall.mockRejectedValueOnce(err)
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-3' }] })
-    // linkFindingsToRun UPDATE
-    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    expect(result).toEqual({ runId: 'run-3', checked: 1, discrepancies: 1, errors: 0 })
+  it('records a Horizon 404 as a missing transaction', async () => {
+    rows = [settlement()]
+    transactionCall.mockRejectedValueOnce({ response: { status: 404 } })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 0 })
     expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('missing_on_chain')
-
-    // select + finding insert + persistRunSummary + linkFindings
-    expect(mockDb.query).toHaveBeenCalledTimes(4)
-    expect(mockDb.query.mock.calls[1][1][1]).toBe('missing_on_chain')
   })
 
-  it('skips recent pending settlements within grace period', async () => {
-    const recentSettlement = {
-      id: 'settlement-recent',
-      status: 'pending',
-      transaction_hash: 'tx-hash-recent',
-      amount: '150.00',
-      updated_at: new Date(Date.now() - 2 * 60 * 1000), // 2 minutes old (grace period is 5 minutes)
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [recentSettlement] })
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-skip' }] })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    // Should skip check
-    expect(result).toEqual({ runId: 'run-skip', checked: 0, discrepancies: 0, errors: 0 })
-    expect(mockTransactionCall).not.toHaveBeenCalled()
+  it('counts a transient Horizon failure and permits a later retry', async () => {
+    rows = [settlement()]
+    transactionCall.mockRejectedValueOnce({ response: { status: 503 } })
+    transactionCall.mockResolvedValueOnce({ successful: false })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 0, errors: 1 })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 0 })
+    expect(db.query.mock.calls.filter(([sql]) => sql.includes('INSERT INTO settlement_reconciliation_findings'))).toHaveLength(1)
   })
 
-  it('checks pending settlements older than grace period', async () => {
-    const oldSettlement = {
-      id: 'settlement-old',
-      status: 'pending',
-      transaction_hash: 'tx-hash-old',
-      amount: '150.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000), // 10 minutes old
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [oldSettlement] })
-
-    // Horizon returns transaction is successful on chain (meaning it settled on chain but still pending in DB)
-    mockTransactionCall.mockResolvedValueOnce({ successful: true })
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-old' }] })
-    // linkFindingsToRun UPDATE
-    mockDb.query.mockResolvedValueOnce({ rowCount: 1 })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    expect(result).toEqual({ runId: 'run-old', checked: 1, discrepancies: 1, errors: 0 })
-    expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
+  it('skips a row with no transaction hash and keeps provider errors out of logs', async () => {
+    rows = [settlement({ transaction_hash: '' }), settlement({ id: 'failed' })]
+    transactionCall.mockRejectedValueOnce(Object.assign(new Error('private provider response'), { response: { status: 503 } }))
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 0, errors: 1 })
+    expect(logs.join('\n')).not.toContain('private provider response')
+    expect(logs.join('\n')).toContain('status=503')
   })
 
-  it('handles Horizon errors gracefully without crashing', async () => {
-    const settlement = {
-      id: 'settlement-err',
-      status: 'settled',
-      transaction_hash: 'tx-hash-err',
-      amount: '400.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [settlement] })
-
-    // Horizon returns 500 internal server error
-    const err: any = new Error('Internal Server Error')
-    err.response = { status: 500 }
-    mockTransactionCall.mockRejectedValueOnce(err)
-
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-err' }] })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    // Errors count should increment, discrepancies should not, and should not crash
-    expect(result).toEqual({ runId: 'run-err', checked: 1, discrepancies: 0, errors: 1 })
-    // select + persistRunSummary (no linkFindings because 0 discrepancies)
-    expect(mockDb.query).toHaveBeenCalledTimes(2)
+  it('keeps a finding observable when the run summary cannot be persisted', async () => {
+    rows = [settlement()]
+    transactionCall.mockResolvedValueOnce({ successful: false })
+    const original = db.query.getMockImplementation()!
+    db.query.mockImplementation((sql: string, params?: unknown[]) =>
+      sql.includes('INSERT INTO settlement_reconciliation_runs')
+        ? Promise.reject(new Error('private database detail')) : original(sql, params))
+    expect(await run(db, logs)).toEqual({ runId: null, checked: 1, discrepancies: 1, errors: 0 })
+    expect(db.query.mock.calls.some(([sql]) => sql.includes('UPDATE settlement_reconciliation_findings'))).toBe(false)
+    expect(logs.join('\n')).not.toContain('private database detail')
   })
 
-  it('reconciles multiple settlements with partial visibility', async () => {
-    const s1 = {
-      id: 'settlement-s1',
-      status: 'settled',
-      transaction_hash: 'tx-hash-s1',
-      amount: '10.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    const s2 = {
-      id: 'settlement-s2',
-      status: 'settled',
-      transaction_hash: 'tx-hash-s2',
-      amount: '20.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    const s3 = {
-      id: 'settlement-s3',
-      status: 'settled',
-      transaction_hash: 'tx-hash-s3',
-      amount: '30.00',
-      updated_at: new Date(Date.now() - 10 * 60 * 1000),
-    }
-    mockDb.query.mockResolvedValueOnce({ rows: [s1, s2, s3] })
+  it('counts a finding write failure without classifying its 404 as a chain failure', async () => {
+    rows = [settlement()]
+    transactionCall.mockResolvedValueOnce({ successful: false })
+    const original = db.query.getMockImplementation()!
+    db.query.mockImplementation((sql: string, params?: unknown[]) =>
+      sql.includes('INSERT INTO settlement_reconciliation_findings')
+        ? Promise.reject(Object.assign(new Error('db failure'), { response: { status: 404 } }))
+        : original(sql, params))
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 1 })
+    expect(metrics.recordSettlementDrift).not.toHaveBeenCalledWith('missing_on_chain')
+    expect(logs.some((message) => message.includes('Failed to save finding'))).toBe(true)
+  })
 
-    // Horizon outputs:
-    mockTransactionCall
-      .mockResolvedValueOnce({ successful: true }) // s1 matches
-      .mockResolvedValueOnce({ successful: false }) // s2 mismatch
-      .mockRejectedValueOnce({ response: { status: 404 } }) // s3 missing
+  it('links only the finding version written by this run', async () => {
+    rows = [settlement()]
+    transactionCall.mockResolvedValueOnce({ successful: false })
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 0 })
+    const insert = db.query.mock.calls.find(([sql]) => sql.includes('INSERT INTO settlement_reconciliation_findings'))!
+    const link = db.query.mock.calls.find(([sql]) => sql.includes('UPDATE settlement_reconciliation_findings'))!
+    expect(insert[0]).toContain('run_id = NULL')
+    expect(insert[0]).toContain('RETURNING id, created_at')
+    expect(link[0]).toContain('WHERE id = $2 AND created_at = $3 AND run_id IS NULL')
+    expect(link[1]).toEqual(['run-1', 'finding-1', now])
+  })
 
-    // persistRunSummary INSERT
-    mockDb.query.mockResolvedValueOnce({ rows: [{ id: 'run-multi' }] })
-    // linkFindingsToRun UPDATE
-    mockDb.query.mockResolvedValueOnce({ rowCount: 2 })
-
-    const reconciler = new SettlementReconciler(mockDb)
-    const result = await reconciler.run()
-
-    expect(result).toEqual({ runId: 'run-multi', checked: 3, discrepancies: 2, errors: 0 })
-    expect(metrics.recordSettlementDrift).toHaveBeenCalledTimes(2)
-    expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('state_mismatch')
-    expect(metrics.recordSettlementDrift).toHaveBeenCalledWith('missing_on_chain')
-    // select + s2 finding insert + s3 finding insert + persistRunSummary + linkFindings
-    expect(mockDb.query).toHaveBeenCalledTimes(5)
+  it('reports a failed finding link in both result and run summary', async () => {
+    rows = [settlement()]
+    transactionCall.mockResolvedValueOnce({ successful: false })
+    const original = db.query.getMockImplementation()!
+    db.query.mockImplementation((sql: string, params?: unknown[]) =>
+      sql.includes('UPDATE settlement_reconciliation_findings')
+        ? Promise.reject(new Error('link failed')) : original(sql, params))
+    expect(await run(db, logs)).toEqual({ runId: 'run-1', checked: 1, discrepancies: 1, errors: 1 })
+    expect(db.query.mock.calls.find(([sql]) => sql.includes('UPDATE settlement_reconciliation_runs'))?.[1]).toEqual(['run-1', 1])
   })
 })
