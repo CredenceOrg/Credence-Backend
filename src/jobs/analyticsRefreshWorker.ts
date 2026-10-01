@@ -90,7 +90,7 @@ export class AnalyticsRefreshWorker {
         error: message,
       }
       this.lastResult = workerResult
-      this.log(`[analytics] worker.run crashed after ${durationMs}ms: ${message}`)
+      this.log(`[analytics] worker.run crashed after ${durationMs}m: ${message}`)
       return workerResult
     }
   }

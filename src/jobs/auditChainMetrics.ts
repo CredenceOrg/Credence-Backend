@@ -28,17 +28,34 @@ export const auditChainVerifierLastRunValid = new client.Gauge({
 
 /**
  * Prometheus-backed metrics sink for the audit chain verifier.
+ *
+ * Invariants:
+ * - Counters never decrease; negative or non-finite increments are rejected without
+ *   mutating metric state so a bad caller cannot corrupt the exposed series.
+ * - Gauges only accept finite numbers. Non-finite inputs are ignored rather than
+ *   writing NaN/Infinity into the registry, which would poison downstream alerting.
+ * - Timestamps are converted from milliseconds to seconds exactly once and must be
+ *   finite and non-negative.
  */
 export class PrometheusAuditChainMetrics implements AuditChainMetrics {
   incViolation(count = 1): void {
+    if (!Number.isFinite(count) || count < 0) {
+      return
+    }
     auditChainIntegrityViolationTotal.inc(count)
   }
 
   setRowsChecked(count: number): void {
+    if (!Number.isFinite(count) || count < 0) {
+      return
+    }
     auditChainVerifierRowsChecked.set(count)
   }
 
   setLastRunTimestamp(timestamp: number): void {
+    if (!Number.isFinite(timestamp) || timestamp < 0) {
+      return
+    }
     auditChainVerifierLastRunTimestamp.set(timestamp / 1000)
   }
 

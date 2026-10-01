@@ -305,26 +305,68 @@ export function summariseFindings(findings: CombinedFinding[]): Record<string, n
 }
 
 /**
+ * Result of a single scanner invocation.
+ *
+ * Invariant: `exitCode` is 0 (clean) or 1 (findings present) **only** when the
+ * process actually ran. A spawn that never produced a child process (binary
+ * missing / not executable / killed by signal) must surface `spawnFailed: true`
+ * with a non-{0,1} exit code, because exit code 1 is indistinguishable from
+ * "vulnerabilities found" and would otherwise fail open.
+ */
+interface ScannerResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+  spawnFailed: boolean;
+}
+
+/**
+ * Normalises a raw spawnSync result into a {@link ScannerResult}.
+ *
+ * `status === null` means the child never ran (ENOENT, EACCES, timeout kill).
+ * That is an execution error, not a clean bill of health.
+ */
+function toScannerResult(result: {
+  stdout?: string | Buffer | null;
+  stderr?: string | Buffer | null;
+  status: number | null;
+  signal?: NodeJS.Signals | null;
+  error?: Error;
+}): ScannerResult {
+  const stdout = result.stdout?.toString() || "";
+  const stderr = result.stderr?.toString() || "";
+  const spawnFailed = result.status === null || result.error !== undefined;
+
+  if (spawnFailed) {
+    const reason = result.error?.message ?? result.signal ?? "process did not exit normally";
+    return {
+      stdout,
+      stderr: stderr || `scanner process failed: ${reason}`,
+      exitCode: 2,
+      spawnFailed: true,
+    };
+  }
+
+  return { stdout, stderr, exitCode: result.status ?? 1, spawnFailed: false };
+}
+
+/**
  * Runs npm audit and returns stdout as string.
  */
-export function runNpmAudit(): { stdout: string; stderr: string; exitCode: number } {
+export function runNpmAudit(): ScannerResult {
   const result = spawnSync("npm", ["audit", "--json", "--omit=dev"], {
     encoding: "utf8",
     maxBuffer: 10 * 1024 * 1024, // 10MB
     timeout: 120000, // 2 minutes
   });
 
-  return {
-    stdout: result.stdout?.toString() || "",
-    stderr: result.stderr?.toString() || "",
-    exitCode: result.status ?? 1,
-  };
+  return toScannerResult(result);
 }
 
 /**
  * Runs osv-scanner and returns stdout as string.
  */
-export function runOsvScanner(): { stdout: string; stderr: string; exitCode: number } {
+export function runOsvScanner(): ScannerResult {
   // osv-scanner is typically installed via Go, so it's in GOPATH/bin or ~/go/bin
   const goBin = process.env.GOPATH
     ? `${process.env.GOPATH}/bin/osv-scanner`
@@ -337,11 +379,7 @@ export function runOsvScanner(): { stdout: string; stderr: string; exitCode: num
     env: { ...process.env, PATH: `${process.env.PATH}:${process.env.GOPATH || process.env.HOME}/go/bin` },
   });
 
-  return {
-    stdout: result.stdout?.toString() || "",
-    stderr: result.stderr?.toString() || "",
-    exitCode: result.status ?? 1,
-  };
+  return toScannerResult(result);
 }
 
 /**

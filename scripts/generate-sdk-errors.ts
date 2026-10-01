@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { fileURLToPath } from 'url'
+import { fileURLToPath, pathToFileURL } from 'url'
 import {
   ERROR_CATALOG,
   ERROR_CATALOG_CODES,
@@ -8,25 +8,91 @@ import {
 } from '../src/lib/errorCatalog.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const outputPath = path.resolve(__dirname, '../src/sdk/errors.generated.ts')
 
-function buildClassBlock(entry: ErrorCatalogEntry): string {
+/** Default on-disk location of the generated SDK. Overridable for tests. */
+export const DEFAULT_OUTPUT_PATH = path.resolve(__dirname, '../src/sdk/errors.generated.ts')
+
+/**
+ * Escapes a value for embedding inside a single-quoted TypeScript string literal.
+ *
+ * INVARIANT: every catalog value interpolated into generated *source* must pass
+ * through this. The catalog is data, but it is spliced into executable code, so
+ * an unescaped `'` would terminate the literal early and let the rest of the
+ * value be parsed as TypeScript — i.e. a data edit becomes code execution in a
+ * file that is imported by the SDK. `defaultMessage` is already emitted via
+ * `JSON.stringify`; this brings `code` and `sdkClassName` up to the same bar.
+ */
+export const escapeStringLiteral = (value: string): string =>
+  value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r')
+
+/** A generated class name must be a valid JS identifier to be emittable. */
+const IDENTIFIER_PATTERN = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+
+/**
+ * Reserved words that lexically match `IDENTIFIER_PATTERN` but cannot be used as
+ * a class name — `export class class extends ...` is a syntax error. Checking
+ * the shape alone would let these through and produce a file that fails to parse.
+ */
+const RESERVED_WORDS = new Set([
+  'await', 'break', 'case', 'catch', 'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'else',
+  'enum', 'export', 'extends', 'false', 'finally', 'for', 'function', 'if', 'implements', 'import', 'in',
+  'instanceof', 'interface', 'let', 'new', 'null', 'package', 'private', 'protected', 'public', 'return', 'static',
+  'super', 'switch', 'this', 'throw', 'true', 'try', 'typeof', 'var', 'void', 'while', 'with', 'yield',
+])
+
+/**
+ * Rejects catalog entries that cannot be safely rendered as a class.
+ *
+ * `sdkClassName` is declared optional on `ErrorCatalogEntry`, so a missing or
+ * malformed value previously emitted `export class undefined extends ...`,
+ * producing a file that fails to parse with an error pointing at the
+ * generator rather than at the offending catalog entry. Failing loudly here
+ * keeps the diagnostic actionable and prevents a broken artifact from being
+ * written over a working one.
+ */
+export const assertRenderableSdkClassName = (className: string | undefined, code: string): string => {
+  if (className == null || className === '') {
+    throw new Error(
+      `errorCatalog entry '${code}' is missing sdkClassName; every entry must name the SDK class to generate`,
+    )
+  }
+  if (!IDENTIFIER_PATTERN.test(className)) {
+    throw new Error(
+      `errorCatalog entry '${code}' has an invalid sdkClassName '${className}': expected a valid JavaScript identifier`,
+    )
+  }
+  if (RESERVED_WORDS.has(className)) {
+    throw new Error(
+      `errorCatalog entry '${code}' has an invalid sdkClassName '${className}': reserved word cannot be used as a class name`,
+    )
+  }
+  return className
+}
+
+export function buildClassBlock(entry: ErrorCatalogEntry): string {
   const lines: string[] = []
+  const sdkClassName = assertRenderableSdkClassName(entry.sdkClassName, entry.code)
+  const code = escapeStringLiteral(entry.code)
+  const escapedClassName = escapeStringLiteral(sdkClassName)
 
   if (entry.deprecated) {
     const replacement = entry.replacedBy
-      ? ` Use \`${entry.replacedBy}\` instead.`
+      ? ` Use \`${escapeStringLiteral(entry.replacedBy)}\` instead.`
       : ''
     lines.push('/**')
     lines.push(` * @deprecated Legacy error code.${replacement}`)
     lines.push(' */')
   }
 
-  lines.push(`export class ${entry.sdkClassName} extends CredenceError {`)
-  lines.push(`  static readonly errorCode = '${entry.code}' as const`)
+  lines.push(`export class ${sdkClassName} extends CredenceError {`)
+  lines.push(`  static readonly errorCode = '${code}' as const`)
   lines.push('')
   lines.push('  constructor(')
-  lines.push('    message: string = DEFAULT_MESSAGES[\'' + entry.code + '\'],')
+  lines.push(`    message: string = DEFAULT_MESSAGES['${code}'],`)
   if (entry.httpStatus === null) {
     lines.push('    status: number,')
   } else {
@@ -35,27 +101,113 @@ function buildClassBlock(entry: ErrorCatalogEntry): string {
   lines.push('    details?: unknown,')
   lines.push('    options?: CredenceErrorOptions,')
   lines.push('  ) {')
-  lines.push(`    super(message, '${entry.code}', status, details, options)`)
-  lines.push(`    this.name = '${entry.sdkClassName}'`)
+  lines.push(`    super(message, '${code}', status, details, options)`)
+  lines.push(`    this.name = '${escapedClassName}'`)
   lines.push('  }')
   lines.push('}')
 
   return lines.join('\n')
 }
 
-function generate(): string {
-  const defaultMessages = ERROR_CATALOG_CODES.map(
-    (key) => `  '${ERROR_CATALOG[key].code}': ${JSON.stringify(ERROR_CATALOG[key].defaultMessage)},`,
-  ).join('\n')
+/**
+ * Renders the `DEFAULT_MESSAGES` map.
+ *
+ * `defaultMessage` is emitted through `JSON.stringify`, which is both valid
+ * TypeScript for the ASCII range and correctly escapes quotes, backslashes and
+ * newlines — a message can never break out of its literal.
+ */
+export const buildDefaultMessages = (
+  catalog: Record<string, ErrorCatalogEntry> = ERROR_CATALOG,
+  codes: readonly string[] = ERROR_CATALOG_CODES,
+): string =>
+  codes
+    .map((key) => `  '${escapeStringLiteral(catalog[key].code)}': ${JSON.stringify(catalog[key].defaultMessage)},`)
+    .join('\n')
 
-  const classBlocks = ERROR_CATALOG_CODES.map((key) =>
-    buildClassBlock(ERROR_CATALOG[key]),
-  ).join('\n\n')
+/**
+ * Renders the `CREDENCE_ERROR_REGISTRY` entries.
+ *
+ * Codes are emitted in catalog order, so the generated object literal is
+ * byte-stable across runs given the same catalog — which is what lets CI
+ * assert the committed artifact is up to date.
+ */
+export const buildRegistryEntries = (
+  catalog: Record<string, ErrorCatalogEntry> = ERROR_CATALOG,
+  codes: readonly string[] = ERROR_CATALOG_CODES,
+): string =>
+  codes
+    .map((key) => {
+      const entry = catalog[key]
+      return `  '${escapeStringLiteral(entry.code)}': ${assertRenderableSdkClassName(entry.sdkClassName, entry.code)},`
+    })
+    .join('\n')
 
-  const registryEntries = ERROR_CATALOG_CODES.map((key) => {
-    const entry = ERROR_CATALOG[key]
-    return `  '${entry.code}': ${entry.sdkClassName},`
-  }).join('\n')
+/**
+ * Validates that every requested catalog key resolves and that no two entries
+ * collide on `code` or `sdkClassName`.
+ *
+ * Without this, a duplicated entry does not fail here — it silently emits two
+ * `export class X` declarations (a redeclaration error that surfaces far from
+ * its cause) and two identical object keys in `DEFAULT_MESSAGES` /
+ * `CREDENCE_ERROR_REGISTRY`, where the later key wins and the error code
+ * silently loses its typed class. Neither is a safe default, so both are
+ * rejected up front.
+ */
+export const assertCatalogEntriesRenderable = (
+  catalog: Record<string, ErrorCatalogEntry>,
+  codes: readonly string[],
+): readonly ErrorCatalogEntry[] => {
+  const entries: ErrorCatalogEntry[] = []
+  const seenKeys = new Set<string>()
+  const seenCodes = new Map<string, string>()
+  const seenClassNames = new Map<string, string>()
+
+  for (const key of codes) {
+    if (seenKeys.has(key)) {
+      throw new Error(`errorCatalog code list contains duplicate key '${key}'`)
+    }
+    seenKeys.add(key)
+
+    const entry = catalog[key]
+    if (entry === undefined) {
+      throw new Error(`errorCatalog code list references missing key '${key}'`)
+    }
+
+    const className = assertRenderableSdkClassName(entry.sdkClassName, entry.code)
+
+    const priorCodeKey = seenCodes.get(entry.code)
+    if (priorCodeKey !== undefined) {
+      throw new Error(
+        `errorCatalog has duplicate error code '${entry.code}' (keys '${priorCodeKey}' and '${key}')`,
+      )
+    }
+    seenCodes.set(entry.code, key)
+
+    const priorClassKey = seenClassNames.get(className)
+    if (priorClassKey !== undefined) {
+      throw new Error(
+        `errorCatalog has duplicate sdkClassName '${className}' (keys '${priorClassKey}' and '${key}')`,
+      )
+    }
+    seenClassNames.set(className, key)
+
+    entries.push(entry)
+  }
+
+  return entries
+}
+
+export function generate(
+  catalog: Record<string, ErrorCatalogEntry> = ERROR_CATALOG,
+  codes: readonly string[] = ERROR_CATALOG_CODES,
+): string {
+  assertCatalogEntriesRenderable(catalog, codes)
+
+  const defaultMessages = buildDefaultMessages(catalog, codes)
+
+  const classBlocks = codes.map((key) => buildClassBlock(catalog[key])).join('\n\n')
+
+  const registryEntries = buildRegistryEntries(catalog, codes)
 
   return `/**
  * AUTO-GENERATED by scripts/generate-sdk-errors.ts — DO NOT EDIT.
@@ -241,7 +393,53 @@ export function createTransportCredenceError(
 `
 }
 
-const contents = generate()
-fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-fs.writeFileSync(outputPath, contents, 'utf-8')
-console.log(`SDK error classes generated at ${path.relative(process.cwd(), outputPath)}`)
+/**
+ * Writes the generated SDK to disk, creating the parent directory if needed.
+ *
+ * Kept as a thin, separately testable wrapper around `fs` so permission / IO
+ * failures (EACCES on a read-only checkout, ENOSPC, EROFS) can be exercised
+ * without touching the repo, and so a failure surfaces as a thrown error
+ * rather than a truncated file that would break every SDK consumer at import.
+ */
+export const writeGeneratedSdk = (outputPath: string, contents: string): void => {
+  fs.mkdirSync(path.dirname(outputPath), { recursive: true })
+  fs.writeFileSync(outputPath, contents, 'utf-8')
+}
+
+export interface RunGenerateSdkErrorsOptions {
+  outputPath?: string
+  catalog?: Record<string, ErrorCatalogEntry>
+  codes?: readonly string[]
+  log?: (message: string) => void
+}
+
+/**
+ * Orchestrates generate-then-write.
+ *
+ * INVARIANTS:
+ * - The whole document is rendered in memory before the file is opened, so an
+ *   unrenderable catalog entry throws without ever truncating the previously
+ *   committed artifact. That matters here because `errors.generated.ts` is
+ *   imported directly by the SDK; a partial write would break every consumer.
+ * - The success log is emitted only after the write resolves, so there is no
+ *   state in which the log claims success but the file is missing or partial.
+ * - Output is a pure function of (catalog, codes), so re-running on an
+ *   unchanged catalog rewrites byte-identical content.
+ */
+export const runGenerateSdkErrors = (options: RunGenerateSdkErrorsOptions = {}): string => {
+  const outputPath = options.outputPath ?? DEFAULT_OUTPUT_PATH
+  const catalog = options.catalog ?? ERROR_CATALOG
+  const codes = options.codes ?? ERROR_CATALOG_CODES
+  const log = options.log ?? console.log
+
+  const contents = generate(catalog, codes)
+  writeGeneratedSdk(outputPath, contents)
+  log(`SDK error classes generated at ${path.relative(process.cwd(), outputPath)}`)
+  return outputPath
+}
+
+// Only write when invoked as a CLI so importing this module (e.g. from tests)
+// has no filesystem side effects.
+if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
+  runGenerateSdkErrors()
+}

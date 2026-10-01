@@ -310,6 +310,36 @@ const DEFAULT_RETRY: ExtendedRetryPolicy = {
   jitterStrategy: "none",
 };
 
+/**
+ * Circuit-breaker defaults used when no valid environment configuration is
+ * available. Kept in sync with the `SOROBAN_CIRCUIT_BREAKER_*` env schema
+ * defaults in `src/config/index.ts`.
+ */
+const DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD = 5;
+const DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS = 10_000;
+
+/**
+ * Parses a positive integer from an environment variable, falling back to
+ * `fallback` when the value is absent, empty, non-numeric, non-finite, or not a
+ * positive integer. Never returns NaN — callers rely on the result being a
+ * usable circuit-breaker parameter.
+ */
+function readPositiveIntEnv(
+  raw: string | undefined,
+  fallback: number,
+): number {
+  if (raw === undefined || raw.trim() === "") {
+    return fallback;
+  }
+
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 1) {
+    return fallback;
+  }
+
+  return parsed;
+}
+
 export class SorobanClient {
   private readonly rpcUrl: string;
   private readonly network: SorobanNetwork;
@@ -364,10 +394,8 @@ export class SorobanClient {
     this.randomFn = deps.randomFn ?? Math.random;
     this.retryObserver = deps.retryObserver ?? noopRetryObserver;
 
-    let defaultFailureThreshold = 5;
-    let defaultOpenWindowMs = 10_000;
-    let defaultHalfOpenAfterMs = 30_000;
-    let defaultCacheTtlMs = 5000;
+    let defaultFailureThreshold = DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD;
+    let defaultCooldownMs = DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS;
     try {
       const globalConfig = validateConfig(process.env);
       defaultFailureThreshold =
@@ -377,29 +405,26 @@ export class SorobanClient {
         globalConfig.sorobanCircuitBreaker.halfOpenAfterMs;
       defaultCacheTtlMs = globalConfig.sorobanStateCache.ttlMs;
     } catch {
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD) {
-        defaultFailureThreshold = Number(
+      // validateConfig() failed (missing/invalid unrelated env, common in tests
+      // and local runs). Read the breaker env vars directly so the client still
+      // honours operator configuration, but only when the value parses to a
+      // finite positive number.
+      //
+      // Invariant: the resolved threshold MUST be a finite number. `Number()`
+      // yields NaN for a malformed value, and CircuitBreaker.recordFailure()
+      // gates on `failureCount >= threshold` — a NaN threshold makes that
+      // comparison permanently false, silently disabling the breaker so a
+      // failing host is hit on every request. Falling back to the default is
+      // strictly safer than honouring an unparseable value.
+      defaultFailureThreshold =
+        readPositiveIntEnv(
           process.env.SOROBAN_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+          DEFAULT_CIRCUIT_BREAKER_FAILURE_THRESHOLD,
         );
-      }
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS) {
-        defaultOpenWindowMs = Number(
-          process.env.SOROBAN_CIRCUIT_BREAKER_OPEN_WINDOW_MS,
-        );
-      }
-      // Prefer the new var; fall back to deprecated COOLDOWN_MS.
-      if (process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS) {
-        defaultHalfOpenAfterMs = Number(
-          process.env.SOROBAN_CIRCUIT_BREAKER_HALF_OPEN_AFTER_MS,
-        );
-      } else if (process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS) {
-        defaultHalfOpenAfterMs = Number(
-          process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
-        );
-      }
-      if (process.env.SOROBAN_STATE_CACHE_TTL_MS) {
-        defaultCacheTtlMs = Number(process.env.SOROBAN_STATE_CACHE_TTL_MS);
-      }
+      defaultCooldownMs = readPositiveIntEnv(
+        process.env.SOROBAN_CIRCUIT_BREAKER_COOLDOWN_MS,
+        DEFAULT_CIRCUIT_BREAKER_COOLDOWN_MS,
+      );
     }
 
     this.circuitBreakerConfig = {
@@ -510,11 +535,13 @@ export class SorobanClient {
     const nextServerCursor = result.latestCursor ?? result.cursor ?? null;
 
     return {
-      events,
-      cursor: buildNextCursor(nextServerCursor, seq),
-      hasNextPage: Boolean(nextServerCursor),
-      seq,
-      limit,
+      // The RPC payload is untrusted input: `?? []` alone would happily forward
+      // a non-array `events` value (null is covered, but a string/object is
+      // not), handing callers something they cannot iterate. Normalizing here
+      // keeps the ContractEventsPage contract intact for the caller instead of
+      // surfacing a malformed-response bug downstream.
+      events: Array.isArray(result.events) ? result.events : [],
+      cursor: result.latestCursor ?? result.cursor ?? null,
     };
   }
 

@@ -30,6 +30,12 @@ export interface InvoiceDueDateWorkerOptions {
   validateTimezones?: boolean
   /** Enable DST transition logging for debugging. */
   logDstTransitions?: boolean
+  /**
+   * Skip invoices whose `dueAtUtc` cannot be parsed instead of failing the
+   * whole tenant. Enabled by default so a single malformed row cannot starve
+   * every other invoice for that tenant indefinitely.
+   */
+  skipMalformedInvoices?: boolean
   logger?: (message: string) => void
 }
 
@@ -49,6 +55,7 @@ export class InvoiceDueDateWorker {
   private readonly tenantBatchSize: number
   private readonly validateTimezones: boolean
   private readonly logDstTransitions: boolean
+  private readonly skipMalformedInvoices: boolean
   private readonly logger: (message: string) => void
 
   constructor(
@@ -59,6 +66,7 @@ export class InvoiceDueDateWorker {
     this.tenantBatchSize = options.tenantBatchSize ?? 200
     this.validateTimezones = options.validateTimezones ?? true
     this.logDstTransitions = options.logDstTransitions ?? false
+    this.skipMalformedInvoices = options.skipMalformedInvoices ?? true
     this.logger = options.logger ?? (() => {})
   }
 
@@ -104,8 +112,26 @@ export class InvoiceDueDateWorker {
           const invoices = await this.repository.listPendingDueDateInvoices(tenant.tenantId, startTime)
           evaluatedInvoices += invoices.length
 
+          // A single unparseable `dueAtUtc` must not abort the tenant: that would
+          // starve every other eligible invoice for this tenant on every run.
+          const evaluable = this.skipMalformedInvoices
+            ? invoices.filter((invoice) => {
+                try {
+                  normalizeToUtcIso(invoice.dueAtUtc)
+                  return true
+                } catch (error) {
+                  errors += 1
+                  const message = error instanceof Error ? error.message : 'Unknown timestamp error'
+                  this.logger(
+                    `Skipping invoice ${invoice.invoiceId} for tenant ${tenant.tenantId}: ${message}`,
+                  )
+                  return false
+                }
+              })
+            : invoices
+
           const dueNow = evaluateDueDateActions({
-            invoices,
+            invoices: evaluable,
             tenantTimezone: tenant.timezone,
             nowUtc,
           })
@@ -124,9 +150,19 @@ export class InvoiceDueDateWorker {
             }
           }
 
+          // Trigger each invoice independently: one persistently failing invoice
+          // must not block the remaining invoices for this tenant on this run.
           for (const invoice of dueNow) {
-            await this.repository.markDueDateActionTriggered(invoice.invoiceId, startTime)
-            triggeredActions += 1
+            try {
+              await this.repository.markDueDateActionTriggered(invoice.invoiceId, startTime)
+              triggeredActions += 1
+            } catch (error) {
+              errors += 1
+              const message = error instanceof Error ? error.message : 'Unknown trigger error'
+              this.logger(
+                `Failed to trigger invoice ${invoice.invoiceId} for tenant ${tenant.tenantId}: ${message}`,
+              )
+            }
           }
 
           processedTenants += 1
