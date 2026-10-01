@@ -53,7 +53,7 @@ describe('atomic mutation crash-point matrix', () => {
 
   it('rolls back a state write when outbox insertion fails', async () => {
     const { emitter, commits, rollbacks, client, coordinator } = makeHarness()
-    emitter.emitBatch.mockRejectedValueOnce(new Error('database unavailable'))
+    emitter.emitBatch.mockRejectedOnce(new Error('database unavailable'))
     await expect(coordinator.run(async db => { client.writes.push('state'); return db }, () => [makeEvent(2)])).rejects.toThrow('database unavailable')
     expect(client.writes).toEqual(['state', 'outbox:wallet-2'])
     expect(commits).toEqual([])
@@ -131,14 +131,14 @@ describe('atomic mutation crash-point matrix', () => {
 
   it('fails closed when the emitter acknowledges too many events', async () => {
     const { emitter, coordinator } = makeHarness()
-    emitter.emitBatch.mockResolvedValueOnce([100n, 101n])
+    emitter.emitBatch.mockResolvedOnce([100n, 101n])
     await expect(coordinator.run(async () => true, () => [makeEvent(11)])).rejects.toThrow('incomplete')
   })
 
   it('keeps bigint ids intact for large database identifiers', async () => {
     const { emitter, coordinator } = makeHarness()
     const large = 9_007_199_254_740_993n
-    emitter.emitBatch.mockResolvedValueOnce([large])
+    emitter.emitBatch.mockResolvedOnce([large])
     const result = await coordinator.runOne(async () => true, makeEvent(12))
     expect(result.eventIds[0]).toBe(large)
   })
@@ -160,7 +160,7 @@ describe('atomic mutation crash-point matrix', () => {
   it('does not silently swallow transaction errors', async () => {
     const { runner, coordinator } = makeHarness()
     const expected = new Error('serialization failure')
-    runner.withTransaction.mockRejectedValueOnce(expected)
+    runner.withTransaction.mockRejectedOnce(expected)
     await expect(coordinator.runOne(async () => true, makeEvent(13))).rejects.toBe(expected)
   })
 

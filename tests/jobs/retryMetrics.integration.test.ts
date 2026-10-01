@@ -101,6 +101,11 @@ async function histogramObservations(
       const vLabels = v.labels ?? {}
       // Skip bucket/quantile subseries — we only want the _count series.
       if (vLabels.le !== undefined || vLabels.quantile !== undefined) continue
+      // Skip the histogram `_sum` series: it also carries empty labels and
+      // precedes `_count` in the exported sample list, so without this guard
+      // the helper would return the summed sample value instead of the number
+      // of observations.
+      if (v.metricName?.endsWith('_sum')) continue
       if (
         !Object.entries(labels).every(([k, val]) => vLabels[k] === val)
       ) continue

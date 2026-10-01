@@ -35,6 +35,7 @@ interface PgStatActivityRow {
 }
 
 const PG_STAT_ACTIVITY_SNAPSHOT_TABLE = "pg_stat_activity_snapshots";
+const MAX_INTERVAL_MS = 2_147_483_647;
 
 export class PgStatActivitySnapshotJob {
   private readonly logger: (message: string) => void;
@@ -52,6 +53,21 @@ export class PgStatActivitySnapshotJob {
       config.intervalMs ?? PG_STAT_ACTIVITY_SNAPSHOT_INTERVAL_MS;
     this.retentionHours =
       config.retentionHours ?? PG_STAT_ACTIVITY_SNAPSHOT_RETENTION_HOURS;
+
+    if (
+      !Number.isInteger(this.intervalMs) ||
+      this.intervalMs <= 0 ||
+      this.intervalMs > MAX_INTERVAL_MS
+    ) {
+      throw new RangeError(
+        `intervalMs must be an integer between 1 and ${MAX_INTERVAL_MS}`,
+      );
+    }
+
+    // Zero retention can prune the snapshot that this run just inserted.
+    if (!Number.isFinite(this.retentionHours) || this.retentionHours <= 0) {
+      throw new RangeError("retentionHours must be a finite number greater than 0");
+    }
   }
 
   start(): void {

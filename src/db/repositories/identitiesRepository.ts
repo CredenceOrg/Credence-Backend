@@ -138,8 +138,8 @@ export class IdentitiesRepository extends BaseRepository {
 
     if (!result.rows[0]) {
       // Distinguish between "row does not exist" and "version mismatch" so we
-      // surface the right error.  The extra read is only on the conflict path so
-      // it does not affect the hot path.
+      // surface the right error.  The extra read is only on the conflict path so it
+      // does not affect the hot path.
       const existing = await this.db.query<{ version: number }>(
         `SELECT version FROM identities WHERE address = $1 AND tenant_id = $2`,
         [address, this.tenantId],

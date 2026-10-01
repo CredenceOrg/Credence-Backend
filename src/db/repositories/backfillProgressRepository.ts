@@ -1,4 +1,4 @@
-import type { Pool, PoolClient } from 'pg'
+import type { Queryable } from './queryable.js'
 
 /**
  * Lifecycle status for a durable backfill progress marker.
@@ -90,7 +90,7 @@ const MAX_ERROR_LENGTH = 2000
  *   include metadata contents (only jobName/field + reason for diagnosability).
  */
 export class BackfillProgressRepository {
-  constructor(private readonly db: Pool | PoolClient) {}
+  constructor(private readonly db: Queryable) {}
 
   private map(row: Record<string, unknown>): BackfillProgress {
     const metadata = row.metadata

@@ -134,9 +134,11 @@ export function setJobOldestPendingAge(domain: JobDomain, ageSeconds: number): v
  * result is upper-cased and truncated to 50 chars. Empty → `UNKNOWN`.
  */
 function boundedReason(reason: string): string {
-  const cleaned = (reason || 'unknown')
+  const cleaned = (reason || '')
+    .trim()
     .toUpperCase()
     .replace(/[^A-Z0-9_]/g, '_')
+    .replace(/_+$/g, '')
     .slice(0, 50)
   return cleaned.length > 0 ? cleaned : 'UNKNOWN'
 }

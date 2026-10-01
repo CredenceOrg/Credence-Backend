@@ -1,1 +1,213 @@
-LyoqCiAqIEBtb2R1bGUgam9icy9pZGVtcG90ZW5jeUtleVN3ZWVwZXIKICogQGRlc2NyaXB0aW9uIEJhY2tncm91bmQgam9iIHRvIGNsZWFuIHVwIGV4cGlyZWQgaWRlbXBvdGVuY3kga2V5cy4KICoKICogUnVucyBwZXJpb2RpY2FsbHkgdG8gcmVtb3ZlIGtleXMgdGhhdCBoYXZlIHBhc3NlZCB0aGVpciBUVEwsCiAqIHByZXZlbnRpbmcgdW5ib3VuZGVkIGdyb3d0aCBvZiB0aGUgaWRlbXBvdGVuY3lfa2V5cyB0YWJsZS4KICoKICogIyMgSW52YXJpYW50cwoqCiAqIC0gQ29uY3VycmVuY3k6IGF0IG1vc3Qgb25lIGNsZWFudXAgY3ljbGUgcnVucyBhdCBhIHRpbWUgd2l0aGluIGEgZ2l2ZW4KICogICBzd2VlcGVyIGluc3RhbmNlLiBSZS1lbnRyYW50IGNhbGxzIGFyZSBza2lwcGVkIGFuZCByZXBvcnRlZCBhcyBhIG5vLW9wCiAqICAgcmVzdWx0IHdpdGggYGR1cmF0aW9uTXMgPT0gMGAuCiAqIC0gRHVyaW5nIGEgcnVuLCB0aGUgY291bnQgcXVlcnkgYW5kIGFsbCBkZWxldGUgYmF0Y2hlcyB1c2UgdGhlIHNhbWUKICogICBleHBpcnkgY3V0b2ZmIChgTk9XKClgIGV2YWx1YXRlZCBwZXIgc3RhdGVtZW50KSwgc28gYSBrZXkgdGhhdCBiZWNvbWVzCiAqICAgZXhwaXJlZCBtaWQtc3dlZXAgaXMgc2ltcGx5IGxlZnQgZm9yIHRoZSBuZXh0IGN5Y2xlIHJhdGhlciB0aGFuIGJlaW5nCiAqICAgZGVsZXRlZCB3aXRoIGFuIGluY29uc2lzdGVudCBjb3VudC4KICogLSBEZWxldGlvbiBpcyBpZGVtcG90ZW50OiB0aGUgYERFTEVURSAuLi4gV0hFUkUgZXhwaXJlc19hdCA8PSBOT1coKWAgcHJlZGljYXRlCiAqICAgb25seSBtYXRjaGVzIGV4cGlyZWQgcm93cywgc28gYSByZXRyeSBhZnRlciBhIHBhcnRpYWwgZmFpbHVyZSBjYW5ub3QgZGVsZXRlCiAqICAgdW5leHBpcmVkIGtleXMgb3IgZG91YmxlLWNvdW50IGRlbGV0aW9ucy4KICogLSBBIGZhaWx1cmUgaW4gdGhlIGNvdW50IG9yIGRlbGV0ZSBwaGFzZSBwcm9wYWdhdGVzIHRvIHRoZSBjYWxsZXIgYW5kCiAqICAgcmVsZWFzZXMgdGhlIGluLWZsaWdodCBndWFyZCB2aWEgYGZpbmFsbHlgLCBzbyB0aGUgbmV4dCBzY2hlZHVsZWQgdGljawogKiAgIGNhbiByZWNvdmVyLgogKi8KCmltcG9ydCB0eXBlIHsgUXVlcnlhYmxlIH0gZnJvbSAnLi4vZGIvcmVwb3NpdG9yaWVzL3F1ZXJ5YWJsZS5qcycKCmV4cG9ydCBpbnRlcmZhY2UgSWRlbXBvdGVuY3lTd2VlcGVyQ29uZmlnIHsKICAvKiogUnVuIGludGVydmFsIGluIG1pbGxpc2Vjb25kcyAoZGVmYXVsdDogMzYwMDAwMCA9IDEgaG91cikgKi8KICBpbnRlcnZhbE1zPzogbnVtYmVyCiAgLyoqIE1heGltdW0gbnVtYmVyIG9mIGtleXMgdG8gZGVsZXRlIHBlciBiYXRjaCAoZGVmYXVsdDogMTAwMDApICovCiAgYmF0Y2hTaXplPzogbnVtYmVyCiAgLyoqIEVuYWJsZSBkcnktcnVuIG1vZGUgKGNvdW50IGJ1dCBkb24ndCBkZWxldGUpICovCiAgZHJ5UnVuPzogYm9vbGVhbgogIC8qKiBMb2dnZXIgZnVuY3Rpb24gKi8KICBsb2dnZXI/OiAobWVzc2FnZTogc3RyaW5nKSA9PiB2b2lkCn0KCmV4cG9ydCBpbnRlcmZhY2UgU3dlZXBlclJlc3VsdCB7CiAgLyoqIE51bWJlciBvZiBleHBpcmVkIGtleXMgZm91bmQgKi8KICBleHBpcmVkQ291bnQ6IG51bWJlcgogIC8qKiBOdW1iZXIgb2Yga2V5cyBkZWxldGVkICovCiAgZGVsZXRlZENvdW50OiBudW1iZXIKICAvKiogV2hldGhlciB0aGlzIHdhcyBhIGRyeSBydW4gKi8KICBkcnlSdW46IGJvb2xlYW4KICAvKiogRHVyYXRpb24gaW4gbWlsbGlzZWNvbmRzICovCiAgZHVyYXRpb25NczogbnVtYmVyCiAgLyoqIFdoZXRoZXIgdGhpcyBydW4gd2FzIHNraXBwZWQgYmVjYXVzZSBhbm90aGVyIHdhcyBpbiBmbGlnaHQgKi8KICBza2lwcGVkPzogYm9vbGVhbgp9CgovKioKICogQmFja2dyb3VuZCBqb2IgdGhhdCBwZXJpb2RpY2FsbHkgZGVsZXRlcyBleHBpcmVkIGlkZW1wb3RlbmN5IGtleXMuCiAqCiAqIFRoZSBzd2VlcGVyOgogKiAxLiBDb3VudHMga2V5cyB3aGVyZSBleHBpcmVzX2F0IDw9IE5PVygpCiAqIDIuIERlbGV0ZXMgdGhlbSBpbiBiYXRjaGVzIHRvIGF2b2lkIGxvbmctcnVubmluZyB0cmFuc2FjdGlvbnMKICogMy4gTG9ncyB0aGUgcmVzdWx0cyBmb3IgbW9uaXRvcmluZwogKgogKiBAZXhhbXBsZQogKiBgYGB0eXBlc2NyaXB0CiAqIGNvbnN0IHN3ZWVwZXIgPSBuZXcgSWRlbXBvdGVuY3lLZXlTd2VlcGVyKGRiLCB7CiAqICAgaW50ZXJ2YWxNczogMzYwMDAwMCwgLy8gUnVuIGV2ZXJ5IGhvdXIKICogICBiYXRjaFNpemU6IDEwMDAwLAogKiAgIGxvZ2dlcjogY29uc29sZS5sb2csCiAqIH0pCiAqCiAqIC8vIFN0YXJ0IHRoZSBwZXJpb2RpYyBqb2IKICogc3dlZXBlci5zdGFydCgpCiAqCiAqIC8vIE9yIHJ1biBvbmNlIG1hbnVhbGx5CiAqIGNvbnN0IHJlc3VsdCA9IGF3YWl0IHN3ZWVwZXIucnVuKCkKICogY29uc29sZS5sb2coYERlbGV0ZWQgJHtyZXN1bHQuZGVsZXRlZENvdW50fSBleHBpcmVkIGtleXNgKQogKiBgYGAKICovCmV4cG9ydCBjbGFzcyBJZGVtcG90ZW5jeUtleVN3ZWVwZXIgewogIHByaXZhdGUgcmVhZG9ubHkgaW50ZXJ2YWxNczogbnVtYmVyCiAgcHJpdmF0ZSByZWFkb25seSBiYXRjaFNpemU6IG51bWJlcgogIHByaXZhdGUgcmVhZG9ubHkgZHJ5UnVuOiBib29sZWFuCiAgcHJpdmF0ZSByZWFkb25seSBsb2dnZXI6IChtZXNzYWdlOiBzdHJpbmcpID0+IHZvaWQKICBwcml2YXRlIGludGVydmFsOiBOb2RlSlMuVGltZW91dCB8IG51bGwgPSBudWxsCiAgcHJpdmF0ZSBydW5uaW5nID0gZmFsc2UKCiAgY29uc3RydWN0b3IoCiAgICBwcml2YXRlIHJlYWRvbmx5IGRiOiBRdWVyeWFibGUsCiAgICBjb25maWc6IElkZW1wb3RlbmN5U3dlZXBlckNvbmZpZyA9IHt9CiAgKSB7CiAgICB0aGlzLmludGVydmFsTXMgPSBjb25maWcuaW50ZXJ2YWxNcyA/PyAzNjAwMDAwIC8vIDEgaG91ciBkZWZhdWx0CiAgICB0aGlzLmJhdGNoU2l6ZSA9IGNvbmZpZy5iYXRjaFNpemUgPz8gMTAwMDAKICAgIHRoaXMuZHJ5UnVuID0gY29uZmlnLmRyeVJ1biA/PyBmYWxzZQogICAgdGhpcy5sb2dnZXIgPSBjb25maWcubG9nZ2VyID8/ICgoKSA9PiB7fSkKICB9CgogIC8qKgogICAqIFN0YXJ0IHRoZSBwZXJpb2RpYyBzd2VlcGVyIGpvYi4KICAgKi8KICBzdGFydCgpOiB2b2lkIHsKICAgIGlmICh0aGlzLmludGVydmFsKSB7CiAgICAgIHRoaXMubG9nZ2VyKCdbSWRlbXBvdGVuY3lTd2VlcGVyXSBBbHJlYWR5IHJ1bm5pbmcnKQogICAgICByZXR1cm4KICAgIH0KCiAgICB0aGlzLmxvZ2dlcihgW0lkZW1wb3RlbmN5U3dlZXBlcl0gU3RhcnRpbmcgcGVyaW9kaWMgY2xlYW51cCBldmVyeSAke3RoaXMuaW50ZXJ2YWxNc31tc2ApCiAgICAKICAgIC8vIFJ1biBpbW1lZGlhdGVseSBvbiBzdGFydAogICAgdGhpcy5ydW4oKS5jYXRjaCgoZXJyKSA9PiB7CiAgICAgIHRoaXMubG9nZ2VyKGBbSWRlbXBvdGVuY3lTd2VlcGVyXSBFcnJvciBpbiBpbml0aWFsIHJ1bjogJHtlcnJ9YCkKICAgIH0pCgogICAgLy8gU2NoZWR1bGUgcGVyaW9kaWMgcnVucwogICAgdGhpcy5pbnRlcnZhbCA9IHNldEludGVydmFsKCgpID0+IHsKICAgICAgdGhpcy5ydW4oKS5jYXRjaCgoZXJyKSA9PiB7CiAgICAgICAgdGhpcy5sb2dnZXIoYFtJZGVtcG90ZW5jeVN3ZWVwZXJdIEVycm9yIGluIHNjaGVkdWxlZCBydW46ICR7ZXJyfWApCiAgICAgIH0pCiAgICB9LCB0aGlzLmludGVydmFsTXMpCiAgfQoKICAvKioKICAgKiBTdG9wIHRoZSBwZXJpb2RpYyBzd2VlcGVyIGpvYi4KICAgKi8KICBzdG9wKCk6IHZvaWQgewogICAgaWYgKHRoaXMuaW50ZXJ2YWwpIHsKICAgICAgY2xlYXJJbnRlcnZhbCh0aGlzLmludGVydmFsKQogICAgICB0aGlzLmludGVydmFsID0gbnVsbAogICAgICB0aGlzLmxvZ2dlcignW0lkZW1wb3RlbmN5U3dlZXBlcl0gU3RvcHBlZCcpCiAgICB9CiAgfQoKICAvKioKICAgKiBSdW4gYSBzaW5nbGUgY2xlYW51cCBjeWNsZS4KICAgKgogICAqIEB0aHJvd3MgV2hlbiB0aGUgdW5kZXJseWluZyBjb3VudCBvciBkZWxldGUgcXVlcmllcyBmYWlsLiBUaGUgaW4tZmxpZ2h0CiAgICogICBndWFyZCBpcyBhbHdheXMgcmVsZWFzZWQgYmVmb3JlIHRoZSBlcnJvciBwcm9wYWdhdGVzLCBzbyB0aGUgbmV4dCB0aWNrCiAgICogICBjYW4gcmVjb3Zlci4KICAgKgogICAqIEByZXR1cm5zIFJlc3VsdCBjb250YWluaW5nIGNvdW50cyBvZiBleHBpcmVkIGFuZCBkZWxldGVkIGtleXMKICAgKi8KICBhc3luYyBydW4oKTogUHJvbWlzZTxTd2VlcGVyUmVzdWx0PiB7CiAgICBpZiAodGhpcy5ydW5uaW5nKSB7CiAgICAgIHRoaXMubG9nZ2VyKCdbSWRlbXBvdGVuY3lTd2VlcGVyXSBBbHJlYWR5IHJ1bm5pbmcsIHNraXBwaW5nJykKICAgICAgcmV0dXJuIHsgZXhwaXJlZENvdW50OiAwLCBkZWxldGVkQ291bnQ6IDAsIGRyeVJ1bjogdGhpcy5kcnlSdW4sIGR1cmF0aW9uTXM6IDAsIHNraXBwZWQ6IHRydWUgfQogICAgfQoKICAgIHRoaXMucnVubmluZyA9IHRydWUKICAgIGNvbnN0IHN0YXJ0VGltZSA9IERhdGUubm93KCkKCiAgICB0cnkgewogICAgICAvLyBDb3VudCBleHBpcmVkIGtleXMKICAgICAgY29uc3QgY291bnRSZXN1bHQgPSBhd2FpdCB0aGlzLmRiLnF1ZXJ5PHsgY291bnQ6IHN0cmluZyB9PigKICAgICAgICBgU0VMRUNUIENPVU5UKCopOjp0ZXh0IGFzIGNvdW50IEZST00gaWRlbXBvdGVuY3lfa2V5cyBXSEVSRSBleHBpcmVzX2F0IDw9IE5PVygpYAogICAgICApCiAgICAgIAogICAgICBjb25zdCBleHBpcmVkQ291bnQgPSBwYXJzZUludChjb3VudFJlc3VsdC5yb3dzWzBdPy5jb3VudCA/PyAnMCcsIDEwKQoKICAgICAgdGhpcy5sb2dnZXIoCiAgICAgICAgYFtJZGVtcG90ZW5jeVN3ZWVwZXJdIEZvdW5kICR7ZXhwaXJlZENvdW50fSBleHBpcmVkIGtleXMke3RoaXMuZHJ5UnVuID8gJyAoZHJ5LXJ1biknIDogJyd9YAogICAgICApCgogICAgICBsZXQgZGVsZXRlZENvdW50ID0gMAoKICAgICAgaWYgKCF0aGlzLmRyeVJ1biAmJiBleHBpcmVkQ291bnQgPiAwKSB7CiAgICAgICAgLy8gRGVsZXRlIGluIGJhdGNoZXMuIFRoZSBsb29wIGlzIGJvdW5kZWQgYnkgdGhlIGluaXRpYWwgZXhwaXJlZCBjb3VudAogICAgICAgIC8vIHNvIGEgbWlzYmVhdmluZyBkcml2ZXIgdGhhdCByZXBvcnRzIGEgY29uc3RhbnQgcm93Q291bnQgY2Fubm90IGNhdXNlCiAgICAgICAgLy8gYW4gaW5maW5pdGUgbG9vcC4KICAgICAgICBsZXQgcmVtYWluaW5nID0gZXhwaXJlZENvdW50CiAgICAgICAgCiAgICAgICAgd2hpbGUgKHJlbWFpbmluZyA+IDApIHsKICAgICAgICAgIGNvbnN0IGRlbGV0ZVJlc3VsdCA9IGF3YWl0IHRoaXMuZGIucXVlcnkoCiAgICAgICAgICAgIGAKICAgICAgICAgICAgREVMRVRFIEZST00gaWRlbXBvdGVuY3lfa2V5cwogICAgICAgICAgICBXSEVSRSBjdGlkIElOICgKICAgICAgICAgICAgICBTRUxFQ1QgY3RpZCBGUk9NIGlkZW1wb3RlbmN5X2tleXMKICAgICAgICAgICAgICBXSEVSRSBleHBpcmVzX2F0IDw9IE5PVygpCiAgICAgICAgICAgICAgTElNSVQgJDEKICAgICAgICAgICAgKQogICAgICAgICAgICBgLAogICAgICAgICAgICBbdGhpcy5iYXRjaFNpemVdCiAgICAgICAgICApCiAgICAgICAgICAKICAgICAgICAgIGNvbnN0IGJhdGNoRGVsZXRlZCA9IGRlbGV0ZVJlc3VsdC5yb3dDb3VudCA/PyAwCiAgICAgICAgICBkZWxldGVkQ291bnQgKz0gYmF0Y2hEZWxldGVkCiAgICAgICAgICByZW1haW5pbmcgLT0gYmF0Y2hEZWxldGVkCgogICAgICAgICAgaWYgKGJhdGNoRGVsZXRlZCA+IDApIHsKICAgICAgICAgICAgdGhpcy5sb2dnZXIoCiAgICAgICAgICAgICAgYFtJZGVtcG90ZW5jeVN3ZWVwZXJdIERlbGV0ZWQgYmF0Y2ggb2YgJHtiYXRjaERlbGV0ZWR9IGtleXMgKHRvdGFsOiAke2RlbGV0ZWRDb3VudH0pYAogICAgICAgICAgICApCiAgICAgICAgICB9CgogICAgICAgICAgLy8gU3RvcCBpZiB3ZSBkZWxldGVkIGZld2VyIHRoYW4gYmF0Y2ggc2l6ZSAobm8gbW9yZSBleHBpcmVkIGtleXMpCiAgICAgICAgICBpZiAoYmF0Y2hEZWxldGVkIDwgdGhpcy5iYXRjaFNpemUpIHsKICAgICAgICAgICAgYnJlYWsKICAgICAgICAgIH0KICAgICAgICB9CiAgICAgIH0KCiAgICAgIGNvbnN0IGR1cmF0aW9uTXMgPSBEYXRlLm5vdygpIC0gc3RhcnRUaW1lCiAgICAgIAogICAgICB0aGlzLmxvZ2dlcigKICAgICAgICBgW0lkZW1wb3RlbmN5U3dlZXBlcl0gQ29tcGxldGVkOiBleHBpcmVkPSR7ZXhwaXJlZENvdW50fSBkZWxldGVkPSR7ZGVsZXRlZENvdW50fSBkdXJhdGlvbj0ke2R1cmF0aW9uTXN9bXNgCiAgICAgICkKCiAgICAgIHJldHVybiB7CiAgICAgICAgZXhwaXJlZENvdW50LAogICAgICAgIGRlbGV0ZWRDb3VudCwKICAgICAgICBkcnlSdW46IHRoaXMuZHJ5UnVuLAogICAgICAgIGR1cmF0aW9uTXMsCiAgICAgIH0KICAgIH0gY2F0Y2ggKGVycm9yKSB7CiAgICAgIGNvbnN0IGR1cmF0aW9uTXMgPSBEYXRlLm5vdygpIC0gc3RhcnRUaW1lCiAgICAgIHRoaXMubG9nZ2VyKAogICAgICAgIGBbSWRlbXBvdGVuY3lTd2VlcGVyXSBFcnJvciBhZnRlciAke2R1cmF0aW9uTXN9bXM6ICR7ZXJyb3IgaW5zdGFuY2VvZiBFcnJvciA/IGVycm9yLm1lc3NhZ2UgOiBTdHJpbmcoZXJyb3IpfWAKICAgICAgKQogICAgICB0aHJvdyBlcnJvcgogICAgfSBmaW5hbGx5IHsKICAgICAgdGhpcy5ydW5uaW5nID0gZmFsc2UKICAgIH0KICB9CgogIC8qKgogICAqIENoZWNrIGlmIHRoZSBzd2VlcGVyIGlzIGN1cnJlbnRseSBydW5uaW5nLgogICAqLwogIGlzUnVubmluZygpOiBib29sZWFuIHsKICAgIHJldHVybiB0aGlzLnJ1bm5pbmcKICB9Cn0KCi8qKgogKiBTdGFuZGFsb25lIGZ1bmN0aW9uIHRvIHJ1biBhIHNpbmdsZSBjbGVhbnVwIGN5Y2xlLgogKiBVc2VmdWwgZm9yIG9uZS1vZmYgZXhlY3V0aW9ucyBvciB0ZXN0aW5nLgogKi8KZXhwb3J0IGFzeW5jIGZ1bmN0aW9uIHN3ZWVwRXhwaXJlZElkZW1wb3RlbmN5S2V5cygKICBkYjogUXVlcnlhYmxlLAogIGNvbmZpZz86IElkZW1wb3RlbmN5U3dlZXBlckNvbmZpZwp):IFByb21pc2U8U3dlZXBlclJlc3VsdD4gewogIGNvbnN0IHN3ZWVwZXIgPSBuZXcgSWRlbXBvdGVuY3lLZXlTd2VlcGVyKGRiLCBjb25maWcpCiAgcmV0dXJuIHN3ZWVwZXIucnVuKCkKfQo=
+/**
+ * @module jobs/idempotencyKeySweeper
+ * @description Background job to clean up expired idempotency keys.
+ * 
+ * Runs periodically to remove keys that have passed their TTL,
+ * preventing unbounded growth of the idempotency_keys table.
+ */
+
+import type { Queryable } from '../db/repositories/queryable.js'
+
+export interface IdempotencySweeperConfig {
+  /** Run interval in milliseconds (default: 3600000 = 1 hour) */
+  intervalMs?: number
+  /** Maximum number of keys to delete per run (default: 10000) */
+  batchSize?: number
+  /** Enable dry-run mode (count but don't delete) */
+  dryRun?: boolean
+  /** Logger function */
+  logger?: (message: string) => void
+}
+
+export interface SweeperResult {
+  /** Number of expired keys found */
+  expiredCount: number
+  /** Number of keys deleted */
+  deletedCount: number
+  /** Whether this was a dry run */
+  dryRun: boolean
+  /** Duration in milliseconds */
+  durationMs: number
+}
+
+/**
+ * Background job that periodically deletes expired idempotency keys.
+ * 
+ * The sweeper:
+ * 1. Counts keys where expires_at <= NOW()
+ * 2. Deletes them in batches to avoid long-running transactions
+ * 3. Logs the results for monitoring
+ * 
+ * @example
+ * ```typescript
+ * const sweeper = new IdempotencyKeySweeper(db, {
+ *   intervalMs: 3600000, // Run every hour
+ *   batchSize: 10000,
+ *   logger: console.log,
+ * })
+ * 
+ * // Start the periodic job
+ * sweeper.start()
+ * 
+ * // Or run once manually
+ * const result = await sweeper.run()
+ * console.log(`Deleted ${result.deletedCount} expired keys`)
+ * ```
+ */
+export class IdempotencyKeySweeper {
+  private readonly intervalMs: number
+  private readonly batchSize: number
+  private readonly dryRun: boolean
+  private readonly logger: (message: string) => void
+  private interval: NodeJS.Timeout | null = null
+  private running = false
+
+  constructor(
+    private readonly db: Queryable,
+    config: IdempotencySweeperConfig = {}
+  ) {
+    this.intervalMs = config.intervalMs ?? 3600000 // 1 hour default
+    this.batchSize = config.batchSize ?? 10000
+    this.dryRun = config.dryRun ?? false
+    this.logger = config.logger ?? (() => {})
+  }
+
+  /**
+   * Start the periodic sweeper job.
+   */
+  start(): void {
+    if (this.interval) {
+      this.logger('[IdempotencySweeper] Already running')
+      return
+    }
+
+    this.logger(`[IdempotencySweeper] Starting periodic cleanup every ${this.intervalMs}ms`)
+    
+    // Run immediately on start
+    this.run().catch((err) => {
+      this.logger(`[IdempotencySweeper] Error in initial run: ${err}`)
+    })
+
+    // Schedule periodic runs
+    this.interval = setInterval(() => {
+      this.run().catch((err) => {
+        this.logger(`[IdempotencySweeper] Error in scheduled run: ${err}`)
+      })
+    }, this.intervalMs)
+  }
+
+  /**
+   * Stop the periodic sweeper job.
+   */
+  stop(): void {
+    if (this.interval) {
+      clearInterval(this.interval)
+      this.interval = null
+      this.logger('[IdempotencySweeper] Stopped')
+    }
+  }
+
+  /**
+   * Run a single cleanup cycle.
+   * 
+   * @returns Result containing counts of expired and deleted keys
+   */
+  async run(): Promise<SweeperResult> {
+    if (this.running) {
+      this.logger('[IdempotencySweeper] Already running, skipping')
+      return { expiredCount: 0, deletedCount: 0, dryRun: this.dryRun, durationMs: 0 }
+    }
+
+    this.running = true
+    const startTime = Date.now()
+
+    try {
+      // Count expired keys
+      const countResult = await this.db.query<{ count: string }>(
+        `SELECT COUNT(*)::text as count FROM idempotency_keys WHERE expires_at <= NOW()`
+      )
+      
+      const expiredCount = parseInt(countResult.rows[0]?.count ?? '0', 10)
+
+      this.logger(
+        `[IdempotencySweeper] Found ${expiredCount} expired keys${this.dryRun ? ' (dry-run)' : ''}`
+      )
+
+      let deletedCount = 0
+
+      if (!this.dryRun && expiredCount > 0) {
+        // Delete in batches
+        let remaining = expiredCount
+        
+        while (remaining > 0) {
+          const deleteResult = await this.db.query(
+            `
+            DELETE FROM idempotency_keys
+            WHERE ctid IN (
+              SELECT ctid FROM idempotency_keys
+              WHERE expires_at <= NOW()
+              LIMIT $1
+            )
+            `,
+            [this.batchSize]
+          )
+          
+          const batchDeleted = deleteResult.rowCount ?? 0
+          deletedCount += batchDeleted
+          remaining -= batchDeleted
+
+          if (batchDeleted > 0) {
+            this.logger(
+              `[IdempotencySweeper] Deleted batch of ${batchDeleted} keys (total: ${deletedCount})`
+            )
+          }
+
+          // Stop if we deleted fewer than batch size (no more expired keys)
+          if (batchDeleted < this.batchSize) {
+            break
+          }
+        }
+      }
+
+      const durationMs = Date.now() - startTime
+      
+      this.logger(
+        `[IdempotencySweeper] Completed: expired=${expiredCount} deleted=${deletedCount} duration=${durationMs}ms`
+      )
+
+      return {
+        expiredCount,
+        deletedCount,
+        dryRun: this.dryRun,
+        durationMs,
+      }
+    } catch (error) {
+      const durationMs = Date.now() - startTime
+      this.logger(
+        `[IdempotencySweeper] Error after ${durationMs}ms: ${error instanceof Error ? error.message : String(error)}`
+      )
+      throw error
+    } finally {
+      this.running = false
+    }
+  }
+
+  /**
+   * Check if the sweeper is currently running.
+   */
+  isRunning(): boolean {
+    return this.running
+  }
+}
+
+/**
+ * Standalone function to run a single cleanup cycle.
+ * Useful for one-off executions or testing.
+ */
+export async function sweepExpiredIdempotencyKeys(
+  db: Queryable,
+  config?: IdempotencySweeperConfig
+): Promise<SweeperResult> {
+  const sweeper = new IdempotencyKeySweeper(db, config)
+  return sweeper.run()
+}

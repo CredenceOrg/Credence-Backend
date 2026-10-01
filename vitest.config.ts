@@ -12,11 +12,17 @@ export default defineConfig({
       "tests/integration/**/*.test.ts",
       "tests/jobs/**/*.test.ts",
       "tests/repositories/**/*.test.ts",
+      "tests/repositories.test.ts",
       "tests/routes/**/*.test.ts",
       "tests/rbac/**/*.test.ts",
       "tests/rbac.test.ts",
       "monitoring/**/*.test.ts",
       "scripts/**/*.test.ts",
+      // k6 load-test scripts (plain ESM JavaScript) and their boundary/recovery
+      // suites. Those suites stub the `k6`, `k6/http` and `k6/execution`
+      // built-ins with `vi.mock` factories, so no alias or installed k6 binary
+      // is required to run them.
+      "perf/**/*.test.js",
     ],
     coverage: {
       provider: "istanbul",
