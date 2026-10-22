@@ -9,6 +9,7 @@ import type {
 } from './types.js'
 import { createHash } from 'crypto'
 import {
+  DuplicateJobExecutionError,
   NOTIFICATION_DELIVERY_JOB_TYPE,
   buildNotificationDeliveryJobKey,
   type AsyncJob,
@@ -205,7 +206,7 @@ export class IdempotentEmailDeliveryService {
         }
       }
 
-      if (errorMessage.includes('already pending')) {
+      if (error instanceof DuplicateJobExecutionError) {
         return {
           notificationId: notification.id,
           success: false,
@@ -472,9 +473,6 @@ export class IdempotentEmailDeliveryService {
     }
 
     recordNotificationDlq(failureReason)
-    // Cross-cutting retry/DLQ metrics — see src/jobs/retryMetrics.ts. The
-    // `attempts` parameter at this callsite is the final attempt count for
-    // this delivery (1-indexed), so the histogram samples a real number.
     recordJobDeadLetter('notification', failureReason)
     recordJobTerminalOutcome('notification', 'dead_letter', attempts)
 
