@@ -6,15 +6,15 @@
  *   - Zero-decimal currencies (JPY, KRW)
  *   - Three-decimal currencies (KWD, BHD, OMR)
  *   - Boundary values that expose 1-cent floating-point discrepancies
- *   - Rounding modes
+ *   - Rounding modes (including multi-digit remainder cases)
  *   - Multi-rate (applyFees) pipeline
- *   - Edge inputs: zero amount, zero rate, tiny rates, large amounts
+ *   - Edge inputs: zero amount, zero rate, tiny rates, large amounts, excess base precision rejection
  */
 
 import { describe, it, expect } from 'vitest'
 import { calculateFee, applyFees } from './feeEngine.js'
 import { RoundingMode } from '../../lib/decimalMath.js'
-import type { FeeInput, Money } from './types.js'
+import type { Money } from './types.js'
 
 // ---------------------------------------------------------------------------
 // calculateFee — single rate
@@ -56,7 +56,7 @@ describe('feeEngine', () => {
         ['10.55',  '5',    '0.53',  '11.08'],   // 10.55*0.05 = 0.5275 → 0.53
         ['14.99',  '7.5',  '1.12',  '16.11'],   // 14.99*0.075 = 1.12425 → 1.12
         ['29.99',  '3',    '0.90',  '30.89'],   // 29.99*0.03 = 0.8997 → 0.90
-        ['49.995', '2',    '1.00',  '50.99'],   // 49.99*0.02 = 0.9999 → 1.00 (note base truncated to 49.99)
+        ['49.99',  '2',    '1.00',  '50.99'],   // 49.99*0.02 = 0.9998 → 1.00 (valid scale-2 USD base)
         ['0.01',   '50',   '0.01',  '0.02'],   // 0.01*0.50 = 0.005 → fee=0.01 (HALF_UP), total=0.02
         ['0.01',   '33.3', '0.00',  '0.01'],   // 0.01*0.333 = 0.00333 → 0.00
         ['33.33',  '3',    '1.00',  '34.33'],   // 33.33*0.03 = 0.9999 → 1.00
@@ -137,14 +137,29 @@ describe('feeEngine', () => {
 
     describe('rounding mode overrides', () => {
       it('HALF_DOWN: 0.5 rounds down', () => {
-        // 1.00 × 50% = 0.50 → HALF_DOWN → 0.50 (exact), test boundary
-        // Use a value where the last digit is exactly 5
         // 0.01 × 50% = 0.005 → scale 2 → 0.01 (HALF_UP) but 0.00 (HALF_DOWN)
         const result = calculateFee(
           { base: { amount: '0.01', currency: 'USD' }, ratePercent: '50' },
           RoundingMode.HALF_DOWN,
         )
         expect(result.feeAmount.amount).toBe('0.00')
+      })
+
+      it('HALF_DOWN exact midpoint: 1.00 @ 0.5 gives 0.00', () => {
+        const result = calculateFee(
+          { base: { amount: '1.00', currency: 'USD' }, ratePercent: '0.5' },
+          RoundingMode.HALF_DOWN,
+        )
+        expect(result.feeAmount.amount).toBe('0.00')
+      })
+
+      it('HALF_DOWN above midpoint past first discarded digit: 1.00 @ 0.5001 gives 0.01', () => {
+        // Exact fee is 0.005001, which is strictly above the 0.005 midpoint
+        const result = calculateFee(
+          { base: { amount: '1.00', currency: 'USD' }, ratePercent: '0.5001' },
+          RoundingMode.HALF_DOWN,
+        )
+        expect(result.feeAmount.amount).toBe('0.01')
       })
 
       it('HALF_EVEN: 0.5 rounds to even', () => {
@@ -163,8 +178,30 @@ describe('feeEngine', () => {
         expect(result2.feeAmount.amount).toBe('2')
       })
 
+      it('HALF_EVEN exact midpoint in USD: 1.00 @ 0.5 gives 0.00 and 3.00 @ 0.5 gives 0.02', () => {
+        const evenMid = calculateFee(
+          { base: { amount: '1.00', currency: 'USD' }, ratePercent: '0.5' },
+          RoundingMode.HALF_EVEN,
+        )
+        expect(evenMid.feeAmount.amount).toBe('0.00')
+
+        const oddMid = calculateFee(
+          { base: { amount: '3.00', currency: 'USD' }, ratePercent: '0.5' },
+          RoundingMode.HALF_EVEN,
+        )
+        expect(oddMid.feeAmount.amount).toBe('0.02')
+      })
+
+      it('HALF_EVEN above midpoint past first discarded digit: 1.00 @ 0.5001 gives 0.01', () => {
+        // Exact fee is 0.005001, which is strictly above the 0.005 midpoint
+        const result = calculateFee(
+          { base: { amount: '1.00', currency: 'USD' }, ratePercent: '0.5001' },
+          RoundingMode.HALF_EVEN,
+        )
+        expect(result.feeAmount.amount).toBe('0.01')
+      })
+
       it('DOWN: always truncates toward zero', () => {
-        // 100 × 1.9% = 1.90 (exact, no difference)
         // 10.55 × 5% = 0.5275 → DOWN → 0.52
         const result = calculateFee(
           { base: { amount: '10.55', currency: 'USD' }, ratePercent: '5' },
@@ -180,6 +217,39 @@ describe('feeEngine', () => {
           RoundingMode.UP,
         )
         expect(result.feeAmount.amount).toBe('0.53')
+      })
+
+      it('UP with tiny remainder past first discarded digit: 1.00 @ 0.0001 gives 0.01', () => {
+        // Exact fee is 0.000001 -> non-zero remainder -> rounds up to 0.01
+        const result = calculateFee(
+          { base: { amount: '1.00', currency: 'USD' }, ratePercent: '0.0001' },
+          RoundingMode.UP,
+        )
+        expect(result.feeAmount.amount).toBe('0.01')
+      })
+
+      it('UP with exact result: 100.00 @ 2.5 gives 2.50, not 2.51', () => {
+        const result = calculateFee(
+          { base: { amount: '100.00', currency: 'USD' }, ratePercent: '2.5' },
+          RoundingMode.UP,
+        )
+        expect(result.feeAmount.amount).toBe('2.50')
+      })
+
+      it('UP on JPY (scale 0): 1 @ 0.1 gives 1', () => {
+        const result = calculateFee(
+          { base: { amount: '1', currency: 'JPY' }, ratePercent: '0.1' },
+          RoundingMode.UP,
+        )
+        expect(result.feeAmount.amount).toBe('1')
+      })
+
+      it('UP on KWD (scale 3): 1.000 @ 0.00001 gives 0.001', () => {
+        const result = calculateFee(
+          { base: { amount: '1.000', currency: 'KWD' }, ratePercent: '0.00001' },
+          RoundingMode.UP,
+        )
+        expect(result.feeAmount.amount).toBe('0.001')
       })
     })
 
@@ -203,15 +273,27 @@ describe('feeEngine', () => {
       })
 
       it('very small rate (0.01%) on large USD amount', () => {
-        // 1000000.00 × 0.0001 = 1.00
+        // 1000000.00 × 0.0001 = 100.00
         const result = calculateFee({ base: { amount: '1000000.00', currency: 'USD' }, ratePercent: '0.01' })
         expect(result.feeAmount.amount).toBe('100.00')
       })
 
-      it('base amount with extra precision is normalised to currency scale', () => {
-        // "100.999" normalised DOWN to "100.99" for USD
-        const result = calculateFee({ base: { amount: '100.999', currency: 'USD' }, ratePercent: '0' })
-        expect(result.baseAmount.amount).toBe('100.99')
+      it('rejects base amount with more fractional digits than the currency scale', () => {
+        expect(() =>
+          calculateFee({ base: { amount: '100.999', currency: 'USD' }, ratePercent: '0' }),
+        ).toThrow(/currency scale of 2 for USD/)
+
+        expect(() =>
+          calculateFee({ base: { amount: '10.999', currency: 'USD' }, ratePercent: '1' }),
+        ).toThrow(/currency scale of 2 for USD/)
+
+        expect(() =>
+          calculateFee({ base: { amount: '10.5', currency: 'JPY' }, ratePercent: '1' }),
+        ).toThrow(/currency scale of 0 for JPY/)
+
+        expect(() =>
+          calculateFee({ base: { amount: '1.0001', currency: 'KWD' }, ratePercent: '1' }),
+        ).toThrow(/currency scale of 3 for KWD/)
       })
 
       it('throws for negative rate', () => {
@@ -294,6 +376,12 @@ describe('feeEngine', () => {
         expect(result.baseAmount.currency).toBe('JPY')
         expect(result.feeAmount.currency).toBe('JPY')
         expect(result.totalAmount.currency).toBe('JPY')
+      })
+
+      it('rejects excess fractional digits on base amount', () => {
+        expect(() =>
+          applyFees({ amount: '10.999', currency: 'USD' }, ['1']),
+        ).toThrow(/currency scale of 2 for USD/)
       })
     })
   })

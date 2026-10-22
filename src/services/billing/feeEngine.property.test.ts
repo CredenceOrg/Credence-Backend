@@ -100,8 +100,58 @@ describe('Billing Fee Engine Property Tests', () => {
   )
 
   // ---------------------------------------------------------------------------
-  // Proxy Helper for testing addMoneyStrings via calculateFee
+  // Reference Rational Implementation & Helpers
   // ---------------------------------------------------------------------------
+
+  function referenceRationalFee(
+    baseAmount: string,
+    ratePercent: string,
+    scale: number,
+    mode: RoundingMode,
+  ): string {
+    const parseDigits = (s: string) => {
+      const [intPart, fracPart = ''] = s.trim().split('.')
+      return {
+        unscaled: BigInt(intPart + fracPart),
+        fracLen: fracPart.length,
+      }
+    }
+
+    const b = parseDigits(baseAmount)
+    const r = parseDigits(ratePercent)
+
+    const n = b.unscaled * r.unscaled * (10n ** BigInt(scale))
+    const d = (10n ** BigInt(b.fracLen + r.fracLen)) * 100n
+
+    const q = n / d
+    const rem = n % d
+    const twoRem = 2n * rem
+
+    let rounded: bigint
+    switch (mode) {
+      case RoundingMode.DOWN:
+        rounded = q
+        break
+      case RoundingMode.UP:
+        rounded = rem > 0n ? q + 1n : q
+        break
+      case RoundingMode.HALF_UP:
+        rounded = twoRem >= d ? q + 1n : q
+        break
+      case RoundingMode.HALF_DOWN:
+        rounded = twoRem > d ? q + 1n : q
+        break
+      case RoundingMode.HALF_EVEN:
+        if (twoRem > d) rounded = q + 1n
+        else if (twoRem < d) rounded = q
+        else rounded = q % 2n === 0n ? q : q + 1n
+        break
+    }
+
+    if (scale === 0) return rounded.toString()
+    const sf = 10n ** BigInt(scale)
+    return `${rounded / sf}.${(rounded % sf).toString().padStart(scale, '0')}`
+  }
 
   /**
    * Proxy function to add two decimal strings using the private addMoneyStrings helper.
@@ -145,6 +195,77 @@ describe('Billing Fee Engine Property Tests', () => {
   // ---------------------------------------------------------------------------
 
   /**
+   * TSDoc: Invariant - Exact Rational Reference Equivalence (1,000 runs)
+   *
+   * For random base/rate strings and currencies, each rounding mode's feeAmount
+   * matches a direct rational reference implementation comparing 2r against d.
+   */
+  it('should match the exact rational reference implementation across all rounding modes', () => {
+    fc.assert(
+      fc.property(
+        decimalStringArb,
+        rateStringArb,
+        currencyArb,
+        roundingModeArb,
+        (rawAmount, rate, currency, mode) => {
+          const scale = getCurrencyScale(currency)
+          const baseAmount = roundToScale(rawAmount, scale, RoundingMode.DOWN)
+
+          const actual = calculateFee(
+            { base: { amount: baseAmount, currency }, ratePercent: rate },
+            mode,
+          ).feeAmount.amount
+          const expected = referenceRationalFee(baseAmount, rate, scale, mode)
+
+          expect(actual).toBe(expected)
+        },
+      ),
+      { numRuns: 1000 },
+    )
+  })
+
+  /**
+   * TSDoc: Invariant - Rounding Mode Ordering & 1-Minor-Unit Bound (1,000 runs)
+   *
+   * For every input: DOWN <= HALF_DOWN <= HALF_UP <= UP, DOWN <= HALF_EVEN <= UP,
+   * and (UP - DOWN) is either 0 or 1 minor unit.
+   */
+  it('should satisfy DOWN <= HALF_* <= UP and UP - DOWN in {0, 1 minor unit}', () => {
+    fc.assert(
+      fc.property(
+        decimalStringArb,
+        rateStringArb,
+        currencyArb,
+        (rawAmount, rate, currency) => {
+          const scale = getCurrencyScale(currency)
+          const baseAmount = roundToScale(rawAmount, scale, RoundingMode.DOWN)
+          const input = { base: { amount: baseAmount, currency }, ratePercent: rate }
+
+          const down = calculateFee(input, RoundingMode.DOWN).feeAmount.amount
+          const halfDown = calculateFee(input, RoundingMode.HALF_DOWN).feeAmount.amount
+          const halfEven = calculateFee(input, RoundingMode.HALF_EVEN).feeAmount.amount
+          const halfUp = calculateFee(input, RoundingMode.HALF_UP).feeAmount.amount
+          const up = calculateFee(input, RoundingMode.UP).feeAmount.amount
+
+          expect(compareDecimals(down, halfDown)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(down, halfEven)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(down, halfUp)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(halfDown, halfUp)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(halfDown, up)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(halfEven, up)).toBeLessThanOrEqual(0)
+          expect(compareDecimals(halfUp, up)).toBeLessThanOrEqual(0)
+
+          const downMinor = BigInt(down.replace('.', ''))
+          const upMinor = BigInt(up.replace('.', ''))
+          const diff = upMinor - downMinor
+          expect(diff === 0n || diff === 1n).toBe(true)
+        },
+      ),
+      { numRuns: 1000 },
+    )
+  })
+
+  /**
    * TSDoc: Invariant - applyFees (fee + net == gross)
    *
    * For every generated non-negative decimal amount, list of rates, currency,
@@ -159,7 +280,9 @@ describe('Billing Fee Engine Property Tests', () => {
         currencyArb,
         roundingModeArb,
         (amount, rates, currency, roundingMode) => {
-          const base = { amount, currency }
+          const scale = getCurrencyScale(currency)
+          const normAmount = roundToScale(amount, scale, RoundingMode.DOWN)
+          const base = { amount: normAmount, currency }
           const result = applyFees(base, rates, roundingMode)
 
           const sum = addDecimals(result.baseAmount.amount, result.feeAmount.amount)
@@ -258,9 +381,11 @@ describe('Billing Fee Engine Property Tests', () => {
         invalidDecimalStringArb,
         currencyArb,
         (invalidRate, currency) => {
+          const scale = getCurrencyScale(currency)
+          const baseAmount = scale === 0 ? '100' : `100.${'0'.repeat(scale)}`
           expect(() =>
             calculateFee({
-              base: { amount: '100.00', currency },
+              base: { amount: baseAmount, currency },
               ratePercent: invalidRate,
             }),
           ).toThrow()

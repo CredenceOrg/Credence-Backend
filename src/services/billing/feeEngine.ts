@@ -16,7 +16,7 @@
  * minor unit (1 cent / 1 yen / 1 fils).
  */
 
-import { roundToScale, RoundingMode } from '../../lib/decimalMath.js'
+import { applyDivisionRounding, roundToScale, RoundingMode } from '../../lib/decimalMath.js'
 import type { FeeInput, FeeResult, Money, CurrencyCode } from './types.js'
 import { getCurrencyScale } from './types.js'
 
@@ -38,11 +38,34 @@ function parseNonNegativeDecimal(value: string, label: string): { intDigits: str
 }
 
 /**
+ * Validate that `amount` does not exceed the currency's minor-unit `scale`
+ * and format it to `scale` fractional digits.
+ *
+ * Rejects base amounts carrying excess fractional digits instead of silently
+ * truncating them.
+ */
+function normaliseAndValidateBaseAmount(
+  amount: string,
+  currency: CurrencyCode,
+  scale: number,
+): string {
+  const { fracDigits } = parseNonNegativeDecimal(amount, 'base.amount')
+  if (fracDigits.length > scale) {
+    throw new Error(
+      `base.amount "${amount}" has ${fracDigits.length} fractional digit(s), which exceeds the currency scale of ${scale} for ${currency}`,
+    )
+  }
+  return roundToScale(amount, scale, RoundingMode.DOWN)
+}
+
+/**
  * Compute `amount × ratePercent / 100` using pure BigInt arithmetic and
  * round the result to `targetScale` fractional digits with `mode`.
  *
- * The only division performed is a BigInt integer division, preceded by
- * sufficient upward scaling so the rounding digit is always exact.
+ * The exact integer quotient and remainder at `targetScale` are computed in
+ * BigInt and rounded via `applyDivisionRounding` so that all discarded
+ * fractional digits (not just the first digit past `targetScale`) are taken
+ * into account for `UP`, `HALF_DOWN`, and `HALF_EVEN`.
  */
 function computeRawFee(
   amountStr: string,
@@ -64,46 +87,19 @@ function computeRawFee(
   // fee = amountBig/10^amountScale × rateBig/10^rateScale / 100
   //     = amountBig × rateBig / (10^(amountScale + rateScale) × 100)
   //
-  // To extract the rounding digit for targetScale places we need the
-  // quotient at (targetScale + 1) fractional digits:
-  //
-  //   feeAtExtra = amountBig × rateBig × 10^(targetScale+1)
-  //                ÷ (10^(amountScale + rateScale) × 100)
+  // Scaled by 10^targetScale:
+  //   numerator   = amountBig × rateBig × 10^targetScale
+  //   denominator = 10^(amountScale + rateScale) × 100
+  //   truncated   = numerator / denominator
+  //   remainder   = numerator % denominator
   //
   // All operations stay in BigInt until the final format step.
-
-  const extraScale = targetScale + 1
   const denominator = (10n ** BigInt(amountScale + rateScale)) * 100n
-  const numerator   = amountBig * rateBig * (10n ** BigInt(extraScale))
+  const numerator   = amountBig * rateBig * (10n ** BigInt(targetScale))
 
-  const feeAtExtra = numerator / denominator
-  const roundDigit  = feeAtExtra % 10n
-  const truncated   = feeAtExtra / 10n
-
-  // Apply rounding mode.
-  let rounded: bigint
-  switch (mode) {
-    case RoundingMode.DOWN:
-      rounded = truncated
-      break
-    case RoundingMode.UP:
-      rounded = roundDigit > 0n ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_UP:
-      rounded = roundDigit >= 5n ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_DOWN:
-      rounded = roundDigit > 5n ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_EVEN: {
-      if (roundDigit > 5n) rounded = truncated + 1n
-      else if (roundDigit < 5n) rounded = truncated
-      else rounded = truncated % 2n === 0n ? truncated : truncated + 1n
-      break
-    }
-    default:
-      rounded = truncated
-  }
+  const truncated = numerator / denominator
+  const remainder = numerator % denominator
+  const rounded   = applyDivisionRounding(truncated, remainder, denominator, mode)
 
   // Format back to decimal string at targetScale.
   if (targetScale === 0) return rounded.toString()
@@ -170,8 +166,8 @@ export function calculateFee(
 
   const scale = getCurrencyScale(currency)
 
-  // Normalise base amount to the currency's scale (no rounding — just format).
-  const normalisedBase = roundToScale(base.amount, scale, RoundingMode.DOWN)
+  // Validate that base.amount does not exceed the currency scale, then format.
+  const normalisedBase = normaliseAndValidateBaseAmount(base.amount, currency, scale)
 
   const feeAmountStr = computeRawFee(normalisedBase, ratePercent, scale, roundingMode)
   const totalAmountStr = addMoneyStrings(normalisedBase, feeAmountStr, scale)
@@ -202,9 +198,11 @@ export function applyFees(
   rates: readonly string[],
   roundingMode: RoundingMode = RoundingMode.HALF_UP,
 ): FeeResult {
+  const scale = getCurrencyScale(base.currency)
+  const normBase = normaliseAndValidateBaseAmount(base.amount, base.currency, scale)
+  const currency = base.currency
+
   if (rates.length === 0) {
-    const scale = getCurrencyScale(base.currency)
-    const normBase = roundToScale(base.amount, scale, RoundingMode.DOWN)
     const zero = (0n).toString().padStart(1, '0')
     const zeroStr = scale === 0 ? zero : `${zero}.${'0'.repeat(scale)}`
     const toMoney = (amount: string): Money => ({ amount, currency: base.currency })
@@ -214,10 +212,6 @@ export function applyFees(
       totalAmount: toMoney(normBase),
     }
   }
-
-  const scale = getCurrencyScale(base.currency)
-  const normBase = roundToScale(base.amount, scale, RoundingMode.DOWN)
-  const currency = base.currency
 
   // Compute each individual fee and sum them.
   let totalFeeBig = 0n
