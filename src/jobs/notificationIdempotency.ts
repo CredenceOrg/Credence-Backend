@@ -15,7 +15,7 @@
  * two workers racing on the same `job_key` cannot both win: Postgres serialises
  * them on the unique index, and only the winner gets a RETURNING row. A row is
  * reclaimable only when the previous attempt failed, its TTL lapsed, or its claim
- * went stale (see `claimTimeoutSeconds`) — a `completed` row within TLL is never
+ * went stale (see `claimTimeoutSeconds`) — a `completed` row within TTL is never
  * reclaimed, so a replayed job returns the recorded result instead of sending again.
  */
 
@@ -41,7 +41,7 @@ export interface CreateIdempotentJobInput {
    * How long a `pending` claim stays valid. Once this elapses the claim is
    * considered abandoned (the worker holding it crashed) and another worker may
    * reclaim it. Without this a crashed worker would block the notification for
-   * the full `expiresInSeconds` TLL.
+   * the full `expiresInSeconds` TTL.
    */
   claimTimeoutSeconds: number
 }
@@ -50,6 +50,17 @@ export interface IdempotentJobResult<T> {
   alreadyProcessed: boolean
   result: T | null
   attempt: IdempotentJobAttempt | null
+}
+
+export class DuplicateJobExecutionError extends Error {
+  readonly jobKey: string
+  readonly status = 'pending' as const
+
+  constructor(jobKey: string) {
+    super(`Duplicate job execution detected: job ${jobKey} is already pending`)
+    this.name = 'DuplicateJobExecutionError'
+    this.jobKey = jobKey
+  }
 }
 
 const DEFAULT_EXPIRY_SECONDS = 24 * 60 * 60
@@ -88,6 +99,18 @@ function mapAttempt(row: AttemptRow): IdempotentJobAttempt {
     attemptedAt: new Date(row.attempted_at),
     completedAt: row.completed_at ? new Date(row.completed_at) : null,
     expiresAt: new Date(row.expires_at),
+  }
+}
+
+function parseStoredResult<T>(jobKey: string, raw: string | null): T | null {
+  if (!raw) {
+    return null
+  }
+  try {
+    return JSON.parse(raw) as T
+  } catch (err) {
+    console.warn(`Failed to parse stored idempotent job result for ${jobKey}:`, err)
+    return null
   }
 }
 
@@ -205,29 +228,45 @@ export class IdempotentNotificationJob<T> {
   }
 
   async execute(): Promise<IdempotentJobResult<T>> {
-    const attempt = await this.repo.claimAttempt({
+    const claimInput: CreateIdempotentJobInput = {
       jobKey: this.jobKey,
       jobType: this.jobType,
       expiresInSeconds: this.expiresInSeconds,
       claimTimeoutSeconds: this.claimTimeoutSeconds,
-    })
+    }
+
+    let attempt = await this.repo.claimAttempt(claimInput)
 
     if (!attempt) {
-      // Lost the claim: either the work is already done, or another worker
-      // holds a live claim. Never run the job in this branch.
-      const current = await this.repo.findAttempt(this.jobKey)
+      let current = await this.repo.findAttempt(this.jobKey)
 
       if (current?.status === 'completed') {
         return {
           alreadyProcessed: true,
-          result: current.result ? (JSON.parse(current.result) as T) : null,
+          result: parseStoredResult<T>(this.jobKey, current.result),
           attempt: current,
         }
       }
 
-      throw new Error(
-        `Duplicate job execution detected: job ${this.jobKey} is already pending
-      )
+      if (current?.status === 'pending') {
+        throw new DuplicateJobExecutionError(this.jobKey)
+      }
+
+      // The blocking row expired or transitioned to 'failed' between
+      // claimAttempt() and findAttempt(). Retry the atomic claim once.
+      attempt = await this.repo.claimAttempt(claimInput)
+
+      if (!attempt) {
+        current = await this.repo.findAttempt(this.jobKey)
+        if (current?.status === 'completed') {
+          return {
+            alreadyProcessed: true,
+            result: parseStoredResult<T>(this.jobKey, current.result),
+            attempt: current,
+          }
+        }
+        throw new DuplicateJobExecutionError(this.jobKey)
+      }
     }
 
     try {

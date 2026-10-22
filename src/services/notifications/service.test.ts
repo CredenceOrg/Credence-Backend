@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto'
 import * as promClient from 'prom-client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DuplicateJobExecutionError,
   buildNotificationDeliveryJobKey,
   type AsyncJob,
   type IdempotentJobResult,
@@ -44,7 +45,7 @@ class MockNotificationStore implements NotificationStore {
       id: randomUUID(),
     }
     this.attempts.set(record.id, record)
-    this.attemptsByKey.set(record.idempotencyKey, record)
+    this.attemptsByKey.set(attempt.idempotencyKey, record)
     return record
   }
 
@@ -108,7 +109,7 @@ class MockNotificationStore implements NotificationStore {
     }
 
     if (existing?.status === 'pending') {
-      throw new Error(`Duplicate job execution detected: job ${jobKey} is already pending`)
+      throw new DuplicateJobExecutionError(jobKey)
     }
 
     this.jobAttempts.set(jobKey, {
@@ -342,7 +343,6 @@ describe('Notifications failover', () => {
   })
 })
 
-
 describe('NotificationProviderHealthTracker gradual recovery', () => {
   it('places recovering providers behind healthy ones but ahead of unhealthy ones', () => {
     const now = 1_000_000
@@ -358,16 +358,12 @@ describe('NotificationProviderHealthTracker gradual recovery', () => {
     const recoveringProvider = { name: 'recovering', send: async () => ({ id: '', statusCode: 200 }) }
     const unhealthyProvider = { name: 'unhealthy', send: async () => ({ id: '', statusCode: 200 }) }
 
-    // Track health states
     tracker.recordFailure('unhealthy', true)
     tracker.recordFailure('recovering', true)
-    // Move time forward but keep unhealthy still within cooldown
     fakeNow = now + 30_000
-    // Move recovering past cooldown and mark as recovered
     const recoveringNow = now + 60_000 + 1
     fakeNow = recoveringNow
     tracker.recordSuccess('recovering')
-    // Reset clock to be during unhealthy's cooldown but after recovering's buffer
     fakeNow = now + 30_000
 
     const ordered = tracker.orderProviders([unhealthyProvider, healthyProvider, recoveringProvider])
@@ -389,15 +385,12 @@ describe('NotificationProviderHealthTracker gradual recovery', () => {
 
     const provider = { name: 'p', send: async () => ({ id: '', statusCode: 200 }) }
 
-    // Fail, then recover
     tracker.recordFailure('p', true)
     fakeNow = now + 60_000 + 1
     tracker.recordSuccess('p')
 
-    // Still within recovery buffer -> recovering
     expect(tracker.isRecovering('p')).toBe(true)
 
-    // Advance past recovery buffer
     fakeNow = now + 60_000 + 1 + 10_000
     expect(tracker.isRecovering('p')).toBe(false)
   })

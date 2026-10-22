@@ -7,11 +7,12 @@
  * `notificationIdempotency.integration.test.ts` re-verifies the same behaviour
  * against a real Postgres when one is available.
  */
-import { beforeEach, describe, expect, it, vi} from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { QueryResult, QueryResultRow } from 'pg'
 import type { Queryable } from '../db/repositories/queryable.js'
 import {
   DEFAULT_CLAIM_TIMEOUT_SECONDS,
+  DuplicateJobExecutionError,
   IdempotentNotificationJob,
   NotificationIdempotencyRepository,
   buildNotificationDeliveryJobKey,
@@ -137,12 +138,11 @@ const JOB_KEY = buildNotificationDeliveryJobKey('notif-1')
 const JOB_TYPE = 'notification_delivery'
 
 function makeJob(
-  db: Queryable,
+  db: Queryable,
   send: () => Promise<string>,
   expiresInSeconds = 3600,
   claimTimeoutSeconds = 900
-)
-{
+) {
   return new IdempotentNotificationJob(
     db,
     JOB_KEY,
@@ -161,7 +161,7 @@ describe('IdempotentNotificationJob', () => {
   })
 
   it('runs the job on first claim and records the result', async () => {
-    const send = vi.fn().mockResolved('sent-1')
+    const send = vi.fn().mockResolvedValue('sent-1')
 
     const result = await makeJob(db, send).execute()
 
@@ -172,7 +172,7 @@ describe('IdempotentNotificationJob', () => {
   })
 
   it('does not re-send when a completed attempt is replayed', async () => {
-    const send = vi.fn().mockResolved('sent-1')
+    const send = vi.fn().mockResolvedValue('sent-1')
 
     await makeJob(db, send).execute()
     const replay = await makeJob(db, send).execute()
@@ -206,8 +206,28 @@ describe('IdempotentNotificationJob', () => {
       ['held', JOB_KEY, JOB_TYPE, 3600, 900]
     )
 
-    const send = vi.fn().mockResolved('sent-1')
+    const send = vi.fn().mockResolvedValue('sent-1')
     await expect(makeJob(db, send).execute()).rejects.toThrow('already pending')
+    expect(send).not.toHaveBeenCalled()
+  })
+
+  it('rejects with DuplicateJobExecutionError carrying jobKey when a live pending row exists', async () => {
+    await db.query(
+      'INSERT INTO idempotent_job_attempts',
+      ['held', JOB_KEY, JOB_TYPE, 3600, 900]
+    )
+
+    const send = vi.fn().mockResolvedValue('sent-1')
+    let caughtError: unknown
+    try {
+      await makeJob(db, send).execute()
+    } catch (err) {
+      caughtError = err
+    }
+
+    expect(caughtError).toBeInstanceOf(DuplicateJobExecutionError)
+    expect((caughtError as DuplicateJobExecutionError).jobKey).toBe(JOB_KEY)
+    expect((caughtError as DuplicateJobExecutionError).status).toBe('pending')
     expect(send).not.toHaveBeenCalled()
   })
 
@@ -221,7 +241,7 @@ describe('IdempotentNotificationJob', () => {
     // stayed 'pending' for the full 24h TTL and every retry was rejected.
     db.advanceSeconds(901)
 
-    const send = vi.fn().mockResolved('sent-late')
+    const send = vi.fn().mockResolvedValue('sent-late')
     const result = await makeJob(db, send, 86_400, 900).execute()
 
     expect(send).toHaveBeenCalledTimes(1)
@@ -235,7 +255,7 @@ describe('IdempotentNotificationJob', () => {
     )
     db.advanceSeconds(899)
 
-    const send = vi.fn().mockResolved('sent')
+    const send = vi.fn().mockResolvedValue('sent')
     await expect(makeJob(db, send, 86_400, 900).execute()).rejects.toThrow('already pending')
     expect(send).not.toHaveBeenCalled()
   })
@@ -245,7 +265,7 @@ describe('IdempotentNotificationJob', () => {
     await expect(makeJob(db, failing).execute()).rejects.toThrow('provider 503')
     expect(db.rows.get(JOB_KEY)?.status).toBe('failed')
 
-    const send = vi.fn().mockResolved('sent-retry')
+    const send = vi.fn().mockResolvedValue('sent-retry')
     const result = await makeJob(db, send).execute()
 
     expect(send).toHaveBeenCalledTimes(1)
@@ -253,7 +273,7 @@ describe('IdempotentNotificationJob', () => {
   })
 
   it('re-sends once the recorded attempt has expired', async () => {
-    const send = vi.fn().mockResolved('sent-1')
+    const send = vi.fn().mockResolvedValue('sent-1')
     await makeJob(db, send, 60).execute()
 
     db.advanceSeconds(61)
@@ -269,7 +289,7 @@ describe('IdempotentNotificationJob', () => {
     )
     db.advanceSeconds(901)
 
-    const send = vi.fn().mockResolved('sent-by-owner')
+    const send = vi.fn().mockResolvedValue('sent-by-owner')
     await makeJob(db, send, 86_400, 900).execute()
 
     // The crashed worker finally reports success against its rotated-away id.
@@ -280,12 +300,74 @@ describe('IdempotentNotificationJob', () => {
   })
 
   it('surfaces a null result for a completed attempt with no recorded payload', async () => {
-    const send = vi.fn().mockResolved(undefined)
+    const send = vi.fn().mockResolvedValue(undefined)
     await makeJob(db, send).execute()
 
     const replay = await makeJob(db, send).execute()
     expect(replay.alreadyProcessed).toBe(true)
     expect(replay.result).toBeNull()
+  })
+
+  it('returns null result instead of crashing when completed row has invalid JSON', async () => {
+    await db.query(
+      'INSERT INTO idempotent_job_attempts',
+      ['completed-bad-json', JOB_KEY, JOB_TYPE, 3600, 900]
+    )
+    const row = db.rows.get(JOB_KEY)!
+    row.status = 'completed'
+    row.result = 'not-json'
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const send = vi.fn().mockResolvedValue('sent')
+    const replay = await makeJob(db, send).execute()
+
+    expect(replay.alreadyProcessed).toBe(true)
+    expect(replay.result).toBeNull()
+    expect(send).not.toHaveBeenCalled()
+    warnSpy.mockRestore()
+  })
+
+  it('re-claims once and runs the job when the blocking row expires between claimAttempt and findAttempt', async () => {
+    let insertCalls = 0
+    const racingDb: Queryable = {
+      query: async (text: string) => {
+        const sql = text.trim()
+        if (sql.startsWith('INSERT INTO idempotent_job_attempts')) {
+          insertCalls++
+          if (insertCalls === 1) {
+            return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as never
+          }
+          return {
+            rows: [
+              {
+                id: 'reclaimed-id',
+                job_key: JOB_KEY,
+                job_type: JOB_TYPE,
+                status: 'pending',
+                result: null,
+                attempted_at: new Date(),
+                completed_at: null,
+                expires_at: new Date(Date.now() + 3600_000),
+              },
+            ],
+            rowCount: 1,
+            command: '',
+            oid: 0,
+            fields: [],
+          } as never
+        }
+        return { rows: [], rowCount: 0, command: '', oid: 0, fields: [] } as never
+      },
+    }
+
+    const send = vi.fn().mockResolvedValue('sent-after-reclaim')
+    const job = new IdempotentNotificationJob(racingDb, JOB_KEY, JOB_TYPE, { run: send })
+    const outcome = await job.execute()
+
+    expect(insertCalls).toBe(2)
+    expect(send).toHaveBeenCalledTimes(1)
+    expect(outcome.alreadyProcessed).toBe(false)
+    expect(outcome.result).toBe('sent-after-reclaim')
   })
 
   it('reports a non-Error throw as Unknown error', async () => {
@@ -295,7 +377,7 @@ describe('IdempotentNotificationJob', () => {
   })
 
   it('applies default TTL and claim lease via the factory', async () => {
-    const send = vi.fn().mockResolved('sent')
+    const send = vi.fn().mockResolvedValue('sent')
     await createIdempotentNotificationJob(db, JOB_KEY, JOB_TYPE, { run: send }).execute()
 
     const row = db.rows.get(JOB_KEY)
@@ -303,22 +385,25 @@ describe('IdempotentNotificationJob', () => {
     expect(ttlSeconds).toBe(24 * 60 * 60)
     expect(DEFAULT_CLAIM_TIMEOUT_SECONDS).toBe(15 * 60)
   })
-
 })
 
 describe('lost claim with no readable row', () => {
-  it('reports a duplicate rather than sending', async () => {
-    // Claim lost, then the row is swept before it can be read back. Sending here
-    // would risk a duplicate, so the job must refuse.
+  it('reports a duplicate rather than sending when both claims are lost', async () => {
+    let insertCalls = 0
     const emptyDb: Queryable = {
-      query: async () =>
-        ({ rows: [], rowCount: 0, command: '', oid: 0, fields: [] }) as never,
+      query: async (text: string) => {
+        if (text.trim().startsWith('INSERT INTO idempotent_job_attempts')) {
+          insertCalls++
+        }
+        return ({ rows: [], rowCount: 0, command: '', oid: 0, fields: [] }) as never
+      },
     }
 
-    const send = vi.fn().mockResolved('sent')
+    const send = vi.fn().mockResolvedValue('sent')
     const job = new IdempotentNotificationJob(emptyDb, JOB_KEY, JOB_TYPE, { run: send })
 
-    await expect(job.execute()).rejects.toThrow('already pending')
+    await expect(job.execute()).rejects.toBeInstanceOf(DuplicateJobExecutionError)
+    expect(insertCalls).toBe(2)
     expect(send).not.toHaveBeenCalled()
   })
 })
@@ -336,12 +421,12 @@ describe('claim statement contract', () => {
     })
 
     const claimSql = db.statements[0]
-    // A composite conflict target cannot be inferred against UNIQUE ($job_key)
+    // A composite conflict target cannot be inferred against UNIQUE (job_key)
     // and raises Postgres 42P10 on every execution.
     expect(claimSql).toContain('ON CONFLICT (job_key) DO UPDATE')
-    expect(claimSql).not.toMatch(/ON CONFLICT \\([^)]*,/)
+    expect(claimSql).not.toMatch(/ON CONFLICT \([^)]*,/)
     // The guard is what prevents a concurrent claim from being overwritten.
-    expect(claimSql).toContain('WHERE idempotent_job_attempts.status = \\'failed\\'')
+    expect(claimSql).toContain("WHERE idempotent_job_attempts.status = 'failed'")
     expect(claimSql).toContain('RETURNING')
   })
 })
