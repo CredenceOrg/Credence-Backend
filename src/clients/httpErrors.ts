@@ -13,6 +13,20 @@ const MAX_CAUSE_DEPTH = 8
 /** Structured transport error codes, independent of any client-specific error hierarchy. */
 export type TransportErrorCode = 'TIMEOUT' | 'RESET' | 'REFUSED' | 'NETWORK'
 
+/** Structured normalized error codes across transport, permission, stale, and unknown categories. */
+export type NormalizedErrorCode =
+  | TransportErrorCode
+  | 'PERMISSION'
+  | 'STALE'
+  | 'UNKNOWN'
+
+/** Normalized error representation returned by `normalizeError`. */
+export interface NormalizedError {
+  readonly code: NormalizedErrorCode
+  readonly message: string
+  readonly retryable: boolean
+}
+
 /**
  * TransportError wraps low-level network failures. 
  * Upgraded to a Class to enforce serialization invariants and prevent sensitive
@@ -59,6 +73,22 @@ const REFUSED_CODES = new Set(['ECONNREFUSED'])
 /** OS-level connection timeout (distinct from AbortController-driven request timeout). */
 const TIMEOUT_CODES = new Set(['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNABORTED'])
 
+/** DNS / host resolution and routing failures at the transport layer. */
+const DNS_HOST_CODES = new Set(['ENOTFOUND', 'EAI_AGAIN', 'EHOSTUNREACH'])
+
+/** OS-level permission failures that must never be retried. */
+const PERMISSION_CODES = new Set(['EACCES', 'EPERM'])
+
+/** Returns true if `code` is a known transient Node.js transport error code. */
+function isTransportCode(code: string): boolean {
+  return (
+    RESET_CODES.has(code) ||
+    REFUSED_CODES.has(code) ||
+    TIMEOUT_CODES.has(code) ||
+    DNS_HOST_CODES.has(code)
+  )
+}
+
 /** Safely extract a Node.js error code, guarding against throwing getters. */
 function getNodeCode(err: unknown): string | undefined {
   if (err != null && typeof err === 'object') {
@@ -71,6 +101,44 @@ function getNodeCode(err: unknown): string | undefined {
     }
   }
   return undefined
+}
+
+/** Safely extract an error's `cause`, guarding against throwing getters. */
+function getCause(err: unknown): unknown {
+  if (err != null && typeof err === 'object') {
+    try {
+      return (err as { cause?: unknown }).cause
+    } catch {
+      return undefined
+    }
+  }
+  return undefined
+}
+
+/** Safely extract an error's `name`, guarding against throwing getters. */
+function getName(err: unknown): string {
+  if (err != null && typeof err === 'object') {
+    try {
+      const name = (err as { name?: unknown }).name
+      return typeof name === 'string' ? name : ''
+    } catch {
+      return ''
+    }
+  }
+  return ''
+}
+
+/** Safely extract an error's `message`, guarding against throwing getters. */
+function getSafeMessage(err: unknown, fallback = ''): string {
+  if (err != null && typeof err === 'object') {
+    try {
+      const msg = (err as { message?: unknown }).message
+      return typeof msg === 'string' && msg.length > 0 ? msg : fallback
+    } catch {
+      return fallback
+    }
+  }
+  return fallback
 }
 
 /** Safely stringify and bound an error message to prevent CPU exhaustion on huge payloads. */
@@ -96,11 +164,20 @@ export function isAbortError(err: unknown): boolean {
 
 function isAbortErrorAtDepth(err: unknown, depth: number): boolean {
   if (depth > MAX_CAUSE_DEPTH) return false
-  if (err instanceof DOMException && err.name === 'AbortError') return true
-  if (err instanceof Error && err.name === 'AbortError') return true
-  // Unwrap one level of cause-chain (undici / Node.js fetch wrapping)
-  if (err instanceof Error && err.cause != null && isAbortErrorAtDepth(err.cause, depth + 1)) {
-    return true
+  try {
+    if (typeof DOMException !== 'undefined' && err instanceof DOMException && getName(err) === 'AbortError') {
+      return true
+    }
+    if (err instanceof Error && getName(err) === 'AbortError') return true
+    // Unwrap cause-chain (undici / Node.js fetch wrapping) bounded by MAX_CAUSE_DEPTH
+    if (err instanceof Error) {
+      const cause = getCause(err)
+      if (cause != null && isAbortErrorAtDepth(cause, depth + 1)) {
+        return true
+      }
+    }
+  } catch {
+    return false
   }
   return false
 }
@@ -121,8 +198,9 @@ export function isNetworkError(err: unknown): boolean {
   }
 
   // undici wraps transport errors as: TypeError("fetch failed") { cause: Error { code: ... } }
-  if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch failed')) {
-    const cause = (err as Error & { cause?: unknown }).cause
+  const msg = getBoundedMessage(err)
+  if (getName(err) === 'TypeError' && msg.includes('fetch failed')) {
+    const cause = getCause(err)
     if (cause instanceof Error) {
       const causeCode = getNodeCode(cause)
       if (causeCode && isTransportCode(causeCode)) {
@@ -133,7 +211,6 @@ export function isNetworkError(err: unknown): boolean {
   }
 
   // String heuristics for older libraries (node-fetch, got, axios)
-  const msg = getBoundedMessage(err)
   return (
     msg.includes('socket hang up') ||
     msg.includes('econnreset') ||
@@ -149,7 +226,7 @@ export function isNetworkError(err: unknown): boolean {
  */
 export function normalizeTransportError(err: unknown): TransportError | null {
   if (isAbortError(err)) {
-    const message = err instanceof Error ? err.message : 'Request aborted'
+    const message = err instanceof Error ? getSafeMessage(err, 'Request aborted') : 'Request aborted'
     return new TransportError('TIMEOUT', message, err)
   }
 
@@ -157,28 +234,32 @@ export function normalizeTransportError(err: unknown): TransportError | null {
 
   if (isPermissionError(err)) return null
 
+  const errMessage = getSafeMessage(err)
   const code = getNodeCode(err)
   if (code) {
-    if (RESET_CODES.has(code)) return new TransportError('RESET', err.message, err)
-    if (REFUSED_CODES.has(code)) return new TransportError('REFUSED', err.message, err)
-    if (TIMEOUT_CODES.has(code)) return new TransportError('TIMEOUT', err.message, err)
+    if (RESET_CODES.has(code)) return new TransportError('RESET', errMessage, err)
+    if (REFUSED_CODES.has(code)) return new TransportError('REFUSED', errMessage, err)
+    if (TIMEOUT_CODES.has(code)) return new TransportError('TIMEOUT', errMessage, err)
+    if (DNS_HOST_CODES.has(code)) return new TransportError('NETWORK', errMessage, err)
   }
 
   // Unwrap undici TypeError wrapper
-  if (err.name === 'TypeError' && err.message.toLowerCase().includes('fetch failed')) {
-    const cause = (err as Error & { cause?: unknown }).cause
+  const msg = getBoundedMessage(err)
+  if (getName(err) === 'TypeError' && msg.includes('fetch failed')) {
+    const cause = getCause(err)
     if (cause instanceof Error) {
+      const causeMessage = getSafeMessage(cause, errMessage)
       const causeCode = getNodeCode(cause)
       if (causeCode) {
-        if (RESET_CODES.has(causeCode)) return new TransportError('RESET', cause.message, err)
-        if (REFUSED_CODES.has(causeCode)) return new TransportError('REFUSED', cause.message, err)
-        if (TIMEOUT_CODES.has(causeCode)) return new TransportError('TIMEOUT', cause.message, err)
+        if (RESET_CODES.has(causeCode)) return new TransportError('RESET', causeMessage, err)
+        if (REFUSED_CODES.has(causeCode)) return new TransportError('REFUSED', causeMessage, err)
+        if (TIMEOUT_CODES.has(causeCode)) return new TransportError('TIMEOUT', causeMessage, err)
+        if (DNS_HOST_CODES.has(causeCode)) return new TransportError('NETWORK', causeMessage, err)
       }
     }
-    return new TransportError('NETWORK', err.message, err)
+    return new TransportError('NETWORK', errMessage, err)
   }
 
-  const msg = getBoundedMessage(err)
   if (
     msg.includes('socket hang up') ||
     msg.includes('econnreset') ||
@@ -186,7 +267,7 @@ export function normalizeTransportError(err: unknown): TransportError | null {
     msg.includes('socket ended without sending a response') ||
     msg.includes('network request failed')
   ) {
-    return new TransportError('RESET', err.message, err)
+    return new TransportError('RESET', errMessage, err)
   }
 
   return null
@@ -212,16 +293,22 @@ export function isRetryableTransportCode(code: TransportErrorCode): boolean {
  * Node.js EACCES/EPERM). Never retried.
  */
 export function isPermissionError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
-  const code = getNodeCode(err)
-  if (code && PERMISSION_CODES.has(code)) return true
-  const cause = (err as Error & { cause?: unknown }).cause
-  if (cause instanceof Error) {
-    const causeCode = getNodeCode(cause)
-    if (causeCode && PERMISSION_CODES.has(causeCode)) return true
+  if (err instanceof Error && hasPermissionNodeCodeAtDepth(err, 0)) {
+    return true
   }
   const status = getHttpStatus(err)
   return status === 401 || status === 403
+}
+
+function hasPermissionNodeCodeAtDepth(err: unknown, depth: number): boolean {
+  if (depth > MAX_CAUSE_DEPTH || !(err instanceof Error)) return false
+  const code = getNodeCode(err)
+  if (code && PERMISSION_CODES.has(code)) return true
+  const cause = getCause(err)
+  if (cause instanceof Error) {
+    return hasPermissionNodeCodeAtDepth(cause, depth + 1)
+  }
+  return false
 }
 
 /**
@@ -229,11 +316,11 @@ export function isPermissionError(err: unknown): boolean {
  * Stale errors require state re-read before retry.
  */
 export function isStaleError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false
   if (isPermissionError(err)) return false
   const status = getHttpStatus(err)
   if (status === 409 || status === 410 || status === 412) return true
-  
+
+  if (!(err instanceof Error)) return false
   const msg = getBoundedMessage(err)
   return msg.includes('stale') || msg.includes('expired') || msg.includes('precondition failed')
 }
@@ -247,12 +334,12 @@ export function getHttpStatus(err: unknown): number | undefined {
   try {
     const rec = err as Record<string, unknown>
     const direct = rec.status ?? rec.statusCode
-    if (typeof direct === 'number' && Number.isFinite(direct)) return direct
-    
+    if (isValidHttpStatus(direct)) return direct
+
     const response = rec.response
     if (response != null && typeof response === 'object') {
       const nested = (response as Record<string, unknown>).status
-      if (typeof nested === 'number' && Number.isFinite(nested)) return nested
+      if (isValidHttpStatus(nested)) return nested
     }
   } catch {
     // Failsafe for proxy objects or throwing getters
@@ -301,4 +388,85 @@ export function classifyRecovery(err: unknown): RecoveryDecision {
   }
 
   return { action: 'fail', reason: 'UNKNOWN' }
+}
+
+const NORMALIZED_ERROR_CODES = new Set<string>([
+  'TIMEOUT',
+  'RESET',
+  'REFUSED',
+  'NETWORK',
+  'PERMISSION',
+  'STALE',
+  'UNKNOWN',
+])
+
+function isNormalizedError(value: unknown): value is NormalizedError {
+  if (value == null || typeof value !== 'object' || value instanceof Error) {
+    return false
+  }
+  try {
+    const rec = value as Record<string, unknown>
+    return (
+      typeof rec.code === 'string' &&
+      NORMALIZED_ERROR_CODES.has(rec.code) &&
+      typeof rec.message === 'string' &&
+      typeof rec.retryable === 'boolean'
+    )
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Normalizes any thrown value into a deterministic `{ code, message, retryable }`
+ * envelope. Idempotent when handed an already-normalized `NormalizedError`.
+ */
+export function normalizeError(err: unknown): NormalizedError {
+  if (isNormalizedError(err)) {
+    return {
+      code: err.code,
+      message: err.message,
+      retryable: err.retryable,
+    }
+  }
+
+  if (isPermissionError(err)) {
+    return {
+      code: 'PERMISSION',
+      message: getSafeMessage(err, 'Permission denied'),
+      retryable: false,
+    }
+  }
+
+  if (isStaleError(err)) {
+    return {
+      code: 'STALE',
+      message: getSafeMessage(err, 'Resource state is stale'),
+      retryable: false,
+    }
+  }
+
+  const transport = normalizeTransportError(err)
+  if (transport) {
+    return {
+      code: transport.code,
+      message: transport.message,
+      retryable: isRetryableTransportCode(transport.code),
+    }
+  }
+
+  const status = getHttpStatus(err)
+  if (status !== undefined && isRetryableHttpStatus(status)) {
+    return {
+      code: 'NETWORK',
+      message: getSafeMessage(err, `HTTP ${status}`),
+      retryable: true,
+    }
+  }
+
+  return {
+    code: 'UNKNOWN',
+    message: getSafeMessage(err, 'Unknown error'),
+    retryable: false,
+  }
 }

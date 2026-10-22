@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import * as fc from 'fast-check'
 import {
   isAbortError,
   isNetworkError,
@@ -7,9 +8,11 @@ import {
   isStaleError,
   getHttpStatus,
   classifyRecovery,
-  TransportError
+  normalizeError,
+  TransportError,
+  type NormalizedError,
+  type RecoveryDecision,
 } from './httpErrors.js'
-import { normalizeError, type AppError } from '../lib/errors.js'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -90,6 +93,11 @@ describe('isNetworkError', () => {
   it('detects ECONNRESET', () => {
     expect(isNetworkError(makeNodeError('ECONNRESET'))).toBe(true)
   })
+  it('detects DNS and host transport codes (ENOTFOUND, EAI_AGAIN, EHOSTUNREACH)', () => {
+    expect(isNetworkError(makeNodeError('ENOTFOUND'))).toBe(true)
+    expect(isNetworkError(makeNodeError('EAI_AGAIN'))).toBe(true)
+    expect(isNetworkError(makeNodeError('EHOSTUNREACH'))).toBe(true)
+  })
   it('detects undici TypeError with no cause as generic network error', () => {
     expect(isNetworkError(makeUndiciError())).toBe(true)
   })
@@ -139,6 +147,13 @@ describe('getHttpStatus boundary checks', () => {
 
   it('extracts status from nested response object', () => {
     expect(getHttpStatus({ response: { status: 429 } })).toBe(429)
+  })
+
+  it('rejects out-of-range and non-integer statuses while accepting valid nested response status', () => {
+    expect(getHttpStatus({ status: 0 })).toBeUndefined()
+    expect(getHttpStatus({ status: 1000 })).toBeUndefined()
+    expect(getHttpStatus({ status: 404.5 })).toBeUndefined()
+    expect(getHttpStatus({ response: { status: 502 } })).toBe(502)
   })
 
   it('handles circular references safely', () => {
@@ -227,15 +242,115 @@ describe('classifyRecovery', () => {
     expect(transport).not.toBeNull()
     expect(transport?.code).toBe('TIMEOUT')
   })
+
+  it.each<{ label: string; input: unknown; expected: RecoveryDecision }>([
+    {
+      label: "Error with code:'ECONNRESET'",
+      input: makeNodeError('ECONNRESET'),
+      expected: { action: 'retry', reason: 'RESET' },
+    },
+    {
+      label: "TypeError('fetch failed') whose cause has code:'ECONNREFUSED'",
+      input: makeUndiciError('ECONNREFUSED'),
+      expected: { action: 'retry', reason: 'REFUSED' },
+    },
+    {
+      label: "Error with code:'EACCES'",
+      input: makeNodeError('EACCES'),
+      expected: { action: 'fail', reason: 'PERMISSION' },
+    },
+    {
+      label: '{ status: 403 }',
+      input: { status: 403 },
+      expected: { action: 'fail', reason: 'PERMISSION' },
+    },
+    {
+      label: '{ status: 409 }',
+      input: { status: 409 },
+      expected: { action: 'reread', reason: 'STALE' },
+    },
+    {
+      label: '{ status: 503 }',
+      input: { status: 503 },
+      expected: { action: 'retry', reason: 'HTTP_STATUS' },
+    },
+    {
+      label: '{ status: 0 }',
+      input: { status: 0 },
+      expected: { action: 'fail', reason: 'UNKNOWN' },
+    },
+    {
+      label: '{ status: 99999 }',
+      input: { status: 99999 },
+      expected: { action: 'fail', reason: 'UNKNOWN' },
+    },
+    {
+      label: "'string'",
+      input: 'string',
+      expected: { action: 'fail', reason: 'UNKNOWN' },
+    },
+    {
+      label: 'null',
+      input: null,
+      expected: { action: 'fail', reason: 'UNKNOWN' },
+    },
+  ])('table-driven classifyRecovery: $label -> $expected.action/$expected.reason', ({ input, expected }) => {
+    expect(classifyRecovery(input)).toEqual(expected)
+  })
+
+  it('property test: classifyRecovery and normalizeTransportError never throw for arbitrary inputs, throwing getters, or depth-50 cyclic cause chains', () => {
+    const makeThrowingGetterObject = (prop: string): unknown => {
+      const obj = new Error('hostile error')
+      Object.defineProperty(obj, prop, {
+        get() {
+          throw new Error(`hostile getter on ${prop}`)
+        },
+      })
+      return obj
+    }
+
+    const makeDeepCyclicCauseError = (depth: number): Error => {
+      const root = new Error('root')
+      let current: Error = root
+      for (let i = 0; i < depth; i++) {
+        const next = new Error(`layer-${i}`)
+        ;(current as any).cause = next
+        current = next
+      }
+      ;(current as any).cause = root
+      return root
+    }
+
+    const hostileInputArb = fc.oneof(
+      fc.anything(),
+      fc.double(),
+      fc.integer(),
+      fc.string(),
+      fc.constant(null),
+      fc.constant(undefined),
+      fc.constantFrom('code', 'status', 'statusCode', 'response', 'cause', 'message', 'name').map(makeThrowingGetterObject),
+      fc.constant(makeDeepCyclicCauseError(50)),
+    )
+
+    fc.assert(
+      fc.property(hostileInputArb, (input) => {
+        expect(() => classifyRecovery(input)).not.toThrow()
+        expect(() => normalizeTransportError(input)).not.toThrow()
+        const decision = classifyRecovery(input)
+        expect(['retry', 'reread', 'fail']).toContain(decision.action)
+      }),
+      { numRuns: 200 },
+    )
+  })
 })
 
 // ---------------------------------------------------------------------------
-// normalizeError: boundary and recovery coverage for src/lib/errors.ts
+// normalizeError: boundary and recovery coverage
 // ---------------------------------------------------------------------------
 
 describe('normalizeError boundary cases', () => {
-  it('passes through an already-normalized AppError unchanged (idempotent)', () => {
-    const original: AppError = {
+  it('passes through an already-normalized NormalizedError unchanged (idempotent)', () => {
+    const original: NormalizedError = {
       code: 'TIMEOUT',
       message: 'request timed out',
       retryable: true,
