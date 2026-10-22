@@ -119,33 +119,6 @@ function formatScaledInt(value: bigint, scale: number): string {
 }
 
 /**
- * Apply a rounding mode to a truncated BigInt value given the deciding digit
- * (0–9). Operates on non-negative magnitudes; the caller handles the sign.
- */
-function applyRoundingMode(
-  truncated: bigint,
-  roundDigit: bigint,
-  mode: RoundingMode,
-): bigint {
-  switch (mode) {
-    case RoundingMode.DOWN:
-      return truncated
-    case RoundingMode.UP:
-      return roundDigit > 0n ? truncated + 1n : truncated
-    case RoundingMode.HALF_UP:
-      return roundDigit >= 5n ? truncated + 1n : truncated
-    case RoundingMode.HALF_DOWN:
-      return roundDigit > 5n ? truncated + 1n : truncated
-    case RoundingMode.HALF_EVEN: {
-      if (roundDigit > 5n) return truncated + 1n
-      if (roundDigit < 5n) return truncated
-      // Exactly at midpoint — round to even.
-      return truncated % 2n === 0n ? truncated : truncated + 1n
-    }
-  }
-}
-
-/**
  * Convert a parsed decimal's absolute value to a BigInt scaled by 10^scale,
  * padding with trailing zeros if the value has fewer fractional digits than
  * `scale`. Assumes `scale >= fracStr.length` (true for the max-of-two-scales
@@ -159,11 +132,11 @@ function toScaledMagnitude(p: ParsedDecimal, scale: number): bigint {
 }
 
 /**
- * Apply a rounding mode to a division's truncated quotient given the
+ * Apply a rounding mode to a division's truncated quotient given the exact
  * remainder and divisor (rather than a single decimal digit). Operates on
  * non-negative magnitudes; the caller handles the sign.
  */
-function applyDivisionRounding(
+export function applyDivisionRounding(
   truncated: bigint,
   remainder: bigint,
   divisor: bigint,
@@ -185,6 +158,8 @@ function applyDivisionRounding(
       // Exactly at midpoint — round to even.
       return truncated % 2n === 0n ? truncated : truncated + 1n
     }
+    default:
+      return truncated
   }
 }
 
@@ -243,35 +218,7 @@ export function roundToScale(
   const shiftFactor = 10n ** BigInt(shift)
   const truncated = intValue / shiftFactor
   const remainder = intValue % shiftFactor
-
-  // Use 2× remainder vs shiftFactor to determine half/above/below without
-  // any fractional arithmetic.
-  const twice = remainder * 2n
-
-  let rounded: bigint
-  switch (mode) {
-    case RoundingMode.DOWN:
-      rounded = truncated
-      break
-    case RoundingMode.UP:
-      // Any non-zero remainder means the value was truncated — round away from zero.
-      rounded = remainder > 0n ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_UP:
-      rounded = twice >= shiftFactor ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_DOWN:
-      rounded = twice > shiftFactor ? truncated + 1n : truncated
-      break
-    case RoundingMode.HALF_EVEN: {
-      if (twice > shiftFactor) rounded = truncated + 1n
-      else if (twice < shiftFactor) rounded = truncated
-      else rounded = truncated % 2n === 0n ? truncated : truncated + 1n
-      break
-    }
-    default:
-      rounded = truncated
-  }
+  const rounded = applyDivisionRounding(truncated, remainder, shiftFactor, mode)
 
   const formatted = formatScaledInt(rounded, scale)
   return negative && rounded !== 0n ? `-${formatted}` : formatted
