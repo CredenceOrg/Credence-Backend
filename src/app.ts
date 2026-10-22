@@ -10,10 +10,18 @@ import { createImportsRouter } from "./routes/imports.js";
 import { createAdminRouter } from "./routes/admin/index.js";
 import { createWebhookAdminRouter } from "./routes/admin/webhooks.js";
 import { createFeatureFlagAdminRouter } from "./routes/admin/featureFlags.js";
+import { createRateLimitOverridesAdminRouter } from "./routes/admin/rateLimitOverrides.js";
+import { createMembersRouter } from "./routes/admin/member.js";
 import { createApiKeyRouter } from "./routes/apiKeys.js";
 import { createPolicyRouter } from "./routes/policy.js";
 import { createAnalyticsRouter } from "./routes/analytics.js";
 import { createPayoutsRouter } from "./routes/payouts.js";
+import { createTransactionsRouter } from "./routes/transactions.js";
+import { createAuditLogRouter } from "./routes/auditLog.js";
+import governanceRouter from "./routes/governance.js";
+import disputesRouter from "./routes/disputes.js";
+import evidenceRouter from "./routes/evidence.js";
+import { requireUserAuth } from "./middleware/auth.js";
 import { AnalyticsService } from "./services/analytics/service.js";
 import { BondService, BondStore } from "./services/bond/index.js";
 import { createBondRouter } from "./routes/bond.js";
@@ -301,7 +309,9 @@ app.use(
 app.use("/api/admin", createAdminRouter());
 app.use("/api/admin/webhooks", createWebhookAdminRouter());
 app.use("/api/admin/feature-flags", createFeatureFlagAdminRouter());
+app.use("/api/admin/rate-limits/overrides", createRateLimitOverridesAdminRouter());
 app.use("/api/admin/outbox", createOutboxAdminRouter());
+app.use("/api/admin/orgs/:orgId/members", createMembersRouter());
 
 // Webhook DLQ replay — GET /api/webhooks/dlq, POST /api/webhooks/dlq/:id/replay
 app.use("/api/webhooks/dlq", createWebhookReplayRouter(pool));
@@ -330,6 +340,14 @@ const analyticsService = process.env.DATABASE_URL
 app.use("/api/analytics", createAnalyticsRouter(analyticsService));
 
 app.use("/api/payouts", createPayoutsRouter());
+app.use("/api/transactions", createTransactionsRouter());
+app.use("/api/audit", requireUserAuth, createAuditLogRouter());
+app.use("/api/governance", governanceRouter);
+app.use("/api/disputes", disputesRouter);
+app.use("/api/evidence", evidenceRouter);
+
+// TODO(#1611): Do not mount setupVerificationRoutes (src/routes/verification.ts)
+// because it still returns hard-coded placeholder data.
 
 app.use("/api/reports", reportRouter);
 app.use("/api/export", createExportRouter());
