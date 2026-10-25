@@ -29,7 +29,7 @@ describe('WebhookEventPublisher', () => {
 
   describe('correlation id propagation', () => {
     it('forwards the correlation id captured on the outbox event to WebhookService.emit', async () => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
@@ -44,7 +44,7 @@ describe('WebhookEventPublisher', () => {
     })
 
     it('passes undefined correlationId through when the outbox event has none (e.g. a listener-originated event)', async () => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
@@ -79,7 +79,7 @@ describe('WebhookEventPublisher', () => {
         'credits.low',
       ]
     )('maps %s to a known webhook event type', async (eventType) => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
@@ -89,7 +89,7 @@ describe('WebhookEventPublisher', () => {
     })
 
     it('maps attestation.created to attestation.added specifically', async () => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
@@ -101,7 +101,7 @@ describe('WebhookEventPublisher', () => {
     it('treats unmapped event types as a no-op without throwing', async () => {
       const emit = vi.fn()
       const webhookService = { emit } as unknown as WebhookService
-      const publisher = new WebHookEventPublisher(webhookService)
+      const publisher = new WebhookEventPublisher(webhookService)
 
       await expect(publisher.publish(baseEvent({ eventType: 'unknown.event' }))).resolves.toBeUndefined()
       expect(emit).not.toHaveBeenCalled()
@@ -124,7 +124,7 @@ describe('WebhookEventPublisher', () => {
   describe('error propagation and recovery', () => {
     it('re-throws errors from WebhookService.emit so the outbox retry loop can recover', async () => {
       const failure = new Error('webhook delivery failed')
-      const emit = vi.fn().mockRejected(failure)
+      const emit = vi.fn().mockRejectedValue(failure)
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
@@ -135,17 +135,17 @@ describe('WebhookEventPublisher', () => {
     it('logs the failure with event id and correlation id but never the payload', async () => {
       const errorSpy = vi.spyOn(logger, 'error').mockImplementation(() => undefined)
       const failure = new Error('webhook delivery failed')
-      const emit = vi.fn().mockRejected(failure)
+      const emit = vi.fn().mockRejectedValue(failure)
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
       const secretPayload = { secret: 'super-secret-token' }
-      awayait publisher
+      await publisher
         .publish(baseEvent({ payload: secretPayload, correlationId: 'correct-id' }))
         .catch(() => undefined)
 
       expect(errorSpy).toHaveBeenCalled()
-      const loggedArgs = errorSpy.mockCalls.flat().join(' ')
+      const loggedArgs = errorSpy.mock.calls.flat().join(' ')
       expect(loggedArgs).contains('correct-id')
       expect(loggedArgs).contains('1')
       expect(loggedArgs).not.contains('super-secret-token')
@@ -153,7 +153,7 @@ describe('WebhookEventPublisher', () => {
 
     it('propagates synchronous throws from emit without swallowing them', async () => {
       const failure = new Error('sync failure')
-      const emit = vi.fn().(() => {
+      const emit = vi.fn(() => {
         throw failure
       })
       const webhookService = { emit } as unknown as WebhookService
@@ -164,8 +164,8 @@ describe('WebhookEventPublisher', () => {
 
     it('returns void and does not double-emit on a retry after transient failure', async () => {
       const emit = vi.fn()
-        .mockRejectedOnce(new Error('transient'))
-        .mockResolved([])
+        .mockRejectedValueOnce(new Error('transient'))
+        .mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
       const event = baseEvent()
@@ -195,31 +195,31 @@ describe('WebhookEventPublisher', () => {
 
   describe('payload handling', () => {
     it('forwards the payload by reference without mutation', async () => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
       const payload = { address: 'x0abc', nested: { value: 1 } }
 
       await publisher.publish(baseEvent({ payload }))
 
-      expect(emit.mockCalls[0][1]).toBe(payload)
+      expect(emit.mock.calls[0][1]).toBe(payload)
     })
 
     it('propagates null and primitive payloads verbatim', async () => {
-      const emit = vi.fn().mockResolved([])
+      const emit = vi.fn().mockResolvedValue([])
       const webhookService = { emit } as unknown as WebhookService
       const publisher = new WebhookEventPublisher(webhookService)
 
       await publisher.publish(baseEvent({ payload: null as unknown as OutboxEvent['payload'] }))
-      expect(emit.mockCalls[0][1]).toBe(null)
+      expect(emit.mock.calls[0][1]).toBe(null)
 
       await publisher.publish(baseEvent({ payload: 'plain-string' as unknown as OutboxEvent['payload'] }))
-      expect(emit.mockCalls[1][1]).toBe('plain-string')
+      expect(emit.mock.calls[1][1]).toBe('plain-string')
     })
   })
 
   describe('constructor contract', () => {
-    it('requires a webhook service and fails loud on missing dependency', () => {
+    it('requires a webhook service and fails loud on missing dependency', async () => {
       // The constructor stores the service as a readonly field; a call with
       // an undefined service must not silently succeed at publish time.
       const publisher = new WebhookEventPublisher(undefined as unknown as WebhookService)

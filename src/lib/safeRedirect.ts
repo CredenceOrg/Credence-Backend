@@ -4,7 +4,7 @@ import { UnsafeRedirectError } from './errors.js'
  * Control characters (C0 + DEL) that must never appear in a redirect target.
  * Attackers use these to smuggle scheme separators past naive string checks.
  */
-const CONTROL_CHAR_PATTERN = /[x\00-\x1f\x7f]/
+const CONTROL_CHAR_PATTERN = /[\x00-\x1f\x7f]/
 
 /**
  * A safe relative redirect target is a single-slash, same-origin path.
