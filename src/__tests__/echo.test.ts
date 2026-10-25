@@ -90,7 +90,7 @@ describe('GET /api/v1/echo', () => {
     const app = express()
     registerEchoEndpoint(app)
 
-    const largeValue = 'x.repeat(1024)
+    const largeValue = 'x'.repeat(1024)
     const response = await request(app)
       .get('/api/v1/echo')
       .set('X-Large', largeValue)
@@ -107,14 +107,14 @@ describe('GET /api/v1/echo', () => {
       Array.from({ length: 20 }, (_, index) =>
         request(app)
           .get('/api/v1/echo')
-          .set('X-Request-Id', `String(index.padStart(2, '0'))}`),
+          .set('X-Request-Id', String(index).padStart(2, '0')),
       ),
     )
 
     for (const [index, response] of responses.entries()) {
       expect(response.status).toBe(200)
       expect(response.body.headers['x-request-id']).toBe(
-        String(index.padStart(2, '0')),
+        String(index).padStart(2, '0'),
       )
     }
   })

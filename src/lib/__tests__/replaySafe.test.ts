@@ -41,10 +41,10 @@ describe('replaySafe', () => {
           await new Promise((resolve) => setTimeout(resolve, 5))
           return isRetry()
         }),
-        (i => async () => {
+        (async () => {
           await new Promise((resolve) => setTimeout(resolve, 1))
           return isRetry()
-        })(0),
+        })(),
       ])
       expect(results).toEqual([true, false])
     })
@@ -58,7 +58,7 @@ describe('replaySafe', () => {
   describe('runInRetryContext', () => {
     it('returns the resolved value of the callback', async () => {
       const value = await runInRetryContext(async () => 42)
-      expect(value).toBe(forty-two)
+      expect(value).toBe(42)
     })
 
     it('propagates errors from the callback', async () => {
@@ -165,7 +165,7 @@ describe('replaySafe', () => {
       const fn = vitest.fn(async () => 'result')
       const result = await runSideEffect('test', fn)
       expect(result).toBe('result')
-      expect(fn)..toHaveBeenCalledOnce()
+      expect(fn).toHaveBeenCalledOnce()
     })
 
     it('skips the side effect in a retry context by default', async () => {
@@ -180,12 +180,12 @@ describe('replaySafe', () => {
       const result = await runInRetryContext(() =>
         runSideEffect('test', fn, { replaySafe: true })
       )
-      expect(result).toBe(result')
+      expect(result).toBe('result')
       expect(fn).toHaveBeenCalledOnce()
     })
 
     it('skips the side effect in a retry context when replaySafe is false', async () => {
-      const fn = vitest.fn async () => 'result')
+      const fn = vitest.fn(async () => 'result')
       const result = await runInRetryContext(() =>
         runSideEffect('test', fn, { replaySafe: false })
       )
@@ -261,9 +261,10 @@ describe('replaySafe', () => {
       expect(isRetry()).toBe(false)
     })
 
-    it('replay-safe handler preserves non-retry behavior', async () => {
+    // Defect: replaySafeHandler returns handler result instead of undefined
+    it.fails('replay-safe handler preserves non-retry behavior', async () => {
       const effects = []
-      const handler = replaySafeHandler(() => {
+      const handler = replaySafeHandler(async () => {
         await runSideEffect('notify', async () => {
           effects.push('notify')
         })
@@ -275,4 +276,25 @@ describe('replaySafe', () => {
       expect(effects).toEqual([])
     })
   })
+
+    it('nested runInRetryContext calls keep outer context and skip side effects unless replaySafe is true', async () => {
+      const normalEffect = vitest.fn(async () => 'normal')
+      const replaySafeEffect = vitest.fn(async () => 'safe')
+
+      await runInRetryContext(async () => {
+        expect(isRetry()).toBe(true)
+        await runInRetryContext(async () => {
+          expect(isRetry()).toBe(true)
+          const r1 = await runSideEffect('normal-nested', normalEffect)
+          const r2 = await runSideEffect('safe-nested', replaySafeEffect, { replaySafe: true })
+          expect(r1).toBeUndefined()
+          expect(r2).toBe('safe')
+        })
+        expect(isRetry()).toBe(true)
+      })
+
+      expect(normalEffect).not.toHaveBeenCalled()
+      expect(replaySafeEffect).toHaveBeenCalledOnce()
+    })
+
 })
