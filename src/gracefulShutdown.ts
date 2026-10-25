@@ -2,11 +2,20 @@ import type http from "http";
 import type { Socket } from "net";
 import type { WebSocketServer } from "ws";
 import { setReady } from "./lifecycle.js";
-import { stop as stopListeners } from "./listeners/index.js";
-import {
-  createNoopShutdownMetrics,
-  type ShutdownMetrics,
-} from "./observability/shutdownMetrics.js";
+// lazy loaded in listener_stop phase
+export interface ShutdownMetrics {
+  observePhase(phase: string, durationSeconds: number): void;
+  incShutdown(signal: string): void;
+  incForceExit(): void;
+}
+
+export function createNoopShutdownMetrics(): ShutdownMetrics {
+  return {
+    observePhase: () => {},
+    incShutdown: () => {},
+    incForceExit: () => {},
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Public interfaces
@@ -33,6 +42,7 @@ export interface GracefulShutdownOptions {
   invalidationBus?: { stop(): Promise<void> };
   dbPools?: CloseablePool[];
   redis?: CloseableRedis;
+  tracerProvider?: { shutdown(): Promise<void> } | null;
   /**
    * Maximum time (ms) to wait for in-flight scheduler jobs to finish before
    * moving on.  Defaults to 70% of gracePeriodMs, capped at 10 s.
@@ -93,6 +103,10 @@ export class GracefulShutdownManager {
     this.options.redis = redis ?? undefined;
   }
 
+  setTracerProvider(provider: { shutdown(): Promise<void> } | null | undefined): void {
+    this.options.tracerProvider = provider ?? undefined;
+  }
+
   async shutdown(signal: string): Promise<void> {
     if (this.shuttingDown) {
       this.log(
@@ -122,7 +136,10 @@ export class GracefulShutdownManager {
     try {
       await this.runPhase("server_close", () => this.closeServer());
       await this.runPhase("ws_drain", () => this.drainWebSockets());
-      await this.runPhase("listener_stop", () => stopListeners());
+      await this.runPhase("listener_stop", async () => {
+        const { stop: stopListeners } = await import("./listeners/index.js");
+        return stopListeners();
+      });
       await this.runPhase("scheduler_drain", () => this.drainScheduler());
       await this.runPhase("outbox_stop", () =>
         Promise.resolve(this.options.outboxJob?.stop()),
@@ -132,6 +149,7 @@ export class GracefulShutdownManager {
       );
       await this.runPhase("pool_close", () => this.closePools());
       await this.runPhase("redis_close", () => this.closeRedis());
+      await this.runPhase("tracing_shutdown", () => this.shutdownTracing());
 
       this.log("[Shutdown] Graceful shutdown complete.");
       this.clearForceExitTimer();
@@ -276,6 +294,25 @@ export class GracefulShutdownManager {
     } catch (err) {
       this.log(
         `[Shutdown:redis_close] disconnect error: ${err instanceof Error ? err.message : err}`,
+      );
+    }
+  }
+
+  private async shutdownTracing(): Promise<void> {
+    const provider = this.options.tracerProvider;
+    if (!provider) return;
+    try {
+      await Promise.race([
+        provider.shutdown(),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error("Tracing shutdown timed out after 2000ms")), 2000),
+        ),
+      ]);
+    } catch (error) {
+      this.log(
+        `[Shutdown:tracing_shutdown] Error flushing spans: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
       );
     }
   }

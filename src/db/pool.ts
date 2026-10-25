@@ -465,7 +465,8 @@ export function instrumentQueryTracing(target: Pool, poolName: PoolName): void {
       return originalQuery(...args);
     }
 
-    const text = extractQueryText(args) || "unknown";
+    const rawText = extractQueryText(args) || "unknown";
+    const text = rawText.slice(0, 1024);
     const tracer = trace.getTracer("credence-backend");
 
     return tracer.startActiveSpan("db.query", async (span) => {
@@ -485,7 +486,22 @@ export function instrumentQueryTracing(target: Pool, poolName: PoolName): void {
           code: SpanStatusCode.ERROR,
           message: err instanceof Error ? err.message : "Unknown error",
         });
-        span.recordException(err as Error);
+
+        const errObj = err as any;
+        const errType =
+          typeof errObj?.code === "string"
+            ? errObj.code
+            : err instanceof Error
+              ? err.name
+              : "Error";
+        const rawMessage = err instanceof Error ? err.message : String(err ?? "Unknown error");
+        const truncatedMessage = rawMessage.slice(0, 256);
+
+        span.addEvent("exception", {
+          "exception.type": errType,
+          "exception.message": truncatedMessage,
+        });
+
         throw err;
       } finally {
         span.end();

@@ -52,6 +52,7 @@ let failedInboundSweeper: FailedInboundEventsSweeper | null = null;
 let pgStatActivitySnapshotJob: PgStatActivitySnapshotJob | null = null;
 let longTransactionReaper: LongTransactionReaper | null = null;
 let shutdownManager: GracefulShutdownManager | null = null;
+let tracerProvider: ReturnType<typeof initTracing> | null = null;
 let wss: ReturnType<typeof createWsSubscriptionServer> | null = null;
 let invalidationBus: ReturnType<typeof getInvalidationBus> | null = null;
 let requestSnapshotsSweeper: RequestSnapshotsSweeper | null = null;
@@ -73,7 +74,7 @@ function installShutdownHandlers(): void {
 }
 
 if (process.env.NODE_ENV !== "test") {
-  initTracing();
+  tracerProvider = initTracing();
 
   // Listen for uncaught exceptions and unhandled rejections
   process.on("uncaughtException", (err) => {
@@ -173,6 +174,7 @@ if (process.env.NODE_ENV !== "test") {
       dbPools: [pool, workerPool, replicaPool],
       redis: redisConnection,
       metrics: createShutdownMetrics(),
+      tracerProvider,
     });
 
     server.on("connection", (socket) => {

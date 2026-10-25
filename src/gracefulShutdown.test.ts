@@ -7,6 +7,7 @@ import {
   afterEach,
   type MockInstance,
 } from "vitest";
+vi.mock("./listeners/index.js", () => ({ stop: vi.fn().mockResolvedValue(undefined) }));
 import { GracefulShutdownManager } from "./gracefulShutdown.js";
 import type {
   GracefulShutdownOptions,
@@ -213,16 +214,22 @@ describe("GracefulShutdownManager", () => {
       const { port } = wss.address() as { port: number };
 
       const client = new WebSocket(`ws://localhost:${port}`);
-      await new Promise<void>((res) => wss.once("connection", () => res()));
+      await new Promise<void>((res) => client.once("open", () => res()));
 
       const opts = makeOptions({ gracePeriodMs: 5000 });
       const mgr = new GracefulShutdownManager(opts);
       mgr.setWss(wss);
 
       const closeCodes: number[] = [];
-      client.on("close", (code) => closeCodes.push(code));
+      const closedPromise = new Promise<void>((resolve) => {
+        client.on("close", (code) => {
+          closeCodes.push(code);
+          resolve();
+        });
+      });
 
       await mgr.shutdown("SIGTERM");
+      await closedPromise;
 
       expect(closeCodes).toContain(1000);
 
@@ -671,6 +678,17 @@ describe("GracefulShutdownManager", () => {
 
       await mgr.shutdown("SIGTERM");
 
+      expect(opts.forceExit).toHaveBeenCalledWith(0);
+    });
+
+    it("calls provider.shutdown() once during shutdown", async () => {
+      const tracerProvider = { shutdown: vi.fn().mockResolvedValue(undefined) };
+      const opts = makeOptions({ tracerProvider });
+      const mgr = new GracefulShutdownManager(opts);
+
+      await mgr.shutdown("SIGTERM");
+
+      expect(tracerProvider.shutdown).toHaveBeenCalledTimes(1);
       expect(opts.forceExit).toHaveBeenCalledWith(0);
     });
   });

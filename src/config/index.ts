@@ -588,11 +588,40 @@ export const envSchema = z.object({
   REPORT_MAX_CONCURRENT_JOBS_PER_ORG: numeric('10').pipe(
     z.number().int().min(0).max(1000),
   ),
+
+  // Tracing (Issue #1627)
+  OTEL_TRACES_EXPORTER: z
+    .enum(['none', 'console', 'otlp'])
+    .optional(),
+  OTEL_EXPORTER_OTLP_ENDPOINT: z
+    .string()
+    .url({ message: 'OTEL_EXPORTER_OTLP_ENDPOINT must be a valid URL' })
+    .optional(),
+  OTEL_TRACES_SAMPLER_RATIO: z
+    .string()
+    .optional()
+    .transform((val) => (val !== undefined && val.trim() !== '' ? Number(val) : undefined))
+    .pipe(z.union([z.undefined(), z.number().min(0.0).max(1.0)])),
+}).superRefine((data, ctx) => {
+  const effectiveExporter =
+    data.OTEL_TRACES_EXPORTER ?? (data.NODE_ENV === 'production' ? 'none' : 'console')
+  if (effectiveExporter === 'otlp' && !data.OTEL_EXPORTER_OTLP_ENDPOINT) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['OTEL_EXPORTER_OTLP_ENDPOINT'],
+      message: 'OTEL_EXPORTER_OTLP_ENDPOINT is required when OTEL_TRACES_EXPORTER is otlp',
+    })
+  }
 })
 
 export type Env = z.infer<typeof envSchema>
 
 export interface Config {
+  tracing: {
+    exporter: 'none' | 'console' | 'otlp'
+    otlpEndpoint?: string
+    samplerRatio: number
+  }
   trustScoreCache: {
     ttl: number
   }
@@ -1091,6 +1120,11 @@ function mapEnvToConfig(env: Env): Config {
     compression: {
       enabled: env.COMPRESSION_ENABLED,
       thresholdBytes: env.COMPRESSION_THRESHOLD_BYTES,
+    },
+    tracing: {
+      exporter: env.OTEL_TRACES_EXPORTER ?? (env.NODE_ENV === 'production' ? 'none' : 'console'),
+      otlpEndpoint: env.OTEL_EXPORTER_OTLP_ENDPOINT,
+      samplerRatio: env.OTEL_TRACES_SAMPLER_RATIO ?? (env.NODE_ENV === 'production' ? 0.1 : 1.0),
     },
   }
 
