@@ -15,6 +15,21 @@ export interface Settlement {
   updatedAt: Date
 }
 
+
+export interface ClaimForPayoutInput {
+  bondId: string | number
+  amount: string
+  transactionHash: string
+  settledAt?: Date
+  orphanThresholdMs?: number
+}
+
+export interface ClaimForPayoutResult {
+  claimed: boolean
+  currentStatus?: SettlementStatus
+  isOrphaned?: boolean
+}
+
 export interface CreateSettlementInput {
   bondId: string | number
   amount: string
@@ -131,6 +146,66 @@ export class SettlementsRepository {
 
     return { settlement: mapSettlement(result.rows[0]), isDuplicate }
   }
+
+  async claimForPayout(input: ClaimForPayoutInput): Promise<ClaimForPayoutResult> {
+    const settledAt = input.settledAt ?? new Date()
+    const result = await this.db.query<SettlementRow>(
+      `INSERT INTO settlements (bond_id, amount, transaction_hash, settled_at, status)
+       VALUES ($1, $2, $3, $4, 'pending')
+       ON CONFLICT (transaction_hash)
+       DO UPDATE SET
+         amount     = EXCLUDED.amount,
+         status     = 'pending',
+         settled_at = EXCLUDED.settled_at,
+         updated_at = NOW()
+       WHERE settlements.status = 'failed'
+       RETURNING id, bond_id, amount, transaction_hash, settled_at, status, created_at, updated_at`,
+      [input.bondId, input.amount, input.transactionHash, settledAt],
+    )
+
+    if (result.rows && result.rows.length > 0) {
+      return { claimed: true, currentStatus: 'pending' }
+    }
+
+    const existing = await this.db.query<SettlementRow>(
+      `SELECT id, status, updated_at, created_at
+       FROM settlements
+       WHERE transaction_hash = $1`,
+      [input.transactionHash],
+    )
+
+    if (existing.rows.length === 0) {
+      return { claimed: false }
+    }
+
+    const row = existing.rows[0]
+    const threshold = input.orphanThresholdMs ?? (15 * 60 * 1000)
+    const timestamp = row.updated_at ?? row.created_at
+    const age = timestamp ? Date.now() - new Date(timestamp).getTime() : 0
+    const isOrphaned = row.status === 'pending' && age > threshold
+
+    return {
+      claimed: false,
+      currentStatus: row.status as SettlementStatus,
+      isOrphaned,
+    }
+  }
+
+  async transitionStatus(
+    transactionHash: string,
+    fromStatus: SettlementStatus,
+    toStatus: SettlementStatus,
+  ): Promise<boolean> {
+    const result = await this.db.query(
+      `UPDATE settlements
+       SET status = $2, updated_at = NOW()
+       WHERE transaction_hash = $1 AND status = $3
+       RETURNING id`,
+      [transactionHash, toStatus, fromStatus],
+    )
+    return ((result.rowCount ?? result.rows?.length ?? 0) > 0)
+  }
+
 
   async findById(id: string | number): Promise<Settlement | null> {
     const result = await this.db.query<SettlementRow>(

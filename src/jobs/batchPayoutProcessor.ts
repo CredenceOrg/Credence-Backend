@@ -17,7 +17,7 @@ export interface PayoutItem {
 export interface PayoutItemResult {
   bondId: string
   transactionHash: string
-  status: SettlementStatus
+  status: SettlementStatus | 'skipped'
   error?: string
   retryEligible: boolean
 }
@@ -47,6 +47,20 @@ export interface PayoutSettlementStore {
     settledAt?: Date
     status?: SettlementStatus
   }): Promise<{ isDuplicate: boolean }>
+
+  claimForPayout?(input: {
+    bondId: string | number
+    amount: string
+    transactionHash: string
+    settledAt?: Date
+    orphanThresholdMs?: number
+  }): Promise<{ claimed: boolean; currentStatus?: SettlementStatus; isOrphaned?: boolean }>
+
+  transitionStatus?(
+    transactionHash: string,
+    fromStatus: SettlementStatus,
+    toStatus: SettlementStatus,
+  ): Promise<boolean>
 }
 
 /**
@@ -63,6 +77,11 @@ export interface BatchPayoutOptions {
    * Defaults to 1000. Non-positive or non-finite values fall back to the default.
    */
   maxBatchSize?: number
+  /**
+   * Threshold in milliseconds after which an uncompleted 'pending' row is considered orphaned.
+   * Defaults to 15 minutes (900,000 ms).
+   */
+  orphanThresholdMs?: number
 }
 
 /**
@@ -82,12 +101,19 @@ export interface BatchPayoutOptions {
 export class BatchPayoutProcessor {
   private readonly logger: (message: string) => void
   private readonly maxBatchSize: number
+  private readonly orphanThresholdMs: number
 
   constructor(
     private readonly store: PayoutSettlementStore,
     private readonly executor: PayoutExecutor,
     options: BatchPayoutOptions = {},
   ) {
+    this.orphanThresholdMs =
+      typeof options.orphanThresholdMs === 'number' &&
+      Number.isFinite(options.orphanThresholdMs) &&
+      options.orphanThresholdMs > 0
+        ? options.orphanThresholdMs
+        : 15 * 60 * 1000
     this.logger = options.logger ?? (() => {})
     const configuredMax = options.maxBatchSize
     this.maxBatchSize =
@@ -187,23 +213,54 @@ export class BatchPayoutProcessor {
   }
 
   private async processItem(item: PayoutItem): Promise<PayoutItemResult> {
-    // 1. Record as pending
+    // 1. Claim for payout (atomic single-statement write if store supports claimForPayout)
     try {
-      const { isDuplicate } = await this.store.upsert({
-        bondId: item.bondId,
-        amount: item.amount,
-        transactionHash: item.transactionHash,
-        settledAt: item.settledAt,
-        status: 'pending',
-      })
-
-      if (isDuplicate) {
-        this.logger(`Skipping duplicate: ${item.transactionHash}`)
-        return {
+      if (this.store.claimForPayout) {
+        const claim = await this.store.claimForPayout({
           bondId: item.bondId,
+          amount: item.amount,
           transactionHash: item.transactionHash,
+          settledAt: item.settledAt,
+          orphanThresholdMs: this.orphanThresholdMs,
+        })
+
+        if (!claim.claimed) {
+          if (claim.currentStatus === 'settled') {
+            this.logger(`Skipping already settled item: ${item.transactionHash}`)
+            return {
+              bondId: item.bondId,
+              transactionHash: item.transactionHash,
+              status: 'skipped',
+              retryEligible: false,
+            }
+          }
+          const reason = claim.isOrphaned ? 'orphaned' : 'in_progress'
+          this.logger(`Skipping duplicate item in progress: ${item.transactionHash} (${reason})`)
+          return {
+            bondId: item.bondId,
+            transactionHash: item.transactionHash,
+            status: 'skipped',
+            error: reason,
+            retryEligible: false,
+          }
+        }
+      } else {
+        const { isDuplicate } = await this.store.upsert({
+          bondId: item.bondId,
+          amount: item.amount,
+          transactionHash: item.transactionHash,
+          settledAt: item.settledAt,
           status: 'pending',
-          retryEligible: false,
+        })
+
+        if (isDuplicate) {
+          this.logger(`Skipping duplicate: ${item.transactionHash}`)
+          return {
+            bondId: item.bondId,
+            transactionHash: item.transactionHash,
+            status: 'skipped',
+            retryEligible: false,
+          }
         }
       }
     } catch (error) {
@@ -227,13 +284,17 @@ export class BatchPayoutProcessor {
 
       // Mark as failed in store — best effort
       try {
-        await this.store.upsert({
-          bondId: item.bondId,
-          amount: item.amount,
-          transactionHash: item.transactionHash,
-          settledAt: item.settledAt,
-          status: 'failed',
-        })
+        if (this.store.transitionStatus) {
+          await this.store.transitionStatus(item.transactionHash, 'pending', 'failed')
+        } else {
+          await this.store.upsert({
+            bondId: item.bondId,
+            amount: item.amount,
+            transactionHash: item.transactionHash,
+            settledAt: item.settledAt,
+            status: 'failed',
+          })
+        }
       } catch {
         this.logger(`Could not persist failure status for ${item.transactionHash}`)
       }
@@ -249,18 +310,23 @@ export class BatchPayoutProcessor {
 
     // 3. Mark as settled
     try {
-      await this.store.upsert({
-        bondId: item.bondId,
-        amount: item.amount,
-        transactionHash: item.transactionHash,
-        settledAt: item.settledAt,
-        status: 'settled',
-      })
+      if (this.store.transitionStatus) {
+        const ok = await this.store.transitionStatus(item.transactionHash, 'pending', 'settled')
+        if (!ok) {
+          throw new Error('transitionStatus pending -> settled failed')
+        }
+      } else {
+        await this.store.upsert({
+          bondId: item.bondId,
+          amount: item.amount,
+          transactionHash: item.transactionHash,
+          settledAt: item.settledAt,
+          status: 'settled',
+        })
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown error'
       this.logger(`Failed to mark ${item.transactionHash} as settled: ${message}`)
-      // Execution succeeded but persistence failed — still retry-eligible
-      // so the status can be reconciled.
       return {
         bondId: item.bondId,
         transactionHash: item.transactionHash,
@@ -291,5 +357,5 @@ export function getRetryableItems(
       .filter((r) => r.retryEligible)
       .map((r) => r.transactionHash),
   )
-  return original.filter((item) => retryHashs.has(item.transactionHash))
+  return original.filter((item) => retryHashes.has(item.transactionHash))
 }
