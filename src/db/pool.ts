@@ -1,5 +1,4 @@
 import { Pool, type PoolClient, type QueryResult } from "pg";
-import { Pool, type PoolClient, type QueryResult } from "pg";
 import { createHash } from "node:crypto";
 import { LRUCache } from "lru-cache";
 import { AppError, ErrorCode } from "../lib/errors.js";
@@ -49,7 +48,6 @@ const SLOW_QUERY_THRESHOLD_MS = cfg.db.slowQueryThresholdMs;
 const DB_REPLICA_URL = process.env.DB_REPLICA_URL || DB_URL;
 const MAX_REPLICA_LAG_MS = cfg.db.maxReplicaLagMs;
 const TENANT_CONNECTION_BUDGET = Math.max(1, Math.min(envInt("DB_TENANT_CONNECTION_BUDGET", Math.max(1, Math.floor(POOL_MAX / 4))), POOL_MAX));
-const tenantConnectionCounts = new Map<string, number>();
 
 export class TenantConnectionBudgetError extends AppError {
   constructor(
@@ -66,43 +64,118 @@ export class TenantConnectionBudgetError extends AppError {
   }
 }
 
-function wrapTenantBudgetedClient(client: PoolClient, tenantId: string): PoolClient {
-  const release = client.release.bind(client);
-  const key = tenantId;
+function withTenantConnectionBudget(targetPool: Pool): Pool {
+  const tenantCounts = new Map<string, number>();
 
-  client.release = ((err?: Error | boolean) => {
-    const active = tenantConnectionCounts.get(key) ?? 0;
+  (targetPool as any)._tenantConnectionCounts = tenantCounts;
+
+  const decrementSlot = (tenantId: string) => {
+    const active = tenantCounts.get(tenantId) ?? 0;
     if (active <= 1) {
-      tenantConnectionCounts.delete(key);
+      tenantCounts.delete(tenantId);
     } else {
-      tenantConnectionCounts.set(key, active - 1);
+      tenantCounts.set(tenantId, active - 1);
     }
-    return release(err);
-  }) as typeof client.release;
+  };
 
-  return client;
-}
+  const callUnderlying = (cb?: any) => {
+    if (typeof cb === 'function') {
+      return Pool.prototype.connect.call(targetPool, cb);
+    }
+    return Pool.prototype.connect.call(targetPool);
+  };
 
-function withTenantConnectionBudget(pool: Pool): Pool {
-  const originalConnect = pool.connect.bind(pool);
-
-  pool.connect = (async () => {
+  targetPool.connect = function (
+    callback?: (err?: Error, client?: PoolClient, done?: (release?: any) => void) => void,
+  ): any {
     const tenantId = getTenantId();
+
     if (!tenantId) {
-      return await originalConnect();
+      if (typeof callback === 'function') {
+        return callUnderlying(callback);
+      }
+      return callUnderlying();
     }
 
-    const activeConnections = tenantConnectionCounts.get(tenantId) ?? 0;
+    const activeConnections = tenantCounts.get(tenantId) ?? 0;
     if (activeConnections >= TENANT_CONNECTION_BUDGET) {
-      throw new TenantConnectionBudgetError(tenantId, TENANT_CONNECTION_BUDGET);
+      const budgetError = new TenantConnectionBudgetError(tenantId, TENANT_CONNECTION_BUDGET);
+      if (typeof callback === 'function') {
+        process.nextTick(() => callback(budgetError, undefined, () => {}));
+        return;
+      }
+      return Promise.reject(budgetError);
     }
 
-    const client = await originalConnect();
-    tenantConnectionCounts.set(tenantId, activeConnections + 1);
-    return wrapTenantBudgetedClient(client, tenantId);
-  }) as typeof pool.connect;
+    // Synchronously reserve budget slot
+    tenantCounts.set(tenantId, activeConnections + 1);
 
-  return pool;
+    if (typeof callback === 'function') {
+      try {
+        callUnderlying((err: any, client: any, done: any) => {
+          if (err || !client) {
+            decrementSlot(tenantId);
+            callback(err, undefined, done ?? (() => {}));
+            return;
+          }
+
+          let released = false;
+          const releaseOnce = () => {
+            if (!released) {
+              released = true;
+              decrementSlot(tenantId);
+            }
+          };
+
+          const originalRelease = client.release ? client.release.bind(client) : done;
+          client.release = ((releaseErr?: Error | boolean) => {
+            releaseOnce();
+            if (typeof originalRelease === 'function') {
+              return originalRelease(releaseErr as any);
+            }
+          }) as typeof client.release;
+
+          const originalDone = done;
+          const safeDone = (releaseErr?: any) => {
+            releaseOnce();
+            if (typeof originalDone === 'function') {
+              originalDone(releaseErr);
+            }
+          };
+
+          callback(undefined, client, safeDone);
+        });
+      } catch (err: any) {
+        decrementSlot(tenantId);
+        process.nextTick(() => callback(err, undefined, () => {}));
+      }
+      return;
+    }
+
+    return (async () => {
+      let client: PoolClient;
+      try {
+        client = await callUnderlying();
+      } catch (err) {
+        decrementSlot(tenantId);
+        throw err;
+      }
+
+      let released = false;
+      const originalRelease = client.release.bind(client);
+      client.release = ((releaseErr?: Error | boolean) => {
+        if (!released) {
+          released = true;
+          decrementSlot(tenantId);
+        }
+        return originalRelease(releaseErr);
+      }) as typeof client.release;
+
+      return client;
+    })();
+  } as typeof targetPool.connect;
+
+  return targetPool;
 }
 
 /**
@@ -392,7 +465,8 @@ export function instrumentQueryTracing(target: Pool, poolName: PoolName): void {
       return originalQuery(...args);
     }
 
-    const text = extractQueryText(args) || "unknown";
+    const rawText = extractQueryText(args) || "unknown";
+    const text = rawText.slice(0, 1024);
     const tracer = trace.getTracer("credence-backend");
 
     return tracer.startActiveSpan("db.query", async (span) => {
@@ -412,7 +486,22 @@ export function instrumentQueryTracing(target: Pool, poolName: PoolName): void {
           code: SpanStatusCode.ERROR,
           message: err instanceof Error ? err.message : "Unknown error",
         });
-        span.recordException(err as Error);
+
+        const errObj = err as any;
+        const errType =
+          typeof errObj?.code === "string"
+            ? errObj.code
+            : err instanceof Error
+              ? err.name
+              : "Error";
+        const rawMessage = err instanceof Error ? err.message : String(err ?? "Unknown error");
+        const truncatedMessage = rawMessage.slice(0, 256);
+
+        span.addEvent("exception", {
+          "exception.type": errType,
+          "exception.message": truncatedMessage,
+        });
+
         throw err;
       } finally {
         span.end();
@@ -532,18 +621,27 @@ export async function withReplica<T>(
  * @internal Exported for testing only.
  */
 export const __poolTestHooks = {
-  getTenantConnectionCount(tenantId: string): number {
-    return tenantConnectionCounts.get(tenantId) ?? 0;
+  getTenantConnectionCount(tenantId: string, targetPool: Pool = pool): number {
+    const counts = (targetPool as any)._tenantConnectionCounts as Map<string, number> | undefined;
+    return counts?.get(tenantId) ?? 0;
   },
-  setTenantConnectionCount(tenantId: string, count: number): void {
+  setTenantConnectionCount(tenantId: string, count: number, targetPool: Pool = pool): void {
+    const counts = (targetPool as any)._tenantConnectionCounts as Map<string, number> | undefined;
+    if (!counts) return;
     if (count <= 0) {
-      tenantConnectionCounts.delete(tenantId);
+      counts.delete(tenantId);
     } else {
-      tenantConnectionCounts.set(tenantId, count);
+      counts.set(tenantId, count);
     }
   },
-  clearTenantConnectionCounts(): void {
-    tenantConnectionCounts.clear();
+  clearTenantConnectionCounts(targetPool?: Pool): void {
+    if (targetPool) {
+      ((targetPool as any)._tenantConnectionCounts as Map<string, number> | undefined)?.clear();
+    } else {
+      ((pool as any)._tenantConnectionCounts as Map<string, number> | undefined)?.clear();
+      ((workerPool as any)._tenantConnectionCounts as Map<string, number> | undefined)?.clear();
+      ((replicaPool as any)._tenantConnectionCounts as Map<string, number> | undefined)?.clear();
+    }
   },
   getTenantConnectionBudget(): number {
     return TENANT_CONNECTION_BUDGET;

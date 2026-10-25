@@ -5,7 +5,10 @@ import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
 import {
   BatchSpanProcessor,
   ConsoleSpanExporter,
+  ParentBasedSampler,
+  TraceIdRatioBasedSampler,
 } from "@opentelemetry/sdk-trace-base";
+import { OTLPTraceExporter } from "@opentelemetry/exporter-trace-otlp-http";
 
 /**
  * Canonical span names for the payment processing pipeline.
@@ -40,22 +43,58 @@ export const ReputationSpans = {
 /**
  * Initialize OpenTelemetry tracing for the application
  */
+export interface TracingOptions {
+  serviceName?: string;
+  exporter?: "none" | "console" | "otlp";
+  otlpEndpoint?: string;
+  samplerRatio?: number;
+}
+
 export function initTracing(
-  serviceName = "credence-backend",
+  optionsOrServiceName?: string | TracingOptions,
 ): NodeTracerProvider {
+  const options: TracingOptions =
+    typeof optionsOrServiceName === "string"
+      ? { serviceName: optionsOrServiceName }
+      : optionsOrServiceName ?? {};
+
+  const serviceName = options.serviceName ?? "credence-backend";
+  const nodeEnv = process.env.NODE_ENV;
+  const exporterType =
+    options.exporter ??
+    (process.env.OTEL_TRACES_EXPORTER as "none" | "console" | "otlp" | undefined) ??
+    (nodeEnv === "production" ? "none" : "console");
+
+  const ratio =
+    options.samplerRatio ??
+    (process.env.OTEL_TRACES_SAMPLER_RATIO
+      ? parseFloat(process.env.OTEL_TRACES_SAMPLER_RATIO)
+      : nodeEnv === "production"
+        ? 0.1
+        : 1.0);
+
   const resource = Resource.default().merge(
     new Resource({
       [ATTR_SERVICE_NAME]: serviceName,
     }),
   );
 
-  const provider = new NodeTracerProvider({
-    resource,
+  const sampler = new ParentBasedSampler({
+    root: new TraceIdRatioBasedSampler(Math.max(0, Math.min(1, ratio))),
   });
 
-  // Use ConsoleSpanExporter for development
-  // In production, replace with OTLP exporter to send to Jaeger/Tempo/etc
-  provider.addSpanProcessor(new BatchSpanProcessor(new ConsoleSpanExporter()));
+  const provider = new NodeTracerProvider({
+    resource,
+    sampler,
+  });
+
+  if (exporterType === "console") {
+    provider.addSpanProcessor(new BatchSpanProcessor(new ConsoleSpanExporter()));
+  } else if (exporterType === "otlp") {
+    const url = options.otlpEndpoint ?? process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
+    const otlpExporter = new OTLPTraceExporter(url ? { url } : undefined);
+    provider.addSpanProcessor(new BatchSpanProcessor(otlpExporter));
+  }
 
   provider.register();
 
