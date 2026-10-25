@@ -33,3 +33,22 @@ export class BatchPayoutRepository implements PayoutSettlementStore {
     return this.settlementsRepo.upsertBatch(inputs)
   }
 }
+
+  async claimForPayout(input: {
+    bondId: string | number
+    amount: string
+    transactionHash: string
+    settledAt?: Date
+    orphanThresholdMs?: number
+  }) {
+    return this.settlementsRepo.claimForPayout(input)
+  }
+
+  async transitionStatus(
+    transactionHash: string,
+    fromStatus: SettlementStatus,
+    toStatus: SettlementStatus,
+  ): Promise<boolean> {
+    return this.settlementsRepo.transitionStatus(transactionHash, fromStatus, toStatus)
+  }
+}

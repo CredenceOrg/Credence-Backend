@@ -155,6 +155,11 @@ describe('Batch Payout Atomicity Integration', () => {
     expect(retryResult.skipped).toBe(2)
     expect(retryResult.settled).toBe(0)
     expect(executor.execute).toHaveBeenCalledTimes(2) // Not called again
+
+    const afterRetryRows = await db.pool.query('SELECT * FROM settlements ORDER BY transaction_hash')
+    expect(afterRetryRows.rows).toHaveLength(2)
+    expect(afterRetryRows.rows[0].status).toBe('settled')
+    expect(afterRetryRows.rows[1].status).toBe('settled')
   })
 
   it('enforces atomic validation: invalid amount in payload rejects batch BEFORE any writes occur', async () => {
