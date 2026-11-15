@@ -1,48 +1,18 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
+import { register } from "prom-client";
 import { CursorRepository } from "../../db/repositories/cursorRepository.js";
+import { BoundedBackoff } from "../../utils/backoff.js";
 import { DlqRouter, type DlqSink } from "../messageValidator.js";
 import { computeStateHash, stateFromBondEvent, extractLedgerSeq } from "../../services/horizonParity.js";
 
 const poolMocks = vi.hoisted(() => {
-  const mockClientQuery = vi.fn()
+  const mockClientQuery = vi.fn().mockResolvedValue({ rows: [], rowCount: 0 })
   const mockClientRelease = vi.fn()
   const mockClient = { query: mockClientQuery, release: mockClientRelease }
   const mockPoolConnect = vi.fn().mockResolvedValue(mockClient)
   const mockPoolQuery = vi.fn().mockResolvedValue({ rows: [] })
   return { mockClientQuery, mockClientRelease, mockClient, mockPoolConnect, mockPoolQuery }
 })
-
-vi.mock("prom-client", () => {
-  // Provide a default export and the metric classes pulled in by modules that
-  // `import client from "prom-client"` (e.g. observability/latencyMetrics via
-  // the transaction/outbox graph), so the mocked module satisfies both the
-  // named and default import styles used across the codebase.
-  const makeMetric = vi.fn(function(this: any) {
-    return {
-      set: vi.fn(),
-      inc: vi.fn(),
-      dec: vi.fn(),
-      observe: vi.fn(),
-      labels: vi.fn().mockReturnValue({ set: vi.fn(), inc: vi.fn(), observe: vi.fn() }),
-      reset: vi.fn(),
-    }
-  });
-  const makeRegistry = vi.fn(function(this: any) {
-    return { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) }
-  });
-  const registry = { registerMetric: vi.fn(), getMetricsAsJSON: vi.fn().mockReturnValue([]) };
-  const client = {
-    register: registry,
-    Registry: makeRegistry,
-    Gauge: makeMetric,
-    Counter: makeMetric,
-    Histogram: makeMetric,
-    Summary: makeMetric,
-    collectDefaultMetrics: vi.fn(),
-    exponentialBuckets: vi.fn().mockReturnValue([]),
-  };
-  return { ...client, default: client };
-});
 
 vi.mock("../../db/pool.js", () => ({
   pool: { connect: poolMocks.mockPoolConnect, query: poolMocks.mockPoolQuery },
@@ -52,17 +22,16 @@ vi.mock("../../db/pool.js", () => ({
   replicaPreparedStatementCache: new Map(),
 }))
 
+vi.mock("../../db/outbox/emitter.js", () => ({
+  outboxEmitter: {
+    emitBatch: vi.fn().mockResolvedValue([1n, 2n]),
+  },
+}))
+
 vi.mock("../../services/identityService.js", () => ({
   upsertIdentity: vi.fn().mockResolvedValue(undefined),
   upsertBond: vi.fn().mockResolvedValue(undefined),
   upsertCursor: vi.fn().mockResolvedValue(undefined),
-}));
-
-vi.mock("../../observability/horizonMetrics.js", () => ({
-  getHorizonMetrics: vi.fn().mockReturnValue({
-    reconnectTotal: { inc: vi.fn() },
-    streamUp: { set: vi.fn() },
-  }),
 }));
 
 // The listener load graph transitively pulls reputationService (via the
@@ -76,6 +45,10 @@ vi.mock("../../services/reputationService.js", () => ({
 let capturedHandlers: { onmessage?: any; onerror?: any } = {};
 let streamCallCount = 0;
 let lastCursorVal: string | undefined;
+let closeSpies: Array<ReturnType<typeof vi.fn>> = [];
+const sdkMocks = vi.hoisted(() => ({
+  streamSpy: vi.fn(),
+}));
 
 vi.mock("@stellar/stellar-sdk", () => {
   return {
@@ -88,11 +61,13 @@ vi.mock("@stellar/stellar-sdk", () => {
               lastCursorVal = c;
               return this;
             }),
-            stream: vi.fn().mockImplementation(function(handlers: any) {
+            stream: sdkMocks.streamSpy.mockImplementation(function(handlers: any) {
               streamCallCount++;
               capturedHandlers.onmessage = handlers.onmessage;
               capturedHandlers.onerror = handlers.onerror;
-              return { close: vi.fn() };
+              const closeFn = vi.fn();
+              closeSpies.push(closeFn);
+              return closeFn;
             }),
           }),
         };
@@ -105,7 +80,12 @@ vi.mock("@stellar/stellar-sdk", () => {
   };
 });
 
-import { subscribeBondCreationEvents } from "../horizonBondEvents.js";
+import {
+  subscribeBondCreationEvents,
+  subscribeBondCreationEventsAtomic,
+  type AtomicBondEventProcessor,
+} from "../horizonBondEvents.js";
+import { upsertBond, upsertCursor, upsertIdentity } from "../../services/identityService.js";
 
 const STREAM_NAME = "bond_creation";
 
@@ -529,5 +509,249 @@ describe("subscribeBondCreationEvents", () => {
       expect(streamCallCount).toBe(1);
       h.stop();
     });
+  });
+});
+
+describe("Issue #1607 — shared listener gauges, SDK close semantics, serial queue, and monotonic cursors", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    capturedHandlers = {};
+    streamCallCount = 0;
+    lastCursorVal = undefined;
+    closeSpies = [];
+    poolMocks.mockClientQuery.mockResolvedValue({ rows: [], rowCount: 0 });
+    poolMocks.mockPoolConnect.mockResolvedValue(poolMocks.mockClient);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    capturedHandlers = {};
+    streamCallCount = 0;
+    lastCursorVal = undefined;
+    closeSpies = [];
+  });
+
+  it("imports horizonBondEvents, horizonBondEvents.atomic, and horizonWithdrawalEvents together with real prom-client without duplicate registration", async () => {
+    await expect(
+      Promise.all([
+        import("../horizonBondEvents.js"),
+        import("../horizonBondEvents.atomic.js"),
+        import("../horizonWithdrawalEvents.js"),
+      ]),
+    ).resolves.toBeDefined();
+
+    const lagMetric = register.getSingleMetric("horizon_listener_cursor_lag_seconds");
+    const checkpointMetric = register.getSingleMetric("horizon_listener_last_checkpoint_timestamp");
+    expect(lagMetric).toBeDefined();
+    expect(checkpointMetric).toBeDefined();
+
+    const metricsJson = await register.getMetricsAsJSON();
+    expect(
+      metricsJson.filter((m) => m.name === "horizon_listener_cursor_lag_seconds"),
+    ).toHaveLength(1);
+    expect(
+      metricsJson.filter((m) => m.name === "horizon_listener_last_checkpoint_timestamp"),
+    ).toHaveLength(1);
+  });
+
+  it.each([
+    [
+      "subscribeBondCreationEvents",
+      () => subscribeBondCreationEvents(makeRouter()),
+    ],
+    [
+      "subscribeBondCreationEventsAtomic",
+      () =>
+        subscribeBondCreationEventsAtomic(
+          makeRouter(),
+          undefined,
+          undefined,
+          { process: vi.fn().mockResolvedValue(undefined) } as unknown as AtomicBondEventProcessor,
+        ),
+    ],
+  ])(
+    "%s: after 3 onerror cycles, stream was called 4 times, first 3 close functions ran once before next stream, and stop() calls the 4th",
+    async (_name, startListener) => {
+      vi.spyOn(BoundedBackoff.prototype, "wait").mockResolvedValue(undefined);
+
+      const handle = startListener();
+      await flushStreamSetup();
+
+      expect(streamCallCount).toBe(1);
+      expect(closeSpies).toHaveLength(1);
+      expect(closeSpies[0]).not.toHaveBeenCalled();
+
+      for (let i = 0; i < 3; i++) {
+        await capturedHandlers.onerror?.(new Error(`stream error ${i + 1}`));
+      }
+
+      expect(streamCallCount).toBe(4);
+      expect(closeSpies).toHaveLength(4);
+
+      for (let i = 0; i < 3; i++) {
+        expect(closeSpies[i]).toHaveBeenCalledTimes(1);
+        expect(closeSpies[i].mock.invocationCallOrder[0]).toBeLessThan(
+          sdkMocks.streamSpy.mock.invocationCallOrder[i + 1],
+        );
+      }
+
+      expect(closeSpies[3]).not.toHaveBeenCalled();
+      handle.stop();
+      expect(closeSpies[3]).toHaveBeenCalledTimes(1);
+
+      // Idempotent second stop() does not re-invoke close
+      handle.stop();
+      expect(closeSpies[3]).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("serialises onmessage in delivery order when first handler is slower than second, persisting the higher paging token", async () => {
+    const processedOrder: string[] = [];
+    (upsertIdentity as ReturnType<typeof vi.fn>).mockImplementation(async (identity: { id: string }) => {
+      if (identity.id === "GSLOW") {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+      processedOrder.push(identity.id);
+    });
+
+    const handle = subscribeBondCreationEvents(makeRouter());
+    await flushStreamSetup();
+
+    const p1 = capturedHandlers.onmessage?.({
+      type: "create_bond",
+      id: "op-100",
+      paging_token: "100",
+      source_account: "GSLOW",
+      amount: "100",
+      duration: "365",
+    });
+    const p2 = capturedHandlers.onmessage?.({
+      type: "create_bond",
+      id: "op-101",
+      paging_token: "101",
+      source_account: "GFAST",
+      amount: "200",
+      duration: "365",
+    });
+
+    await Promise.all([p1, p2]);
+
+    expect(processedOrder).toEqual(["GSLOW", "GFAST"]);
+    const cursorArgs = (upsertCursor as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([input]) => input.pagingToken,
+    );
+    expect(cursorArgs).toEqual(["100", "101"]);
+    expect(cursorArgs.at(-1)).toBe("101");
+
+    handle.stop();
+  });
+
+  it("serialises atomic listener onmessage and guards numeric BigInt cursor comparison ('9' vs '10')", async () => {
+    const processedOps: string[] = [];
+    const mockProcessor = {
+      process: vi.fn().mockImplementation(async (event: { operationId: string }) => {
+        if (event.operationId === "op-10") {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+        }
+        processedOps.push(event.operationId);
+      }),
+    } as unknown as AtomicBondEventProcessor;
+
+    const handle = subscribeBondCreationEventsAtomic(
+      makeRouter(),
+      undefined,
+      undefined,
+      mockProcessor,
+    );
+    await flushStreamSetup();
+
+    // Deliver paging_token '10' (slow) followed by '9' (fast, lexicographically > '10' as string but < 10n as BigInt)
+    const p1 = capturedHandlers.onmessage?.({
+      type: "create_bond",
+      id: "op-10",
+      paging_token: "10",
+      source_account: "GAAA",
+      amount: "100",
+      duration: "365",
+    });
+    const p2 = capturedHandlers.onmessage?.({
+      type: "create_bond",
+      id: "op-9",
+      paging_token: "9",
+      source_account: "GBBB",
+      amount: "100",
+      duration: "365",
+    });
+
+    await Promise.all([p1, p2]);
+
+    expect(processedOps).toEqual(["op-10", "op-9"]);
+    const cursorArgs = (upsertCursor as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([input]) => input.pagingToken,
+    );
+    // '9' must NOT overwrite '10' even though '9' > '10' in string order
+    expect(cursorArgs).toEqual(["10"]);
+    expect(cursorArgs.at(-1)).toBe("10");
+
+    handle.stop();
+  });
+
+  it.each([
+    [
+      "subscribeBondCreationEvents",
+      (procSpy: ReturnType<typeof vi.fn>) => {
+        void procSpy;
+        return subscribeBondCreationEvents(makeRouter());
+      },
+    ],
+    [
+      "subscribeBondCreationEventsAtomic",
+      (procSpy: ReturnType<typeof vi.fn>) =>
+        subscribeBondCreationEventsAtomic(
+          makeRouter(),
+          undefined,
+          undefined,
+          { process: procSpy } as unknown as AtomicBondEventProcessor,
+        ),
+    ],
+  ])("%s: drops messages delivered after stop() with zero database writes", async (_name, startListener) => {
+    const procSpy = vi.fn().mockResolvedValue(undefined);
+    const handle = startListener(procSpy);
+    await flushStreamSetup();
+
+    vi.clearAllMocks();
+    handle.stop();
+
+    await capturedHandlers.onmessage?.({
+      type: "create_bond",
+      id: "op-after-stop",
+      paging_token: "2000",
+      source_account: "GABC",
+      amount: "100",
+      duration: "365",
+    });
+
+    expect(poolMocks.mockPoolConnect).not.toHaveBeenCalled();
+    expect(poolMocks.mockClientQuery).not.toHaveBeenCalled();
+    expect(upsertIdentity).not.toHaveBeenCalled();
+    expect(upsertBond).not.toHaveBeenCalled();
+    expect(upsertCursor).not.toHaveBeenCalled();
+    expect(procSpy).not.toHaveBeenCalled();
+  });
+
+  it("upsertCursor SQL guards against backwards numeric paging_token writes", async () => {
+    const actualIdentity = await vi.importActual<typeof import("../../services/identityService.js")>(
+      "../../services/identityService.js",
+    );
+    const querySpy = vi.fn().mockResolvedValue({ rows: [], rowCount: 1 });
+    await actualIdentity.upsertCursor(
+      { streamName: "bond_creation", pagingToken: "10" },
+      { query: querySpy } as any,
+    );
+
+    expect(querySpy).toHaveBeenCalledTimes(1);
+    const [sql, params] = querySpy.mock.calls[0] as [string, string[]];
+    expect(params).toEqual(["bond_creation", "10"]);
+    expect(sql).toContain("EXCLUDED.paging_token::numeric >= horizon_cursors.paging_token::numeric");
   });
 });

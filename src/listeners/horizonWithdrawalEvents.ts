@@ -1,7 +1,7 @@
 import { Horizon } from '@stellar/stellar-sdk'
 import type { Pool, PoolClient } from 'pg'
-import { Gauge, register } from 'prom-client'
 import { pool as defaultPool } from '../db/pool.js'
+import { getHorizonListenerGauges } from '../observability/horizonMetrics.js'
 import { CursorRepository } from '../db/repositories/cursorRepository.js'
 import { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
 import { upsertCursor } from '../services/identityService.js'
@@ -75,21 +75,7 @@ function trimTrailingZeros(decimal: string): string {
   return decimal.replace(/\.?0+$/, '') || '0'
 }
 
-const cursorLagGauge = (register.getSingleMetric('horizon_listener_cursor_lag_seconds') as Gauge<string> | undefined)
-  ?? new Gauge({
-    name: 'horizon_listener_cursor_lag_seconds',
-    help: 'Time elapsed since last Horizon cursor checkpoint',
-    labelNames: ['stream_name'],
-    registers: [register],
-  })
-
-const lastCheckpointGauge = (register.getSingleMetric('horizon_listener_last_checkpoint_timestamp') as Gauge<string> | undefined)
-  ?? new Gauge({
-    name: 'horizon_listener_last_checkpoint_timestamp',
-    help: 'Unix timestamp of last Horizon cursor checkpoint',
-    labelNames: ['stream_name'],
-    registers: [register],
-  })
+const { cursorLagGauge, lastCheckpointGauge } = getHorizonListenerGauges()
 
 /**
  * Configuration for the Horizon withdrawal listener
