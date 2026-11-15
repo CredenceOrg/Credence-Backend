@@ -38,6 +38,8 @@ export interface WebhookEmitOptions {
 export interface WebhookConfig {
   /** Unique identifier for this webhook. */
   id: string
+  /** Optional owning tenant identifier for audit attribution. */
+  tenantId?: string
   /** Target URL to POST events to. */
   url: string
   /** Events this webhook is subscribed to. */
@@ -137,13 +139,40 @@ export interface DlqEntry {
 }
 
 /**
+ * Filtering and pagination options when listing DLQ entries.
+ */
+export interface DlqListOptions {
+  /** Maximum number of entries to return. */
+  limit?: number
+  /** When true, only return entries that have not been marked replayed (`replayed_at IS NULL`). */
+  pendingOnly?: boolean
+}
+
+/**
+ * Durable replay attempt record written to `webhook_replay_audit`.
+ */
+export interface DlqReplayAttemptInput {
+  dlqEntryId: string
+  webhookId: string
+  actorId: string
+  actorEmail: string
+  tenantId: string
+  idempotencyKey: string
+  success: boolean
+  statusCode?: number
+  errorMessage?: string
+}
+
+/**
  * Store for dead-letter queue entries.
  */
 export interface DlqStore {
   push(entry: DlqEntry): Promise<void>
-  list(): Promise<DlqEntry[]>
+  list(options?: DlqListOptions): Promise<DlqEntry[]>
   get(id: string): Promise<DlqEntry | null>
   markReplayed(id: string, replayedAt: string): Promise<void>
+  replayAttempts(entryId: string): Promise<number>
+  recordReplayAttempt(input: DlqReplayAttemptInput): Promise<void>
 }
 
 /**

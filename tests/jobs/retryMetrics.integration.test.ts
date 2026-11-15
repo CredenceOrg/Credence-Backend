@@ -56,6 +56,10 @@ class InMemoryDlqStore implements DlqStore {
     const e = this.entries.find((x) => x.id === id)
     if (e) e.replayedAt = replayedAt
   }
+  async replayAttempts(_entryId: string): Promise<number> {
+    return 0
+  }
+  async recordReplayAttempt(): Promise<void> {}
 }
 
 function stubWebhookStore(active: WebhookConfig[]): WebhookStore {

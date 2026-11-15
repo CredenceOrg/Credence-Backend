@@ -1,22 +1,30 @@
-import { describe, it, expect, beforeAll, afterEach } from 'vitest'
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest'
 import { newDb } from 'pg-mem'
 import type { IMemoryDb } from 'pg-mem'
 import { Pool } from 'pg'
+
+vi.mock('../../middleware/metrics.js', () => ({
+  recordWebhookDlqSize: vi.fn(),
+}))
+
 import { PostgresDlqStore } from './postgresDlqStore.js'
 import type { DlqEntry, WebhookPayload } from './types.js'
 
-function createPassthroughPool(pool: Pool): Pool {
+function createPassthroughPool(pool: Pool, onQuery?: (sql: string, values?: unknown[]) => void): Pool {
   return new Proxy(pool, {
     get(target, prop) {
       if (prop !== 'query') return (target as any)[prop]
       return (text: string, values?: unknown[]) => {
+        onQuery?.(text, values)
         return (target as any).query(text, values)
       }
     },
   })
 }
 
-async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool; proxiedPool: Pool }> {
+async function buildTestDb(
+  onQuery?: (sql: string, values?: unknown[]) => void,
+): Promise<{ db: IMemoryDb; pool: Pool; proxiedPool: Pool }> {
   const db = newDb()
 
   const adapter = db.adapters.createPg()
@@ -36,18 +44,44 @@ async function buildTestDb(): Promise<{ db: IMemoryDb; pool: Pool; proxiedPool: 
     );
   `)
 
-  const proxiedPool = createPassthroughPool(pool)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS webhook_replay_audit (
+      id VARCHAR(255) PRIMARY KEY,
+      dlq_entry_id VARCHAR(255) NOT NULL,
+      webhook_id VARCHAR(255) NOT NULL,
+      actor_id VARCHAR(255) NOT NULL,
+      actor_email VARCHAR(255) NOT NULL,
+      tenant_id VARCHAR(255) NOT NULL,
+      idempotency_key VARCHAR(255) NOT NULL,
+      replayed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      success BOOLEAN NOT NULL,
+      status_code INTEGER,
+      error_message TEXT,
+      ip_address VARCHAR(64),
+      request_id VARCHAR(255),
+      CONSTRAINT uq_webhook_replay_audit_idempotency UNIQUE (dlq_entry_id, idempotency_key)
+    );
+  `)
+
+  const proxiedPool = createPassthroughPool(pool, onQuery)
   return { db, pool, proxiedPool }
 }
 
 describe('PostgresDlqStore', () => {
   let pool: Pool
   let store: PostgresDlqStore
+  let recordedQueries: Array<{ sql: string; values?: unknown[] }> = []
 
   const mockPayload: WebhookPayload = {
     event: 'bond.created',
     timestamp: '2026-01-01T00:00:00.000Z',
-    data: { address: 'GABC' },
+    data: {
+      address: 'GABC',
+      bondedAmount: '100',
+      bondStart: null,
+      bondDuration: null,
+      active: true,
+    },
   }
 
   const mockEntry: DlqEntry = {
@@ -62,12 +96,16 @@ describe('PostgresDlqStore', () => {
   }
 
   beforeAll(async () => {
-    const built = await buildTestDb()
+    const built = await buildTestDb((sql, values) => {
+      recordedQueries.push({ sql, values })
+    })
     pool = built.pool
     store = new PostgresDlqStore(built.proxiedPool)
   })
 
   afterEach(async () => {
+    recordedQueries = []
+    await pool.query('DELETE FROM webhook_replay_audit')
     await pool.query('DELETE FROM webhook_dlq')
   })
 
@@ -141,5 +179,89 @@ describe('PostgresDlqStore', () => {
     
     const retrieved = await store.get('entry_metric_fail')
     expect(retrieved).not.toBeNull()
+  })
+
+  it('returns only pending rows and applies SQL LIMIT when pendingOnly and limit are passed', async () => {
+    for (let i = 1; i <= 3; i++) {
+      await store.push({
+        ...mockEntry,
+        id: `replayed_${i}`,
+        failedAt: `2026-01-0${i}T00:00:00.000Z`,
+        replayedAt: `2026-01-1${i}T00:00:00.000Z`,
+      })
+    }
+
+    await store.push({
+      ...mockEntry,
+      id: 'pending_older',
+      failedAt: '2026-01-04T00:00:00.000Z',
+    })
+    await store.push({
+      ...mockEntry,
+      id: 'pending_newer',
+      failedAt: '2026-01-05T00:00:00.000Z',
+    })
+
+    recordedQueries = []
+    const pending = await store.list({ pendingOnly: true, limit: 10 })
+
+    expect(pending.map((e) => e.id)).toEqual(['pending_newer', 'pending_older'])
+    expect(recordedQueries).toHaveLength(1)
+    expect(recordedQueries[0].sql).toMatch(/WHERE\s+replayed_at\s+IS\s+NULL/i)
+    expect(recordedQueries[0].sql).toMatch(/LIMIT\s+\$1/i)
+    expect(recordedQueries[0].values).toEqual([10])
+
+    recordedQueries = []
+    const unbounded = await store.list()
+    expect(unbounded).toHaveLength(5)
+    expect(recordedQueries[0].sql).not.toMatch(/LIMIT/i)
+  })
+
+  it('tracks durable replay attempts in webhook_replay_audit with idempotency deduplication', async () => {
+    await store.push(mockEntry)
+    expect(await store.replayAttempts('entry_1')).toBe(0)
+
+    await store.recordReplayAttempt({
+      dlqEntryId: 'entry_1',
+      webhookId: 'wh_1',
+      actorId: 'system:dlq-processor',
+      actorEmail: 'system',
+      tenantId: 'system',
+      idempotencyKey: 'entry_1:attempt:1',
+      success: false,
+      statusCode: 503,
+      errorMessage: 'Service Unavailable',
+    })
+    expect(await store.replayAttempts('entry_1')).toBe(1)
+
+    // Duplicate idempotencyKey for the same dlqEntryId is ignored.
+    await store.recordReplayAttempt({
+      dlqEntryId: 'entry_1',
+      webhookId: 'wh_1',
+      actorId: 'system:dlq-processor',
+      actorEmail: 'system',
+      tenantId: 'system',
+      idempotencyKey: 'entry_1:attempt:1',
+      success: false,
+      statusCode: 503,
+    })
+    expect(await store.replayAttempts('entry_1')).toBe(1)
+
+    await store.recordReplayAttempt({
+      dlqEntryId: 'entry_1',
+      webhookId: 'wh_1',
+      actorId: 'system:dlq-processor',
+      actorEmail: 'system',
+      tenantId: 'tenant_abc',
+      idempotencyKey: 'entry_1:attempt:2',
+      success: true,
+      statusCode: 200,
+    })
+    expect(await store.replayAttempts('entry_1')).toBe(2)
+
+    // Original DLQ entry remains untouched until markReplayed is called.
+    const unchanged = await store.get('entry_1')
+    expect(unchanged?.attempts).toBe(3)
+    expect(unchanged?.replayedAt).toBeUndefined()
   })
 })

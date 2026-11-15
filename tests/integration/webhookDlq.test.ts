@@ -3,7 +3,7 @@
  *
  * Scenario coverage
  * -----------------
- * 1. WebhookDlqProcessor job scans event_outbox for failed rows, pushes to DLQ
+ * 1. WebhookDlqProcessor replays a pending webhook_dlq entry against a local HTTP receiver, marks replayed_at, and writes a durable webhook_replay_audit row
  * 2. GET /api/webhooks/dlq lists DLQ entries
  * 3. GET /api/webhooks/dlq/:id fetches one DLQ entry
  * 4. POST /api/webhooks/dlq/:id/replay replays with idempotency key + audit
@@ -13,12 +13,22 @@
  * 8. Rate limiting on replay endpoint (configurable via env)
  */
 
-import { beforeAll, afterAll, describe, it, expect, beforeEach } from 'vitest'
+import { beforeAll, afterAll, describe, it, expect, beforeEach, vi } from 'vitest'
+import http from 'node:http'
+import type { AddressInfo } from 'node:net'
 import express from 'express'
 import request from 'supertest'
 import { randomUUID } from 'crypto'
+
+vi.mock('../../src/lib/ssrfProtection.js', () => ({
+  checkHostBlocked: () => ({ blocked: false }),
+  checkHostnameBlocked: () => ({ blocked: false }),
+}))
+
 import { createTestDatabase, type TestDatabase } from './testDatabase.js'
 import { WebhookDlqProcessor } from '../../src/jobs/webhookDlqProcessor.js'
+import { PostgresDlqStore } from '../../src/services/webhooks/postgresDlqStore.js'
+import { PostgresWebhookRepository } from '../../src/db/repositories/webhookRepository.js'
 import { createWebhookReplayRouter } from '../../src/routes/webhookReplay.js'
 import { WebhookDlqRepository } from '../../src/repositories/webhookDlqRepository.js'
 import { errorHandler } from '../../src/middleware/errorHandler.js'
@@ -122,41 +132,103 @@ describe('Webhook DLQ & Replay Integration', () => {
     await db.pool.query('TRUNCATE event_outbox, webhook_dlq, webhook_replay_audit, webhook_configs CASCADE')
   })
 
-  // ── Test 1: WebhookDlqProcessor scans outbox and pushes to DLQ ─────────────
+  // ── Test 1: WebhookDlqProcessor replays pending DLQ entry end-to-end ───────
 
-  it('should scan event_outbox and push failed webhooks to DLQ', async () => {
-    // Seed a failed webhook event in the outbox
-    const eventId = randomUUID()
-    const webhookId = randomUUID()
-    await db.pool.query(
-      `INSERT INTO event_outbox (id, event_type, payload, metadata, status, retry_count, last_error, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-      [
-        eventId,
-        'bond.created',
-        JSON.stringify({ address: '0x123', bondedAmount: '1000' }),
-        JSON.stringify({ webhookId }),
-        'failed',
-        3,
-        'Timeout after 3 attempts',
-        new Date(),
-      ],
-    )
+  it('should replay a pending webhook_dlq entry against a local HTTP receiver, set replayed_at, and record audit', async () => {
+    const receivedRequests: Array<{ method?: string; headers: http.IncomingHttpHeaders; body: string }> = []
+    const receiver = http.createServer((req, res) => {
+      const chunks: Buffer[] = []
+      req.on('data', (chunk: Buffer) => chunks.push(chunk))
+      req.on('end', () => {
+        receivedRequests.push({
+          method: req.method,
+          headers: req.headers,
+          body: Buffer.concat(chunks).toString('utf8'),
+        })
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      })
+    })
 
-    // Run the DLQ processor
-    const processor = new WebhookDlqProcessor(db.pool, { logger: () => {} })
-    const result = await processor.run()
+    await new Promise<void>((resolve) => receiver.listen(0, '127.0.0.1', () => resolve()))
 
-    expect(result.examined).toBe(1)
-    expect(result.pushed).toBe(1)
+    try {
+      const { port } = receiver.address() as AddressInfo
+      const webhookId = randomUUID()
+      const dlqEntryId = randomUUID()
 
-    // Verify DLQ entry was created
-    const dlqEntry = await dlqRepo.findById(eventId)
-    expect(dlqEntry).toBeTruthy()
-    expect(dlqEntry?.webhookId).toBe(webhookId)
-    expect(dlqEntry?.attempts).toBe(3)
-    expect(dlqEntry?.lastError).toBe('Timeout after 3 attempts')
-    expect(dlqEntry?.replayedAt).toBeUndefined()
+      await db.pool.query(
+        `INSERT INTO webhook_configs (id, url, events, secret, secret_updated_at, active)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          webhookId,
+          `http://127.0.0.1:${port}/webhook`,
+          ['bond.created'],
+          'integration-test-secret',
+          new Date(),
+          true,
+        ],
+      )
+
+      const payload = {
+        event: 'bond.created',
+        timestamp: new Date().toISOString(),
+        data: {
+          address: 'GABC1234567890',
+          bondedAmount: '1000',
+          bondStart: null,
+          bondDuration: null,
+          active: true,
+        },
+      }
+
+      await db.pool.query(
+        `INSERT INTO webhook_dlq (id, webhook_id, payload, failed_at, attempts, last_status_code, last_error)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [
+          dlqEntryId,
+          webhookId,
+          JSON.stringify(payload),
+          new Date(Date.now() - 5 * 60_000),
+          4,
+          503,
+          'Timeout after 4 attempts',
+        ],
+      )
+
+      const processor = new WebhookDlqProcessor(
+        new PostgresDlqStore(db.pool),
+        new PostgresWebhookRepository(db.pool),
+        { logger: () => {} },
+      )
+      const result = await processor.run()
+
+      expect(result.scannedCount).toBe(1)
+      expect(result.eligibleCount).toBe(1)
+      expect(result.replayedCount).toBe(1)
+      expect(result.failedCount).toBe(0)
+
+      // 1. Receiver got exactly 1 request
+      expect(receivedRequests).toHaveLength(1)
+      expect(receivedRequests[0].method).toBe('POST')
+      expect(JSON.parse(receivedRequests[0].body)).toEqual(payload)
+
+      // 2. replayed_at is set on webhook_dlq
+      const dlqEntry = await dlqRepo.findById(dlqEntryId)
+      expect(dlqEntry).toBeTruthy()
+      expect(dlqEntry?.replayedAt).toBeTruthy()
+
+      // 3. One webhook_replay_audit row exists with actor_id = 'system:dlq-processor' and success = true
+      const history = await dlqRepo.getReplayHistory(dlqEntryId)
+      expect(history).toHaveLength(1)
+      expect(history[0].actor_id).toBe('system:dlq-processor')
+      expect(history[0].success).toBe(true)
+      expect(history[0].status_code).toBe(200)
+    } finally {
+      await new Promise<void>((resolve, reject) =>
+        receiver.close((err) => (err ? reject(err) : resolve())),
+      )
+    }
   })
 
   // ── Test 2: GET /api/webhooks/dlq lists DLQ entries ────────────────────────

@@ -40,7 +40,37 @@ import { OutboxJob } from "./jobs/outbox.js";
 import { RequestSnapshotsSweeper } from "./jobs/requestSnapshotsSweeper.js";
 import { IdempotencyKeySweeper } from "./jobs/idempotencyKeySweeper.js";
 import { ExpiredSessionsSweeper } from "./jobs/expiredSessionsSweeper.js";
-import { WebhookDlqProcessor } from "./jobs/webhookDlqProcessor.js";
+import {
+  WebhookDlqProcessor,
+  createWebhookDlqProcessorMetrics,
+  type WebhookDlqProcessorOptions,
+} from "./jobs/webhookDlqProcessor.js";
+import { PostgresDlqStore } from "./services/webhooks/postgresDlqStore.js";
+import { PostgresWebhookRepository } from "./db/repositories/webhookRepository.js";
+import type { Pool } from "pg";
+import type { Config } from "./config/index.js";
+
+/**
+ * Wire a {@link WebhookDlqProcessor} against PostgreSQL DLQ and webhook stores.
+ *
+ * Exported as a pure factory so unit/wiring tests can verify construction and
+ * execution against `pg-mem` without booting the full HTTP server.
+ */
+export function createWebhookDlqProcessor(
+  dbPool: Pool,
+  cfg: Pick<Config, "webhookDlq">,
+  overrides: Partial<WebhookDlqProcessorOptions> = {},
+): WebhookDlqProcessor {
+  const dlqStore = new PostgresDlqStore(dbPool);
+  const webhookStore = new PostgresWebhookRepository(dbPool);
+  return new WebhookDlqProcessor(dlqStore, webhookStore, {
+    intervalMs: cfg.webhookDlq.intervalMs,
+    batchSize: cfg.webhookDlq.batchSize,
+    logger: (msg) => logger.info(msg),
+    metrics: createWebhookDlqProcessorMetrics(register),
+    ...overrides,
+  });
+}
 
 export { app };
 export default app;
@@ -368,15 +398,11 @@ if (process.env.NODE_ENV !== "test") {
       logger.error(`Failed to start cache invalidation bus: ${message}`, error);
     }
 
-    // Start Webhook DLQ Processor — promotes permanently-failed outbox webhook
-    // events into the webhook_dlq table so operators can replay them.
-    if (process.env.DATABASE_URL) {
+    // Start Webhook DLQ Processor — automatically replays pending webhook_dlq
+    // entries against recovered subscribers while respecting maxReplayAttempts.
+    if (process.env.DATABASE_URL || process.env.DB_URL) {
       try {
-        webhookDlqProcessor = new WebhookDlqProcessor(pool, {
-          intervalMs: parseInt(process.env.WEBHOOK_DLQ_INTERVAL_MS ?? "60000", 10),
-          batchSize: parseInt(process.env.WEBHOOK_DLQ_BATCH_SIZE ?? "200", 10),
-          logger: logger.info,
-        });
+        webhookDlqProcessor = createWebhookDlqProcessor(pool, config);
         webhookDlqProcessor.start();
         logger.info("[Main] Webhook DLQ Processor started");
       } catch (error) {
