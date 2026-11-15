@@ -8,9 +8,9 @@ import {
   type RetryPolicy,
   type RetryPolicyOverrides,
 } from '../lib/retryPolicy.js'
-import {
-  type ExtendedRetryPolicy,
-  type ExtendedRetryPolicyOverrides,
+import type {
+  ExtendedRetryPolicy,
+  ExtendedRetryPolicyOverrides,
 } from '../clients/retryExecutor.js'
 
 dotenv.config()
@@ -588,6 +588,14 @@ export const envSchema = z.object({
   REPORT_MAX_CONCURRENT_JOBS_PER_ORG: numeric('10').pipe(
     z.number().int().min(0).max(1000),
   ),
+
+  // Webhook DLQ automatic replay processor
+  WEBHOOK_DLQ_INTERVAL_MS: numeric('60000').pipe(
+    z.number().int().min(10000),
+  ),
+  WEBHOOK_DLQ_BATCH_SIZE: numeric('200').pipe(
+    z.number().int().min(1).max(1000),
+  ),
 })
 
 export type Env = z.infer<typeof envSchema>
@@ -785,6 +793,12 @@ export interface Config {
     enabled: boolean
     /** Minimum response body size in bytes before compression is applied. Default: 1024. */
     thresholdBytes: number
+  }
+  webhookDlq: {
+    /** Interval in ms between automatic DLQ replay cycles (>= 10000). Default: 60000. */
+    intervalMs: number
+    /** Maximum eligible DLQ entries replayed per cycle (1..1000). Default: 200. */
+    batchSize: number
   }
 }
 
@@ -1091,6 +1105,10 @@ function mapEnvToConfig(env: Env): Config {
     compression: {
       enabled: env.COMPRESSION_ENABLED,
       thresholdBytes: env.COMPRESSION_THRESHOLD_BYTES,
+    },
+    webhookDlq: {
+      intervalMs: env.WEBHOOK_DLQ_INTERVAL_MS,
+      batchSize: env.WEBHOOK_DLQ_BATCH_SIZE,
     },
   }
 

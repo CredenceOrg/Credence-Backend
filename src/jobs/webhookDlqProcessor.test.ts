@@ -8,13 +8,23 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 
+import client from 'prom-client'
 import {
   WebhookDlqProcessor,
+  createWebhookDlqProcessorMetrics,
   processWebhookDlq,
   validateDlqEntry,
   type DlqSkipReason,
 } from './webhookDlqProcessor.js'
-import type { DlqEntry, DlqStore, WebhookConfig, WebhookStore } from '../services/webhooks/types.js'
+import { MemoryDlqStore } from '../services/webhooks/dlq.js'
+import { MemoryWebhookStore } from '../services/webhooks/memoryStore.js'
+import type {
+  DlqEntry,
+  DlqReplayAttemptInput,
+  DlqStore,
+  WebhookConfig,
+  WebhookStore,
+} from '../services/webhooks/types.js'
 
 // ── Delivery layer stub ───────────────────────────────────────────────────────
 // deliverWebhook performs real network I/O; replace it so delivery outcomes are
@@ -68,25 +78,56 @@ function makeWebhook(overrides: Partial<WebhookConfig> = {}): WebhookConfig {
 interface FakeStore {
   store: DlqStore
   entries: DlqEntry[]
+  auditRecords: DlqReplayAttemptInput[]
   markReplayed: ReturnType<typeof vi.fn>
   list: ReturnType<typeof vi.fn>
+  replayAttempts: ReturnType<typeof vi.fn>
+  recordReplayAttempt: ReturnType<typeof vi.fn>
 }
 
-function makeDlqStore(initial: DlqEntry[] = [], overrides: Partial<DlqStore> = {}): FakeStore {
+function makeDlqStore(
+  initial: DlqEntry[] = [],
+  overrides: Partial<DlqStore> = {},
+  initialReplayCounts: Record<string, number> = {},
+): FakeStore {
   const entries = [...initial]
+  const auditRecords: DlqReplayAttemptInput[] = []
+  for (const [dlqEntryId, count] of Object.entries(initialReplayCounts)) {
+    for (let i = 1; i <= count; i++) {
+      auditRecords.push({
+        dlqEntryId,
+        webhookId: 'wh_1',
+        actorId: 'system:dlq-processor',
+        actorEmail: 'system',
+        tenantId: 'system',
+        idempotencyKey: `${dlqEntryId}:attempt:${i}`,
+        success: false,
+      })
+    }
+  }
   const markReplayed = vi.fn(async (id: string, replayedAt: string) => {
     const idx = entries.findIndex(e => e.id === id)
     if (idx >= 0) entries[idx] = { ...entries[idx], replayedAt }
   })
   const list = vi.fn(async () => entries.map(e => ({ ...e })))
+  const replayAttempts = vi.fn(async (entryId: string) =>
+    auditRecords.filter(r => r.dlqEntryId === entryId).length,
+  )
+  const recordReplayAttempt = vi.fn(async (input: DlqReplayAttemptInput) => {
+    if (!auditRecords.some(r => r.dlqEntryId === input.dlqEntryId && r.idempotencyKey === input.idempotencyKey)) {
+      auditRecords.push({ ...input })
+    }
+  })
   const store: DlqStore = {
     push: vi.fn(async (entry: DlqEntry) => { entries.push(entry) }),
     list,
     get: vi.fn(async (id: string) => entries.find(e => e.id === id) ?? null),
     markReplayed,
+    replayAttempts,
+    recordReplayAttempt,
     ...overrides,
   }
-  return { store, entries, markReplayed, list }
+  return { store, entries, auditRecords, markReplayed, list, replayAttempts, recordReplayAttempt }
 }
 
 interface FakeWebhookStore {
@@ -103,6 +144,8 @@ function makeWebhookStore(configs: WebhookConfig[] = [], overrides: Partial<Webh
     rotateSecret: vi.fn(async () => {
       throw new Error('not implemented in test double')
     }),
+    reserveWebhookDelivery: vi.fn(async () => true),
+    clearWebhookDeliveryAttempt: vi.fn(async () => {}),
     ...overrides,
   }
   return { store, get }
@@ -215,14 +258,18 @@ describe('WebhookDlqProcessor', () => {
     })
 
     it('replays every eligible entry in a mixed backlog', async () => {
-      const dlq = makeDlqStore([
-        makeEntry({ id: 'dlq_replay' }),
-        makeEntry({ id: 'dlq_done', replayedAt: new Date(NOW - HOUR).toISOString() }),
-        makeEntry({ id: 'dlq_fresh', failedAt: new Date(NOW - 1000).toISOString() }),
-        makeEntry({ id: 'dlq_exhausted', attempts: 99 }),
-        makeEntry({ id: 'dlq_corrupt', payload: null as never }),
-        makeEntry({ id: 'dlq_orphan', webhookId: 'wh_missing' }),
-      ])
+      const dlq = makeDlqStore(
+        [
+          makeEntry({ id: 'dlq_replay' }),
+          makeEntry({ id: 'dlq_done', replayedAt: new Date(NOW - HOUR).toISOString() }),
+          makeEntry({ id: 'dlq_fresh', failedAt: new Date(NOW - 1000).toISOString() }),
+          makeEntry({ id: 'dlq_exhausted', attempts: 99 }),
+          makeEntry({ id: 'dlq_corrupt', payload: null as never }),
+          makeEntry({ id: 'dlq_orphan', webhookId: 'wh_missing' }),
+        ],
+        {},
+        { dlq_exhausted: 5 },
+      )
       const webhooks = makeWebhookStore([makeWebhook()])
 
       const result = await build(dlq, webhooks).run()
@@ -289,11 +336,15 @@ describe('WebhookDlqProcessor', () => {
       expect(result.replayedCount).toBe(1)
     })
 
-    it('replays an entry at exactly maxReplayAttempts and skips one past it', async () => {
-      const dlq = makeDlqStore([
-        makeEntry({ id: 'dlq_at_cap', attempts: 5 }),
-        makeEntry({ id: 'dlq_over_cap', attempts: 6 }),
-      ])
+    it('replays an entry on its final allowed replay attempt and skips one at maxReplayAttempts', async () => {
+      const dlq = makeDlqStore(
+        [
+          makeEntry({ id: 'dlq_at_cap', attempts: 4 }),
+          makeEntry({ id: 'dlq_over_cap', attempts: 4 }),
+        ],
+        {},
+        { dlq_at_cap: 4, dlq_over_cap: 5 },
+      )
       const webhooks = makeWebhookStore([makeWebhook()])
 
       const result = await build(dlq, webhooks, { maxReplayAttempts: 5 }).run()
@@ -307,9 +358,77 @@ describe('WebhookDlqProcessor', () => {
       const dlq = makeDlqStore([makeEntry({ attempts: 0 })])
       const webhooks = makeWebhookStore([makeWebhook()])
 
-      const result = await build(dlq, webhooks, { maxReplayAttempts: 0 }).run()
+      const result = await build(dlq, webhooks, { maxReplayAttempts: 1 }).run()
 
       expect(result.replayedCount).toBe(1)
+    })
+
+    it('treats an entry with original attempts: 10 and zero replay attempts as eligible', async () => {
+      const dlq = makeDlqStore([makeEntry({ id: 'dlq_high_orig_attempts', attempts: 10 })])
+      const webhooks = makeWebhookStore([makeWebhook()])
+
+      const result = await build(dlq, webhooks, { maxReplayAttempts: 3 }).run()
+
+      expect(result.eligibleCount).toBe(1)
+      expect(result.replayedCount).toBe(1)
+      expect(result.skippedCount).toBe(0)
+      expect(deliverWebhookMock).toHaveBeenCalledTimes(1)
+    })
+
+    it('attempts a permanently failing delivery at most maxReplayAttempts times across runs using MemoryDlqStore', async () => {
+      const memoryDlq = new MemoryDlqStore()
+      const memoryWebhooks = new MemoryWebhookStore()
+      await memoryWebhooks.set(makeWebhook({ tenantId: 'tenant_wave' }))
+      await memoryDlq.push(makeEntry({ id: 'dlq_perm_fail', attempts: 4 }))
+
+      deliverWebhookMock.mockResolvedValue({
+        webhookId: 'wh_1',
+        success: false,
+        statusCode: 502,
+        attempts: 4,
+        error: 'Bad Gateway',
+      })
+
+      const processor = new WebhookDlqProcessor(memoryDlq, memoryWebhooks, {
+        logger,
+        now: () => NOW,
+        maxReplayAttempts: 3,
+      })
+
+      const run1 = await processor.run()
+      const run2 = await processor.run()
+      const run3 = await processor.run()
+      const run4 = await processor.run()
+      const run5 = await processor.run()
+
+      expect([run1.failedCount, run2.failedCount, run3.failedCount]).toEqual([1, 1, 1])
+      expect(deliverWebhookMock).toHaveBeenCalledTimes(3)
+      expect(await memoryDlq.replayAttempts('dlq_perm_fail')).toBe(3)
+
+      // Runs 4 and 5 skip the entry as attempts_exhausted without attempting delivery.
+      expect(run4).toMatchObject({ eligibleCount: 0, failedCount: 0, skippedCount: 1 })
+      expect(run5).toMatchObject({ eligibleCount: 0, failedCount: 0, skippedCount: 1 })
+      const skipLogs = logger.mock.calls.filter(args =>
+        String(args[0]).includes('Skipped entry dlq_perm_fail: attempts_exhausted'),
+      )
+      expect(skipLogs).toHaveLength(2)
+
+      // Invariant 2: the stored DlqEntry itself was never mutated.
+      const stored = await memoryDlq.get('dlq_perm_fail')
+      expect(stored?.attempts).toBe(4)
+      expect(stored?.replayedAt).toBeUndefined()
+    })
+
+    it('requests bounded pending entries from dlqStore.list', async () => {
+      const dlq = makeDlqStore([])
+      const webhooks = makeWebhookStore([])
+
+      await build(dlq, webhooks, { batchSize: 25 }).run()
+
+      expect(dlq.list).toHaveBeenCalledExactlyOnceWith({
+        pendingOnly: true,
+        limit: 100,
+      })
     })
 
     it('handles an empty DLQ without touching the webhook store', async () => {
@@ -713,6 +832,24 @@ describe('WebhookDlqProcessor', () => {
 
       expect(result.replayedCount).toBe(1)
     })
+
+    it('increments incRunErrors and Prometheus run error counter when a run rejects', async () => {
+      const registry = new client.Registry()
+      const promMetrics = createWebhookDlqProcessorMetrics(registry)
+      const dlq = makeDlqStore([], {
+        list: vi.fn(async () => {
+          throw new Error('dlq store unreachable')
+        }),
+      })
+      const webhooks = makeWebhookStore([])
+
+      await expect(
+        build(dlq, webhooks, { metrics: promMetrics }).run(),
+      ).rejects.toThrow('dlq store unreachable')
+
+      const metric = await registry.getSingleMetricAsString('webhook_dlq_processor_run_errors_total')
+      expect(metric).toContain('webhook_dlq_processor_run_errors_total 1')
+    })
   })
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
@@ -875,8 +1012,10 @@ describe('WebhookDlqProcessor', () => {
       ]
 
       for (const [reason, entries, configs] of cases) {
-        const dlq = makeDlqStore(entries)
-        const webhooks = makeWebhookStore(configs)
+        const initialReplayCounts =
+          reason === 'attempts_exhausted' && entries[0] ? { [entries[0].id]: 5 } : {}
+        const dlq = makeDlqStore(entries, {}, initialReplayCounts)
+        const webhooks = makeWebhookStore(configs as WebhookConfig[])
         await new WebhookDlqProcessor(dlq.store, webhooks.store, {
           logger,
           now: () => NOW,

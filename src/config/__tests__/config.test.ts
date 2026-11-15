@@ -522,3 +522,56 @@ describe('validateConfig – soroban retry override boundaries', () => {
     })
   })
 })
+
+describe('validateConfig – webhook DLQ processor settings', () => {
+  it('defaults WEBHOOK_DLQ_INTERVAL_MS to 60000 and WEBHOOK_DLQ_BATCH_SIZE to 200 when unset', () => {
+    const config = validateConfig(validEnv())
+
+    expect(config.webhookDlq.intervalMs).toBe(60_000)
+    expect(config.webhookDlq.batchSize).toBe(200)
+  })
+
+  it('rejects non-numeric WEBHOOK_DLQ_INTERVAL_MS', () => {
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_INTERVAL_MS: 'abc' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects WEBHOOK_DLQ_INTERVAL_MS below 10000ms', () => {
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_INTERVAL_MS: '5000' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('rejects blank WEBHOOK_DLQ_INTERVAL_MS', () => {
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_INTERVAL_MS: '' })),
+    ).toThrow(ConfigValidationError)
+  })
+
+  it('accepts valid WEBHOOK_DLQ_INTERVAL_MS and WEBHOOK_DLQ_BATCH_SIZE overrides', () => {
+    const config = validateConfig(
+      validEnv({
+        WEBHOOK_DLQ_INTERVAL_MS: '10000',
+        WEBHOOK_DLQ_BATCH_SIZE: '500',
+      }),
+    )
+
+    expect(config.webhookDlq.intervalMs).toBe(10_000)
+    expect(config.webhookDlq.batchSize).toBe(500)
+  })
+
+  it('rejects out-of-bounds WEBHOOK_DLQ_BATCH_SIZE values', () => {
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_BATCH_SIZE: '0' })),
+    ).toThrow(ConfigValidationError)
+
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_BATCH_SIZE: '1001' })),
+    ).toThrow(ConfigValidationError)
+
+    expect(() =>
+      validateConfig(validEnv({ WEBHOOK_DLQ_BATCH_SIZE: 'abc' })),
+    ).toThrow(ConfigValidationError)
+  })
+})

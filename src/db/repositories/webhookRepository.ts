@@ -235,6 +235,7 @@ export class PostgresWebhookRepository implements WebhookStore {
 
     return {
       id: row.id,
+      tenantId: typeof row.tenant_id === 'string' && row.tenant_id.length > 0 ? row.tenant_id : undefined,
       url: row.url,
       secret: row.secret,
       previousSecret: row.previous_secret || undefined,

@@ -20,9 +20,9 @@
  * 3. **A failing entry never poisons the batch.** Errors are scoped to the
  *    single entry being replayed; the run continues with the next one.
  * 4. **Replay is bounded.** An entry is attempted at most `maxReplayAttempts`
- *    times (counted via the original delivery's attempt total) and at most
- *    `batchSize` entries are handled per run, so a large backlog cannot
- *    monopolise the process or amplify an outage.
+ *    times (counted via durable replay audit records, not the original
+ *    delivery's attempt total) and at most `batchSize` entries are handled per
+ *    run, so a large backlog cannot monopolise the process or amplify an outage.
  * 5. **Nothing is delivered before it is safe.** Entries younger than
  *    `minAgeMs` are left alone so a replay never races the in-memory retry
  *    backoff of the original delivery, and entries belonging to a deleted or
@@ -41,6 +41,7 @@
  * ```
  */
 
+import client from 'prom-client'
 import { deliverWebhook, type DeliveryOptions } from '../services/webhooks/delivery.js'
 import type {
   DlqEntry,
@@ -76,10 +77,84 @@ export interface DlqReplayResult {
 
 export interface WebhookDlqProcessorMetrics {
   incRuns?(): void
+  incRunErrors?(): void
   incReplayed?(count: number): void
   incFailed?(count: number): void
   incSkipped?(count: number): void
   observeDuration?(seconds: number): void
+}
+
+const RUNS_METRIC_NAME = 'webhook_dlq_processor_runs_total'
+const RUN_ERRORS_METRIC_NAME = 'webhook_dlq_processor_run_errors_total'
+const ENTRIES_METRIC_NAME = 'webhook_dlq_processor_entries_total'
+const DURATION_METRIC_NAME = 'webhook_dlq_processor_duration_seconds'
+
+/**
+ * Create an idempotent Prometheus metrics sink for {@link WebhookDlqProcessor}.
+ *
+ * Reuses existing metrics on `registry` when already registered so factory calls
+ * in tests or hot-reloads never collide.
+ */
+export function createWebhookDlqProcessorMetrics(
+  registry: client.Registry = client.register,
+): WebhookDlqProcessorMetrics {
+  const runsTotal =
+    (registry.getSingleMetric(RUNS_METRIC_NAME) as client.Counter<string> | undefined) ??
+    new client.Counter({
+      name: RUNS_METRIC_NAME,
+      help: 'Total completed WebhookDlqProcessor runs',
+      registers: [registry],
+    })
+
+  const runErrorsTotal =
+    (registry.getSingleMetric(RUN_ERRORS_METRIC_NAME) as client.Counter<string> | undefined) ??
+    new client.Counter({
+      name: RUN_ERRORS_METRIC_NAME,
+      help: 'Total failed WebhookDlqProcessor runs (e.g. DLQ store unreachable or misconfigured)',
+      registers: [registry],
+    })
+
+  const entriesTotal =
+    (registry.getSingleMetric(ENTRIES_METRIC_NAME) as client.Counter<'outcome'> | undefined) ??
+    new client.Counter({
+      name: ENTRIES_METRIC_NAME,
+      help: 'Total DLQ entries processed by WebhookDlqProcessor, partitioned by outcome',
+      labelNames: ['outcome'] as const,
+      registers: [registry],
+    })
+
+  const durationSeconds =
+    (registry.getSingleMetric(DURATION_METRIC_NAME) as client.Histogram<string> | undefined) ??
+    new client.Histogram({
+      name: DURATION_METRIC_NAME,
+      help: 'Duration of WebhookDlqProcessor runs in seconds',
+      buckets: [0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60],
+      registers: [registry],
+    })
+
+  const safeCount = (value: number): number | null =>
+    typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+
+  return {
+    incRuns: () => runsTotal.inc(),
+    incRunErrors: () => runErrorsTotal.inc(),
+    incReplayed: (count: number) => {
+      const n = safeCount(count)
+      if (n !== null && n > 0) entriesTotal.inc({ outcome: 'replayed' }, n)
+    },
+    incFailed: (count: number) => {
+      const n = safeCount(count)
+      if (n !== null && n > 0) entriesTotal.inc({ outcome: 'failed' }, n)
+    },
+    incSkipped: (count: number) => {
+      const n = safeCount(count)
+      if (n !== null && n > 0) entriesTotal.inc({ outcome: 'skipped' }, n)
+    },
+    observeDuration: (seconds: number) => {
+      const n = safeCount(seconds)
+      if (n !== null) durationSeconds.observe(n)
+    },
+  }
 }
 
 export interface WebhookDlqProcessorOptions {
@@ -93,9 +168,8 @@ export interface WebhookDlqProcessorOptions {
    */
   minAgeMs?: number
   /**
-   * Entries whose original delivery already burned more than this many
-   * attempts are treated as exhausted and left for manual inspection
-   * (default: 5).
+   * Maximum number of automatic replay attempts allowed for an entry before it
+   * is treated as exhausted and left for manual inspection (default: 5).
    */
   maxReplayAttempts?: number
   /** Count and classify without delivering or marking anything (default: false). */
@@ -273,13 +347,25 @@ export class WebhookDlqProcessor {
     const result: WebhookDlqProcessorResult = this.emptyResult(false)
 
     try {
-      const entries = await this.dlqStore.list()
+      const entries = await this.dlqStore.list({
+        pendingOnly: true,
+        limit: this.batchSize * 4,
+      })
       result.scannedCount = entries.length
 
       for (const entry of entries) {
         const classification = this.classify(entry)
         if (classification.kind !== 'eligible') {
           this.recordNonEligible(result, entry.id, classification)
+          continue
+        }
+
+        const priorReplays = await this.dlqStore.replayAttempts(entry.id)
+        if (priorReplays >= this.maxReplayAttempts) {
+          this.recordNonEligible(result, entry.id, {
+            kind: 'skipped',
+            reason: 'attempts_exhausted',
+          })
           continue
         }
 
@@ -294,7 +380,11 @@ export class WebhookDlqProcessor {
         }
 
         result.eligibleCount++
-        const outcome = await this.replayEntryInternal(entry, classification.payload)
+        const outcome = await this.replayEntryInternal(
+          entry,
+          classification.payload,
+          priorReplays + 1,
+        )
         this.recordOutcome(result, entry.id, outcome)
       }
 
@@ -317,6 +407,7 @@ export class WebhookDlqProcessor {
     } catch (error) {
       const durationMs = Math.max(0, this.now() - startTime)
       this.logger(`[WebhookDlqProcessor] Error after ${durationMs}ms: ${describeError(error)}`)
+      this.metrics.incRunErrors?.()
       this.metrics.observeDuration?.(durationMs / 1000)
       throw error
     } finally {
@@ -357,7 +448,8 @@ export class WebhookDlqProcessor {
       return { entryId, outcome: { status: 'skipped', reason: 'dry_run' } }
     }
 
-    const outcome = await this.attemptDelivery(entry, validation.payload, webhook)
+    const attemptNumber = (await this.dlqStore.replayAttempts(entry.id)) + 1
+    const outcome = await this.attemptDelivery(entry, validation.payload, webhook, attemptNumber)
     this.logOutcome(entryId, outcome)
     return { entryId, outcome }
   }
@@ -381,8 +473,8 @@ export class WebhookDlqProcessor {
    * Apply every gate that does not require I/O.
    *
    * Ordered cheapest-first and fail-safe-first: an entry that is already
-   * replayed, structurally invalid, or exhausted must never reach the
-   * webhook lookup, so a corrupt backlog cannot hammer the store.
+   * replayed, structurally invalid, or inside the grace period must never
+   * reach the store lookups, so a corrupt backlog cannot hammer the store.
    */
   private classify(
     entry: DlqEntry,
@@ -397,10 +489,6 @@ export class WebhookDlqProcessor {
     const validation = validateDlqEntry(entry)
     if (!validation.ok) {
       return { kind: 'invalid', reason: validation.reason }
-    }
-
-    if (entry.attempts > this.maxReplayAttempts) {
-      return { kind: 'skipped', reason: 'attempts_exhausted' }
     }
 
     const age = this.now() - Date.parse(entry.failedAt)
@@ -454,6 +542,7 @@ export class WebhookDlqProcessor {
   private async replayEntryInternal(
     entry: DlqEntry,
     payload: WebhookPayload,
+    attemptNumber: number,
   ): Promise<DlqEntryOutcome> {
     let webhook: WebhookConfig | null
     try {
@@ -480,11 +569,12 @@ export class WebhookDlqProcessor {
       return { status: 'skipped', reason: 'dry_run' }
     }
 
-    return this.attemptDelivery(entry, payload, webhook)
+    return this.attemptDelivery(entry, payload, webhook, attemptNumber)
   }
 
   /**
-   * Deliver and, only on success, mark the entry replayed.
+   * Deliver, record a durable replay audit row, and only on success mark the
+   * entry replayed.
    *
    * The mark deliberately comes last: a failure there means the entry stays
    * queued and will be delivered again next run (at-least-once).
@@ -493,16 +583,54 @@ export class WebhookDlqProcessor {
     entry: DlqEntry,
     payload: WebhookPayload,
     webhook: WebhookConfig,
+    attemptNumber: number,
   ): Promise<DlqEntryOutcome> {
-    let succeeded: boolean
+    let succeeded = false
+    let statusCode: number | undefined
+    let thrownError: string | undefined
+    let deliveryError: string | undefined
+
     try {
       const delivery = await deliverWebhook(webhook, payload, this.deliveryOptions)
-      succeeded = Array.isArray(delivery)
-        ? delivery.length > 0 && delivery.every(r => r.success)
-        : delivery.success
+      if (Array.isArray(delivery)) {
+        succeeded = delivery.length > 0 && delivery.every(r => r.success)
+        const relevant = delivery.find(r => !r.success) ?? delivery[delivery.length - 1]
+        statusCode = relevant?.statusCode
+        if (!succeeded) {
+          deliveryError = relevant?.error
+        }
+      } else {
+        succeeded = delivery.success
+        statusCode = delivery.statusCode
+        if (!succeeded) {
+          deliveryError = delivery.error
+        }
+      }
     } catch (error) {
       // A thrown error is a failed delivery, not a failed run.
-      return { status: 'failed', error: describeError(error) }
+      thrownError = describeError(error)
+    }
+
+    try {
+      await this.dlqStore.recordReplayAttempt({
+        dlqEntryId: entry.id,
+        webhookId: entry.webhookId,
+        actorId: 'system:dlq-processor',
+        actorEmail: 'system',
+        tenantId: webhook.tenantId ?? 'system',
+        idempotencyKey: `${entry.id}:attempt:${attemptNumber}`,
+        success: succeeded,
+        statusCode,
+        errorMessage: succeeded ? undefined : (thrownError ?? deliveryError ?? 'delivery_unsuccessful'),
+      })
+    } catch (auditError) {
+      this.logger(
+        `[WebhookDlqProcessor] Replay audit write failed for ${entry.id}: ${describeError(auditError)}`,
+      )
+    }
+
+    if (thrownError !== undefined) {
+      return { status: 'failed', error: thrownError }
     }
 
     if (!succeeded) {
