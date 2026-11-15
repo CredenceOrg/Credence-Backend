@@ -19,9 +19,8 @@ import { CursorRepository } from '../db/repositories/cursorRepository.js'
 import { TransactionManager } from '../db/transaction.js'
 import { AtomicOutboxCoordinator } from '../db/outbox/atomic.js'
 import { outboxEmitter } from '../db/outbox/emitter.js'
-import { register, Gauge } from 'prom-client'
 import { BoundedBackoff } from '../utils/backoff.js'
-import { getHorizonMetrics } from '../observability/horizonMetrics.js'
+import { getHorizonListenerGauges, getHorizonMetrics } from '../observability/horizonMetrics.js'
 import { bondOperationSchema, DlqRouter, DlqReasonCode, validateAndRoute } from './messageValidator.js'
 import { IdempotencyRepository } from '../db/repositories/idempotencyRepository.js'
 import { invalidateTrustScoreCache } from '../services/reputationService.js'
@@ -42,19 +41,16 @@ const HORIZON_URL = process.env.HORIZON_URL || "https://horizon.stellar.org";
 const server = new Horizon.Server(HORIZON_URL);
 const STREAM_NAME = "bond_creation";
 
-const cursorLagGauge = new Gauge({
-  name: "horizon_listener_cursor_lag_seconds",
-  help: "Time elapsed since last Horizon cursor checkpoint",
-  labelNames: ["stream_name"],
-  registers: [register],
-});
+const { cursorLagGauge, lastCheckpointGauge } = getHorizonListenerGauges();
 
-const lastCheckpointGauge = new Gauge({
-  name: "horizon_listener_last_checkpoint_timestamp",
-  help: "Unix timestamp of last Horizon cursor checkpoint",
-  labelNames: ["stream_name"],
-  registers: [register],
-});
+function isCursorRegression(currentCursor: string, nextCursor: string): boolean {
+  if (currentCursor === "now") return false;
+  if (nextCursor === "now") return true;
+  if (/^\d+$/.test(currentCursor) && /^\d+$/.test(nextCursor)) {
+    return BigInt(nextCursor) < BigInt(currentCursor);
+  }
+  return false;
+}
 
 /**
  * Atomic bond creation event processor.
@@ -171,79 +167,107 @@ export function subscribeBondCreationEventsAtomic(
   const backoff = new BoundedBackoff({ baseMs: 500, maxMs: 30_000 });
   const metrics = getHorizonMetrics();
   let cursor = "now";
-  let activeStream: { close?: () => void } | undefined;
+  let activeStream: (() => void) | undefined;
   let stopped = false;
+  let messageChain: Promise<void> = Promise.resolve();
+
+  const closeActiveStream = () => {
+    if (!activeStream) return;
+    const close = activeStream;
+    activeStream = undefined;
+    close();
+  };
+
+  const handleMessage = async (op: any): Promise<void> => {
+    if (stopped) return;
+    const newCursor = op.paging_token;
+    try {
+      if (op.type === "create_bond") {
+        const validation = await validateAndRoute(
+          bondOperationSchema,
+          STREAM_NAME,
+          op,
+          dlqRouter,
+        );
+        if (!validation.valid || stopped) {
+          return;
+        }
+
+        const event = parseBondEvent(op);
+        const bondEvent: BondCreationEvent = {
+          ...event,
+          pagingToken: newCursor,
+          operationId: op.id,
+        };
+
+        // Process atomically (state + outbox)
+        await processor.process(bondEvent);
+
+        const advanceCursor = !isCursorRegression(cursor, newCursor);
+        if (advanceCursor) {
+          // Advance cursor only after successful atomic commit
+          await transactionManager.withTransaction(async (client) => {
+            await upsertCursor(
+              { streamName: STREAM_NAME, pagingToken: newCursor },
+              client,
+            );
+          }, { operation: 'cursor_checkpoint', maxDurationMs: 2000 });
+
+          cursor = newCursor;
+        }
+
+        updateMetrics(cursorRepo);
+        if (onEvent) onEvent(bondEvent);
+        backoff.reset();
+        logger.info(`[bond_creation] Atomically processed event ${op.id}, cursor: ${cursor}`, {
+          eventType: 'bond_creation_processed',
+        });
+      }
+    } catch (err) {
+      await dlqRouter.route(
+        STREAM_NAME,
+        op,
+        DlqReasonCode.PROCESSING_ERROR,
+        err instanceof Error ? err.message : String(err),
+      );
+      logger.error(`[bond_creation] Error processing event ${op.id}: ${err instanceof Error ? err.message : String(err)}`, {
+        eventType: 'bond_creation_error',
+      });
+    }
+  };
 
   const startStream = () => {
     if (stopped) return;
+    closeActiveStream();
 
     metrics.streamUp.set({ stream: STREAM_NAME }, 1);
 
-    activeStream = (server.operations() as any)
+    const closeStream = (server.operations() as any)
       .forAsset("BOND")
       .cursor(cursor)
       .stream({
-        onmessage: async (op: any) => {
-          const newCursor = op.paging_token;
-          try {
-            if (op.type === "create_bond") {
-              const validation = await validateAndRoute(
-                bondOperationSchema,
-                STREAM_NAME,
-                op,
-                dlqRouter,
-              );
-              if (!validation.valid) {
-                return;
-              }
-
-              const event = parseBondEvent(op);
-              const bondEvent: BondCreationEvent = {
-                ...event,
-                pagingToken: newCursor,
-                operationId: op.id,
-              };
-
-              // Process atomically (state + outbox)
-              await processor.process(bondEvent);
-
-              // Advance cursor only after successful atomic commit
-              await transactionManager.withTransaction(async (client) => {
-                await upsertCursor(
-                  { streamName: STREAM_NAME, pagingToken: newCursor },
-                  client,
-                );
-              }, { operation: 'cursor_checkpoint', maxDurationMs: 2000 });
-
-              cursor = newCursor;
-              updateMetrics(cursorRepo);
-              if (onEvent) onEvent(bondEvent);
-              backoff.reset();
-              logger.info(`[bond_creation] Atomically processed event ${op.id}, cursor: ${newCursor}`, {
-                eventType: 'bond_creation_processed',
-              });
-            }
-          } catch (err) {
-            await dlqRouter.route(
-              STREAM_NAME,
-              op,
-              DlqReasonCode.PROCESSING_ERROR,
-              err instanceof Error ? err.message : String(err),
+        onmessage: (op: any): Promise<void> => {
+          if (stopped) return Promise.resolve();
+          const run = messageChain.then(() => handleMessage(op));
+          messageChain = run.catch((err) => {
+            logger.error(
+              `[bond_creation] Unhandled listener queue error: ${err instanceof Error ? err.message : String(err)}`,
+              { eventType: 'bond_creation_queue_error' },
             );
-            logger.error(`[bond_creation] Error processing event ${op.id}: ${err instanceof Error ? err.message : String(err)}`, {
-              eventType: 'bond_creation_error',
-            });
-          }
+          });
+          return run;
         },
         onerror: async (err: unknown) => {
           logger.error(`[bond_creation] Horizon stream error: ${err instanceof Error ? err.message : String(err)}`, {
             eventType: 'horizon_stream_error',
           });
           metrics.streamUp.set({ stream: STREAM_NAME }, 0);
+          closeActiveStream();
           if (stopped) return;
           metrics.reconnectTotal.inc({ stream: STREAM_NAME });
           try {
             await backoff.wait();
+            if (stopped) return;
             startStream();
           } catch (e: any) {
             if (e?.stopped || e?.exhausted) {
@@ -253,7 +277,13 @@ export function subscribeBondCreationEventsAtomic(
             }
           }
         },
-      });
+      }) as (() => void) | undefined;
+
+    if (stopped) {
+      if (typeof closeStream === "function") closeStream();
+      return;
+    }
+    activeStream = typeof closeStream === "function" ? closeStream : undefined;
   };
 
   const initAndStart = async () => {
@@ -284,7 +314,7 @@ export function subscribeBondCreationEventsAtomic(
       stopped = true;
       backoff.stop();
       metrics.streamUp.set({ stream: STREAM_NAME }, 0);
-      if (activeStream?.close) activeStream.close();
+      closeActiveStream();
     },
   };
 }

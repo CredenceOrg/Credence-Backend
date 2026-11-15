@@ -197,7 +197,13 @@ export async function upsertCursor(
      DO UPDATE SET 
        paging_token = EXCLUDED.paging_token,
        last_checkpoint = NOW(),
-       updated_at = NOW()`,
+       updated_at = NOW()
+     WHERE horizon_cursors.paging_token = 'now'
+        OR (
+          EXCLUDED.paging_token <> 'now'
+          AND horizon_cursors.paging_token ~ '^[0-9]+$'
+          AND EXCLUDED.paging_token::numeric >= horizon_cursors.paging_token::numeric
+        )`,
     [input.streamName, input.pagingToken]
   )
 }
